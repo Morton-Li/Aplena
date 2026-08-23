@@ -32,8 +32,8 @@ export interface PlanItemInput {
   plannedAmount: string;
   currency: string;
   periodMonths: number;
-  startMonth: string;
-  endMonth?: string;
+  startDate: string;
+  endDate?: string;
   recognitionMode: string;
   note?: string;
 }
@@ -46,8 +46,8 @@ export interface PlanItem {
   planned_amount: string;
   currency: string;
   period_months: number;
-  start_month: string;
-  end_month: string | null;
+  start_date: string;
+  end_date: string | null;
   recognition_mode: string;
   note: string | null;
   created_at: string;
@@ -63,11 +63,15 @@ export interface MonthlyItem {
   category: string;
   flow_type: string;
   recognition_mode: string;
+  item_source: "PLANNED" | "ACTUAL_ONLY";
+  scheduled_date: string | null;
   planned_amount: string;
   actual_amount: string | null;
+  actual_entry_count: number;
+  actual_confirmed_at: string | null;
   variance_amount: string | null;
   completion_rate_percent: string | null;
-  data_status: "MISSING" | "CONFIRMED_ZERO" | "RECORDED";
+  data_status: "MISSING" | "IN_PROGRESS" | "CONFIRMED_ZERO" | "FINAL";
   variance_effect: "UNKNOWN" | "ON_PLAN" | "FAVORABLE" | "UNFAVORABLE";
   currency: string;
   note: string | null;
@@ -80,7 +84,29 @@ export interface PlanPreview {
   recognized_in_target_month: boolean;
   monthly_equivalent: string | null;
   recognized_amount: string | null;
+  scheduled_date: string | null;
   base_currency: string;
+}
+
+export interface ActualEntryInput {
+  id?: string;
+  monthlyItemId: string;
+  occurredOn: string;
+  effect: "INCREASE" | "DECREASE";
+  amount: string;
+  note?: string;
+}
+
+export interface ActualEntry {
+  id: string;
+  monthly_item_id: string;
+  occurred_on: string;
+  effect: "INCREASE" | "DECREASE";
+  amount: string;
+  origin: "USER" | "MIGRATED_AGGREGATE";
+  note: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RateOverrideInput {
@@ -217,6 +243,7 @@ export interface DataSummary {
   exchange_rate_count: number;
   plan_item_count: number;
   monthly_item_count: number;
+  actual_entry_count: number;
   first_month: string | null;
   last_month: string | null;
 }
@@ -262,6 +289,7 @@ export const queryKeys = {
   plans: ["plan-items"] as const,
   existingMonths: ["existing-months"] as const,
   monthly: (month: string) => ["monthly-items", month] as const,
+  actualEntries: (monthlyItemId: string) => ["actual-entries", monthlyItemId] as const,
   monthAnalytics: (month: string) => ["month-analytics", month] as const,
   historyAnalytics: ["history-analytics"] as const,
   capacity: (month: string) => ["financial-capacity", month] as const,
@@ -321,7 +349,7 @@ export function updatePlanItem(
 }
 
 export function stopPlanItem(
-  input: { id: string; endMonth: string },
+  input: { id: string; endDate: string },
   invokeCommand: Invoke = invoke,
 ): Promise<PlanItem> {
   return invokeCommand<PlanItem>("stop_plan_item", { input });
@@ -405,11 +433,46 @@ export function listExistingMonths(invokeCommand: Invoke = invoke): Promise<stri
   return invokeCommand<string[]>("list_existing_months");
 }
 
-export function updateMonthlyActual(
-  input: { id: string; actualAmount: string | null },
+export function ensureActualOnlyMonthlyItem(
+  input: { planItemId: string; month: string },
   invokeCommand: Invoke = invoke,
 ): Promise<MonthlyItem> {
-  return invokeCommand<MonthlyItem>("update_monthly_actual", { input });
+  return invokeCommand<MonthlyItem>("ensure_actual_only_monthly_item", { input });
+}
+
+export function listActualEntries(
+  monthlyItemId: string,
+  invokeCommand: Invoke = invoke,
+): Promise<ActualEntry[]> {
+  return invokeCommand<ActualEntry[]>("list_actual_entries", { monthlyItemId });
+}
+
+export function createActualEntry(
+  input: ActualEntryInput,
+  invokeCommand: Invoke = invoke,
+): Promise<ActualEntry> {
+  return invokeCommand<ActualEntry>("create_actual_entry", { input });
+}
+
+export function updateActualEntry(
+  input: ActualEntryInput & { id: string },
+  invokeCommand: Invoke = invoke,
+): Promise<ActualEntry> {
+  return invokeCommand<ActualEntry>("update_actual_entry", { input });
+}
+
+export function deleteActualEntry(
+  id: string,
+  invokeCommand: Invoke = invoke,
+): Promise<void> {
+  return invokeCommand<void>("delete_actual_entry", { id });
+}
+
+export function confirmMonthlyItem(
+  id: string,
+  invokeCommand: Invoke = invoke,
+): Promise<MonthlyItem> {
+  return invokeCommand<MonthlyItem>("confirm_monthly_item", { input: { id } });
 }
 
 export function updateMonthlyNote(

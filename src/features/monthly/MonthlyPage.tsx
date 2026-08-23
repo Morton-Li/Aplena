@@ -3,19 +3,27 @@ import { useMemo, useState } from "react";
 
 import {
   confirmMonthlyActuals,
+  confirmMonthlyItem,
+  createActualEntry,
+  deleteActualEntry,
+  ensureActualOnlyMonthlyItem,
   getSettings,
   getStartupStatus,
   initializeMonth,
+  listActualEntries,
   listExchangeRates,
   listExistingMonths,
   listMonthlyItems,
+  listPlanItems,
   previewMonth,
   queryKeys,
-  updateMonthlyActual,
+  updateActualEntry,
   updateMonthlyNote,
+  type ActualEntry,
   type ExchangeRate,
   type MonthPreview,
   type MonthlyItem,
+  type PlanItem,
   type RateOverrideInput,
 } from "../../shared/api/finance";
 import { describeError } from "../../shared/formatting/errors";
@@ -30,6 +38,7 @@ export function MonthlyPage() {
   const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
   const startupQuery = useQuery({ queryKey: queryKeys.startup, queryFn: () => getStartupStatus() });
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
+  const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
   const monthsQuery = useQuery({ queryKey: queryKeys.existingMonths, queryFn: () => listExistingMonths() });
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [previewOverrides, setPreviewOverrides] = useState<RateOverrideInput[]>([]);
@@ -46,6 +55,7 @@ export function MonthlyPage() {
   });
   const [initializing, setInitializing] = useState(false);
   const [batchCategory, setBatchCategory] = useState("ALL");
+  const [addingEntry, setAddingEntry] = useState(false);
 
   const invalidateMonth = async () => {
     await Promise.all([
@@ -64,7 +74,7 @@ export function MonthlyPage() {
       }),
     onSuccess: invalidateMonth,
   });
-  const missingCount = itemsQuery.data?.filter((item) => item.data_status === "MISSING").length ?? 0;
+  const missingCount = itemsQuery.data?.filter((item) => !["FINAL", "CONFIRMED_ZERO"].includes(item.data_status)).length ?? 0;
   const categories = useMemo(
     () => Array.from(new Set((itemsQuery.data ?? []).map((item) => item.category))),
     [itemsQuery.data],
@@ -76,9 +86,9 @@ export function MonthlyPage() {
         <div>
           <p className="eyebrow">月度计划</p>
           <h1>{month || "选择月份"} 的计划执行</h1>
-          <p>只维护项目最终实际金额。计划金额和快照系统字段不会在这里被改写。</p>
+          <p>逐笔记录项目实际结果；计划金额和月度净额均为只读事实。</p>
         </div>
-        <label className="month-picker">
+        <div className="header-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>添加实际条目</button><label className="month-picker">
           查看月份
           <input
             type="month"
@@ -92,7 +102,7 @@ export function MonthlyPage() {
           <datalist id="existing-months">
             {monthsQuery.data?.map((value) => <option key={value} value={value} />)}
           </datalist>
-        </label>
+        </label></div>
       </header>
 
       {startupQuery.data?.error && (
@@ -123,8 +133,8 @@ export function MonthlyPage() {
           <section className="month-operations">
             <div>
               <span className="section-label">数据完整状态</span>
-              <strong>{missingCount === 0 ? "实际金额已完整" : missingCount + " 项尚未录入"}</strong>
-              <small>确认操作只填充尚未录入项，不覆盖 0 或已有正数。</small>
+              <strong>{missingCount === 0 ? "本月实际已确认" : missingCount + " 项尚未最终确认"}</strong>
+              <small>确认只标记条目已核对，不会补写计划金额或创建虚假实际。</small>
             </div>
             <div className="batch-controls">
               <select aria-label="批量确认范围" value={batchCategory} onChange={(event) => setBatchCategory(event.target.value)}>
@@ -132,11 +142,11 @@ export function MonthlyPage() {
                 {categories.map((code) => <option key={code} value={code}>{categoryLabel(code)}</option>)}
               </select>
               <button className="button button-secondary" disabled={batchMutation.isPending || missingCount === 0} type="button" onClick={() => batchMutation.mutate()}>
-                {batchMutation.isPending ? "确认中…" : "未录入项按计划确认"}
+                {batchMutation.isPending ? "确认中…" : "确认所选范围已完成"}
               </button>
             </div>
           </section>
-          {batchMutation.isSuccess && <div className="inline-success" role="status">已确认 {batchMutation.data.updated_count} 项，已有实际金额未被覆盖。</div>}
+          {batchMutation.isSuccess && <div className="inline-success" role="status">已将 {batchMutation.data.updated_count} 项标记为最终确认。</div>}
           {batchMutation.isError && <div className="inline-error" role="alert">{describeError(batchMutation.error)}</div>}
 
           <div className="monthly-list">
@@ -162,6 +172,15 @@ export function MonthlyPage() {
             setInitializing(false);
             await invalidateMonth();
           }}
+        />
+      )}
+      {addingEntry && plansQuery.data && (
+        <EntryDialog
+          month={month}
+          plans={plansQuery.data}
+          monthlyItems={itemsQuery.data ?? []}
+          onClose={() => setAddingEntry(false)}
+          onSaved={async () => { setAddingEntry(false); await invalidateMonth(); }}
         />
       )}
     </>
@@ -194,12 +213,16 @@ function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPrevi
 }
 
 function MonthlyRow({ item, onSaved }: { item: MonthlyItem; onSaved: () => Promise<void> }) {
-  const [actual, setActual] = useState(item.actual_amount ?? "");
+  const queryClient = useQueryClient();
   const [note, setNote] = useState(item.note ?? "");
-  const actualMutation = useMutation({
-    mutationFn: (value: string | null) => updateMonthlyActual({ id: item.id, actualAmount: value }),
-    onSuccess: onSaved,
+  const [expanded, setExpanded] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const entriesQuery = useQuery({
+    queryKey: queryKeys.actualEntries(item.id),
+    queryFn: () => listActualEntries(item.id),
+    enabled: expanded,
   });
+  const confirmMutation = useMutation({ mutationFn: () => confirmMonthlyItem(item.id), onSuccess: onSaved });
   const noteMutation = useMutation({
     mutationFn: () => updateMonthlyNote({ id: item.id, note: note.trim() || null }),
     onSuccess: onSaved,
@@ -215,30 +238,89 @@ function MonthlyRow({ item, onSaved }: { item: MonthlyItem; onSaved: () => Promi
   return (
     <article className="monthly-card">
       <header>
-        <div><span className={"status-dot status-" + item.data_status.toLowerCase()} aria-hidden="true" /><h2>{item.item_name}</h2></div>
+        <div><span className={"status-dot status-" + item.data_status.toLowerCase()} aria-hidden="true" /><h2>{item.item_name}</h2>{item.item_source === "ACTUAL_ONLY" && <span className="category-pill">仅实际</span>}</div>
         <span className={"variance-badge variance-" + item.variance_effect.toLowerCase()}>{varianceCopy}</span>
       </header>
       <div className="monthly-facts">
         <div><span>计划金额</span><strong>{item.planned_amount} {item.currency}</strong></div>
-        <div><span>实际金额</span><strong>{item.actual_amount ?? "尚未录入"}</strong></div>
+        <div><span>实际净额（条目汇总）</span><strong>{item.actual_amount ?? "尚无条目"} {item.actual_amount ? item.currency : ""}</strong></div>
         <div><span>偏差</span><strong>{item.variance_amount ?? "N/A"}</strong></div>
         <div><span>完成率</span><strong>{item.completion_rate_percent ? item.completion_rate_percent + "%" : "N/A"}</strong></div>
       </div>
-      <div className="monthly-meta">{categoryLabel(item.category)} · {flowLabel(item.flow_type)} · {recognitionLabel(item.recognition_mode)}</div>
+      <div className="monthly-meta">{categoryLabel(item.category)} · {flowLabel(item.flow_type)} · {recognitionLabel(item.recognition_mode)}{item.scheduled_date ? ` · 计划支付 ${item.scheduled_date}` : ""} · {statusLabel(item.data_status)} · {item.actual_entry_count} 条</div>
       <div className="monthly-editors">
-        <label>实际金额<input aria-label={item.item_name + " 实际金额"} inputMode="decimal" placeholder="尚未录入" value={actual} onChange={(event) => setActual(event.target.value)} /></label>
-        <button className="button button-secondary" disabled={actualMutation.isPending} type="button" onClick={() => actualMutation.mutate(actual.trim() || null)}>保存实际</button>
-        <button className="button button-quiet" disabled={actualMutation.isPending} type="button" onClick={() => { setActual("0"); actualMutation.mutate("0"); }}>确认实际为 0</button>
-        <button className="button button-quiet" disabled={actualMutation.isPending} type="button" onClick={() => { setActual(""); actualMutation.mutate(null); }}>恢复为尚未录入</button>
+        <button className="button button-secondary" type="button" onClick={() => setAdding(true)}>添加{item.flow_type === "EXPENSE" ? "支出或退款" : "收入或冲减"}</button>
+        <button className="button button-quiet" type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? "收起条目" : "查看条目"}</button>
+        <button className="button button-quiet" disabled={confirmMutation.isPending || ["FINAL", "CONFIRMED_ZERO"].includes(item.data_status)} type="button" onClick={() => confirmMutation.mutate()}>确认项目已完成</button>
       </div>
+      {expanded && <EntryList item={item} entries={entriesQuery.data ?? []} pending={entriesQuery.isPending} error={entriesQuery.error} onSaved={onSaved} />}
       <div className="monthly-editors note-editor">
         <label>月度备注<textarea aria-label={item.item_name + " 月度备注"} rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
         <button className="button button-quiet" disabled={noteMutation.isPending} type="button" onClick={() => noteMutation.mutate()}>保存备注</button>
       </div>
-      {(actualMutation.isError || noteMutation.isError) && <div className="inline-error" role="alert">{describeError(actualMutation.error ?? noteMutation.error)}</div>}
-      {(actualMutation.isSuccess || noteMutation.isSuccess) && <div className="save-status" role="status">已保存</div>}
+      {(confirmMutation.isError || noteMutation.isError) && <div className="inline-error" role="alert">{describeError(confirmMutation.error ?? noteMutation.error)}</div>}
+      {(confirmMutation.isSuccess || noteMutation.isSuccess) && <div className="save-status" role="status">已保存</div>}
+      {adding && <EntryDialog month={item.month} plans={[]} monthlyItems={[item]} fixedItem={item} onClose={() => setAdding(false)} onSaved={async () => { setAdding(false); setExpanded(true); await queryClient.invalidateQueries({ queryKey: queryKeys.actualEntries(item.id) }); await onSaved(); }} />}
     </article>
   );
+}
+
+function statusLabel(status: MonthlyItem["data_status"]) {
+  return { MISSING: "尚未开始", IN_PROGRESS: "记录中", CONFIRMED_ZERO: "已确认零", FINAL: "最终确认" }[status];
+}
+
+function EntryList({ item, entries, pending, error, onSaved }: { item: MonthlyItem; entries: ActualEntry[]; pending: boolean; error: unknown; onSaved: () => Promise<void> }) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState<ActualEntry | null>(null);
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteActualEntry(id),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.actualEntries(item.id) }); await onSaved(); },
+  });
+  if (pending) return <div className="state-card">正在读取实际条目…</div>;
+  if (error) return <div className="inline-error" role="alert">{describeError(error)}</div>;
+  return <div className="entry-list">
+    {entries.length === 0 && <p>还没有实际条目；最终确认为零时无需创建虚假条目。</p>}
+    {entries.map((entry) => <div className="entry-row" key={entry.id}>
+      <span>{entry.occurred_on}</span><strong>{entry.effect === "INCREASE" ? "+" : "−"}{entry.amount} {item.currency}</strong>
+      <span>{entry.note ?? (entry.origin === "MIGRATED_AGGREGATE" ? "旧版实际总额迁移" : "无备注")}</span>
+      {entry.origin === "USER" && <><button className="button button-quiet" type="button" onClick={() => setEditing(entry)}>编辑</button><button className="button button-danger-quiet" type="button" onClick={() => { if (window.confirm("删除这条实际记录？项目会重新变为待确认。")) deleteMutation.mutate(entry.id); }}>删除</button></>}
+    </div>)}
+    {editing && <EntryDialog month={item.month} plans={[]} monthlyItems={[item]} fixedItem={item} existing={editing} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await queryClient.invalidateQueries({ queryKey: queryKeys.actualEntries(item.id) }); await onSaved(); }} />}
+  </div>;
+}
+
+function EntryDialog({ month, plans, monthlyItems, fixedItem, existing, onClose, onSaved }: { month: string; plans: PlanItem[]; monthlyItems: MonthlyItem[]; fixedItem?: MonthlyItem; existing?: ActualEntry; onClose: () => void; onSaved: () => Promise<void> }) {
+  const defaultPlanId = fixedItem?.source_plan_item_id ?? plans[0]?.id ?? "";
+  const [planId, setPlanId] = useState(defaultPlanId);
+  const selectedItem = fixedItem ?? monthlyItems.find((item) => item.source_plan_item_id === planId);
+  const selectedPlan = plans.find((plan) => plan.id === planId);
+  const flow = selectedItem?.flow_type ?? selectedPlan?.flow_type ?? "EXPENSE";
+  const [occurredOn, setOccurredOn] = useState(existing?.occurred_on ?? `${month}-01`);
+  const [effect, setEffect] = useState<"INCREASE" | "DECREASE">(existing?.effect ?? "INCREASE");
+  const [amount, setAmount] = useState(existing?.amount ?? "");
+  const [note, setNote] = useState(existing?.note ?? "");
+  const mutation = useMutation({
+    mutationFn: async () => {
+      let item = selectedItem;
+      if (!item) item = await ensureActualOnlyMonthlyItem({ planItemId: planId, month });
+      const input = { id: existing?.id, monthlyItemId: item.id, occurredOn, effect, amount, note: note.trim() || undefined };
+      return existing ? updateActualEntry({ ...input, id: existing.id }) : createActualEntry(input);
+    },
+    onSuccess: onSaved,
+  });
+  const increaseLabel = flow === "EXPENSE" ? "支出" : "收入";
+  const decreaseLabel = flow === "EXPENSE" ? "退款" : "冲减";
+  return <div className="modal-backdrop"><section className="confirm-dialog entry-dialog" role="dialog" aria-modal="true" aria-labelledby="entry-title">
+    <header className="dialog-header"><h2 id="entry-title">{existing ? "编辑实际条目" : "添加实际条目"}</h2><button className="icon-button" type="button" aria-label="关闭" onClick={onClose}>×</button></header>
+    {!fixedItem && <label>所属项目<select value={planId} onChange={(event) => setPlanId(event.target.value)}>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {categoryLabel(plan.category)}</option>)}</select></label>}
+    {selectedPlan?.end_date && selectedPlan.end_date < `${month}-01` && <div className="notice notice-warning">该长期计划已经结束；本条记录仍可作为迟到退款或冲减归入历史项目。</div>}
+    <label>日期<input type="date" min={`${month}-01`} max={`${month}-${new Date(Number(month.slice(0,4)), Number(month.slice(5,7)), 0).getDate()}`} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
+    <label>类型<select value={effect} onChange={(event) => setEffect(event.target.value as "INCREASE" | "DECREASE")}><option value="INCREASE">{increaseLabel}</option><option value="DECREASE">{decreaseLabel}</option></select></label>
+    <label>金额<input autoFocus inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
+    <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
+    {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
+    <footer className="dialog-actions"><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending || !planId || !/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0} type="button" onClick={() => mutation.mutate()}>{mutation.isPending ? "保存中…" : "保存条目"}</button></footer>
+  </section></div>;
 }
 
 function InitializationDialog({
