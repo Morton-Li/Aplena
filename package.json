@@ -12,6 +12,7 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri": "tauri"
   },
   "dependencies": {

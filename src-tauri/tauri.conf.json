@@ -4,8 +4,6 @@
   "version": "0.1.0",
   "identifier": "com.aplena.desktop",
   "build": {
-    "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
@@ -22,10 +20,16 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://127.0.0.1:1420; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "headers": {
+        "X-Content-Type-Options": "nosniff"
+      }
     }
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }
