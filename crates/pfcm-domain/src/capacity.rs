@@ -95,7 +95,7 @@ pub fn calculate_financial_capacity(
             Category::EssentialExpense => {
                 essential_expenses = essential_expenses.checked_add(amount)?
             }
-            Category::FixedCommitment => {
+            Category::FixedCommitmentExpense => {
                 fixed_commitments = fixed_commitments.checked_add(amount)?
             }
             Category::DiscretionaryBudget => {

@@ -14,12 +14,20 @@ pub enum DomainError {
     AmountOutOfRange,
     #[error("exchange rate must be greater than zero")]
     InvalidExchangeRate,
+    #[error("exchange rate is outside the supported i64 scaled range")]
+    ExchangeRateOutOfRange,
     #[error("savings rate must be between 0 and 10000 basis points")]
     InvalidSavingsRate,
     #[error("ratio cannot be negative")]
     InvalidRatio,
     #[error("plan item name cannot be empty")]
     EmptyPlanItemName,
+    #[error("category code is invalid")]
+    InvalidCategory,
+    #[error("flow type code is invalid")]
+    InvalidFlowType,
+    #[error("recognition mode code is invalid")]
+    InvalidRecognitionMode,
     #[error("period must be a positive number of months")]
     InvalidPeriod,
     #[error("end month cannot be earlier than start month")]
@@ -28,6 +36,8 @@ pub enum DomainError {
     CurrencyMismatch,
     #[error("all capacity inputs must use the same base currency")]
     BaseCurrencyMismatch,
+    #[error("base currency exchange rate must equal one")]
+    InvalidBaseCurrencyRate,
     #[error("decimal arithmetic overflow")]
     ArithmeticOverflow,
 }

@@ -5,7 +5,7 @@ use crate::{Amount, Category, CurrencyCode, FlowType, PlanItem, RecognitionMode,
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MonthlyItem {
     id: Uuid,
-    source_plan_item_id: Uuid,
+    source_plan_item_id: Option<Uuid>,
     item_name: String,
     month: YearMonth,
     category: Category,
@@ -27,7 +27,7 @@ impl MonthlyItem {
     ) -> Self {
         Self {
             id,
-            source_plan_item_id: source.id(),
+            source_plan_item_id: Some(source.id()),
             item_name: source.name().to_owned(),
             month,
             category: source.category(),
@@ -44,7 +44,36 @@ impl MonthlyItem {
         self.id
     }
 
-    pub const fn source_plan_item_id(&self) -> Uuid {
+    #[allow(clippy::too_many_arguments)]
+    pub fn rehydrate(
+        id: Uuid,
+        source_plan_item_id: Option<Uuid>,
+        item_name: String,
+        month: YearMonth,
+        category: Category,
+        flow_type: FlowType,
+        recognition_mode: RecognitionMode,
+        planned_amount: Amount,
+        actual_amount: Option<Amount>,
+        currency: CurrencyCode,
+        note: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            source_plan_item_id,
+            item_name,
+            month,
+            category,
+            flow_type,
+            recognition_mode,
+            planned_amount,
+            actual_amount,
+            currency,
+            note,
+        }
+    }
+
+    pub const fn source_plan_item_id(&self) -> Option<Uuid> {
         self.source_plan_item_id
     }
 

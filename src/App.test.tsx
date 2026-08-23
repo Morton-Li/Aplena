@@ -20,7 +20,7 @@ describe("App", () => {
         { code: "FIXED_INCOME", label: "固定收入" },
         { code: "VARIABLE_INCOME", label: "浮动收入" },
         { code: "ESSENTIAL_EXPENSE", label: "必要支出" },
-        { code: "FIXED_COMMITMENT", label: "固定承诺支出" },
+        { code: "FIXED_COMMITMENT_EXPENSE", label: "固定承诺支出" },
         { code: "DISCRETIONARY_BUDGET", label: "自主性预算" },
       ],
       flow_types: [

@@ -7,13 +7,168 @@ use pfcm_domain::{
 };
 use uuid::Uuid;
 
+use tauri::State;
+
 use super::{
     dto::{
-        CapacityDto, CapacityRequestDto, DomainContractDto, EnumOptionDto, ExchangeRateInputDto,
-        PlanItemInputDto, PlanPreviewDto, PlanPreviewRequestDto,
+        CapacityDto, CapacityRequestDto, ConfirmActualsDto, ConfirmActualsInputDto,
+        DeletePlanItemDto, DomainContractDto, EnumOptionDto, ExchangeRateDto, ExchangeRateInputDto,
+        ExchangeRateUpsertDto, InitializeMonthDto, InitializeMonthInputDto,
+        MonthInitializationStatusDto, MonthPreviewDto, MonthlyActualInputDto, MonthlyItemDto,
+        MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto, PlanMutationDto, PlanPreviewDto,
+        PlanPreviewRequestDto, SettingsDto, SettingsInputDto, StartupStatusDto,
+        StopPlanItemRequestDto,
     },
     error::AppError,
+    service::FinanceService,
 };
+
+#[tauri::command]
+pub async fn get_startup_status(
+    service: State<'_, FinanceService>,
+) -> Result<StartupStatusDto, AppError> {
+    Ok(service.startup_status().await)
+}
+
+#[tauri::command]
+pub async fn get_settings(
+    service: State<'_, FinanceService>,
+) -> Result<Option<SettingsDto>, AppError> {
+    service.get_settings().await
+}
+
+#[tauri::command]
+pub async fn save_settings(
+    service: State<'_, FinanceService>,
+    input: SettingsInputDto,
+) -> Result<SettingsDto, AppError> {
+    service.save_settings(input).await
+}
+
+#[tauri::command]
+pub async fn list_exchange_rates(
+    service: State<'_, FinanceService>,
+) -> Result<Vec<ExchangeRateDto>, AppError> {
+    service.list_exchange_rates().await
+}
+
+#[tauri::command]
+pub async fn upsert_exchange_rate(
+    service: State<'_, FinanceService>,
+    input: ExchangeRateUpsertDto,
+) -> Result<Vec<ExchangeRateDto>, AppError> {
+    service.upsert_exchange_rate(input).await
+}
+
+#[tauri::command]
+pub async fn delete_exchange_rate(
+    service: State<'_, FinanceService>,
+    currency: String,
+) -> Result<(), AppError> {
+    service.delete_exchange_rate(currency).await
+}
+
+#[tauri::command]
+pub async fn list_plan_items(
+    service: State<'_, FinanceService>,
+) -> Result<Vec<PlanItemDto>, AppError> {
+    service.list_plan_items().await
+}
+
+#[tauri::command]
+pub async fn create_plan_item(
+    service: State<'_, FinanceService>,
+    input: PlanItemInputDto,
+) -> Result<PlanMutationDto, AppError> {
+    service.create_plan_item(input).await
+}
+
+#[tauri::command]
+pub async fn update_plan_item(
+    service: State<'_, FinanceService>,
+    input: PlanItemInputDto,
+) -> Result<PlanItemDto, AppError> {
+    service.update_plan_item(input).await
+}
+
+#[tauri::command]
+pub async fn stop_plan_item(
+    service: State<'_, FinanceService>,
+    input: StopPlanItemRequestDto,
+) -> Result<PlanItemDto, AppError> {
+    service.stop_plan_item(input).await
+}
+
+#[tauri::command]
+pub async fn delete_plan_item(
+    service: State<'_, FinanceService>,
+    id: String,
+) -> Result<DeletePlanItemDto, AppError> {
+    service.delete_plan_item(id).await
+}
+
+#[tauri::command]
+pub async fn list_monthly_items(
+    service: State<'_, FinanceService>,
+    month: String,
+) -> Result<Vec<MonthlyItemDto>, AppError> {
+    service.list_monthly_items(month).await
+}
+
+#[tauri::command]
+pub async fn update_monthly_actual(
+    service: State<'_, FinanceService>,
+    input: MonthlyActualInputDto,
+) -> Result<MonthlyItemDto, AppError> {
+    service.update_monthly_actual(input).await
+}
+
+#[tauri::command]
+pub async fn update_monthly_note(
+    service: State<'_, FinanceService>,
+    input: MonthlyNoteInputDto,
+) -> Result<MonthlyItemDto, AppError> {
+    service.update_monthly_note(input).await
+}
+
+#[tauri::command]
+pub async fn confirm_monthly_actuals(
+    service: State<'_, FinanceService>,
+    input: ConfirmActualsInputDto,
+) -> Result<ConfirmActualsDto, AppError> {
+    service.confirm_actuals(input).await
+}
+
+#[tauri::command]
+pub async fn list_existing_months(
+    service: State<'_, FinanceService>,
+) -> Result<Vec<String>, AppError> {
+    service.list_existing_months().await
+}
+
+#[tauri::command]
+pub async fn get_month_initialization_status(
+    service: State<'_, FinanceService>,
+    month: String,
+) -> Result<MonthInitializationStatusDto, AppError> {
+    service.initialization_status(month).await
+}
+
+#[tauri::command]
+pub async fn preview_month(
+    service: State<'_, FinanceService>,
+    input: InitializeMonthInputDto,
+) -> Result<MonthPreviewDto, AppError> {
+    service.preview_month(input).await
+}
+
+#[tauri::command]
+pub async fn initialize_month(
+    service: State<'_, FinanceService>,
+    input: InitializeMonthInputDto,
+) -> Result<InitializeMonthDto, AppError> {
+    service.initialize_month(input).await
+}
 
 #[tauri::command]
 pub fn get_domain_contract() -> DomainContractDto {
@@ -22,7 +177,7 @@ pub fn get_domain_contract() -> DomainContractDto {
             option("FIXED_INCOME", "固定收入"),
             option("VARIABLE_INCOME", "浮动收入"),
             option("ESSENTIAL_EXPENSE", "必要支出"),
-            option("FIXED_COMMITMENT", "固定承诺支出"),
+            option("FIXED_COMMITMENT_EXPENSE", "固定承诺支出"),
             option("DISCRETIONARY_BUDGET", "自主性预算"),
         ],
         flow_types: vec![option("INCOME", "收入"), option("EXPENSE", "支出")],
@@ -162,7 +317,7 @@ fn parse_category(value: &str) -> Result<Category, AppError> {
         "FIXED_INCOME" => Ok(Category::FixedIncome),
         "VARIABLE_INCOME" => Ok(Category::VariableIncome),
         "ESSENTIAL_EXPENSE" => Ok(Category::EssentialExpense),
-        "FIXED_COMMITMENT" => Ok(Category::FixedCommitment),
+        "FIXED_COMMITMENT_EXPENSE" => Ok(Category::FixedCommitmentExpense),
         "DISCRETIONARY_BUDGET" => Ok(Category::DiscretionaryBudget),
         _ => Err(AppError::validation(
             "INVALID_CATEGORY",
@@ -256,7 +411,13 @@ mod tests {
                     exchange_rate: cny_rate(),
                 },
                 CapacityItemInputDto {
-                    plan_item: plan_input("年度承诺", "FIXED_COMMITMENT", "36000", 12, "PAYMENT"),
+                    plan_item: plan_input(
+                        "年度承诺",
+                        "FIXED_COMMITMENT_EXPENSE",
+                        "36000",
+                        12,
+                        "PAYMENT",
+                    ),
                     exchange_rate: cny_rate(),
                 },
             ],
