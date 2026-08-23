@@ -127,3 +127,31 @@ impl FromStr for RecognitionMode {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MonthlyItemSource {
+    Planned,
+    ActualOnly,
+}
+
+impl MonthlyItemSource {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Planned => "PLANNED",
+            Self::ActualOnly => "ACTUAL_ONLY",
+        }
+    }
+}
+
+impl FromStr for MonthlyItemSource {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "PLANNED" => Ok(Self::Planned),
+            "ACTUAL_ONLY" => Ok(Self::ActualOnly),
+            _ => Err(DomainError::InvalidMonthlyItemSource),
+        }
+    }
+}

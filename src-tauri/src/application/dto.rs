@@ -43,8 +43,8 @@ pub struct PlanItemDto {
     pub planned_amount: String,
     pub currency: String,
     pub period_months: u32,
-    pub start_month: String,
-    pub end_month: Option<String>,
+    pub start_date: String,
+    pub end_date: Option<String>,
     pub recognition_mode: String,
     pub note: Option<String>,
     pub created_at: String,
@@ -61,8 +61,12 @@ pub struct MonthlyItemDto {
     pub category: String,
     pub flow_type: String,
     pub recognition_mode: String,
+    pub item_source: String,
+    pub scheduled_date: Option<String>,
     pub planned_amount: String,
     pub actual_amount: Option<String>,
+    pub actual_entry_count: u64,
+    pub actual_confirmed_at: Option<String>,
     pub variance_amount: Option<String>,
     pub completion_rate_percent: Option<String>,
     pub data_status: String,
@@ -77,7 +81,7 @@ pub struct MonthlyItemDto {
 #[serde(rename_all = "camelCase")]
 pub struct StopPlanItemRequestDto {
     pub id: String,
-    pub end_month: String,
+    pub end_date: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -88,9 +92,39 @@ pub struct DeletePlanItemDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MonthlyActualInputDto {
+pub struct ActualEntryInputDto {
+    pub id: Option<String>,
+    pub monthly_item_id: String,
+    pub occurred_on: String,
+    pub effect: String,
+    pub amount: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActualEntryDto {
     pub id: String,
-    pub actual_amount: Option<String>,
+    pub monthly_item_id: String,
+    pub occurred_on: String,
+    pub effect: String,
+    pub amount: String,
+    pub origin: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsureActualOnlyInputDto {
+    pub plan_item_id: String,
+    pub month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmMonthlyItemInputDto {
+    pub id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -284,8 +318,8 @@ pub struct PlanItemInputDto {
     pub planned_amount: String,
     pub currency: String,
     pub period_months: u32,
-    pub start_month: String,
-    pub end_month: Option<String>,
+    pub start_date: String,
+    pub end_date: Option<String>,
     pub recognition_mode: String,
     pub note: Option<String>,
 }
@@ -312,6 +346,7 @@ pub struct PlanPreviewDto {
     pub recognized_in_target_month: bool,
     pub monthly_equivalent: Option<String>,
     pub recognized_amount: Option<String>,
+    pub scheduled_date: Option<String>,
     pub base_currency: String,
 }
 
@@ -352,6 +387,7 @@ pub struct DataSummaryDto {
     pub exchange_rate_count: u64,
     pub plan_item_count: u64,
     pub monthly_item_count: u64,
+    pub actual_entry_count: u64,
     pub first_month: Option<String>,
     pub last_month: Option<String>,
 }

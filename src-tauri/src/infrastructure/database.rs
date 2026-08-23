@@ -131,6 +131,14 @@ pub(crate) async fn create_version_one_fixture(path: &Path) -> Result<(), StoreE
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) async fn create_version_two_fixture(path: &Path) -> Result<(), StoreError> {
+    let pool = open_pool(path, true).await?;
+    MIGRATOR.run_to(2, &pool).await?;
+    pool.close().await;
+    Ok(())
+}
+
 #[cfg(unix)]
 fn set_private_directory_permissions(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;

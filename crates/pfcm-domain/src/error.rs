@@ -8,6 +8,8 @@ pub enum DomainError {
     InvalidCurrencyCode,
     #[error("amount must be a finite decimal number")]
     InvalidAmount,
+    #[error("amount can have at most two decimal places")]
+    AmountTooPrecise,
     #[error("amount cannot be negative")]
     NegativeAmount,
     #[error("amount is outside the supported i64 scaled range")]
@@ -32,6 +34,20 @@ pub enum DomainError {
     InvalidPeriod,
     #[error("end month cannot be earlier than start month")]
     EndBeforeStart,
+    #[error("date must use YYYY-MM-DD with a year from 1 to 9999")]
+    InvalidDate,
+    #[error("end date cannot be earlier than start date")]
+    EndDateBeforeStart,
+    #[error("actual entry amount must be greater than zero")]
+    ZeroActualEntryAmount,
+    #[error("actual entry date must fall inside its monthly item month")]
+    ActualEntryDateOutsideMonth,
+    #[error("actual entry effect is invalid")]
+    InvalidActualEntryEffect,
+    #[error("actual entry origin is invalid")]
+    InvalidActualEntryOrigin,
+    #[error("monthly item source is invalid")]
+    InvalidMonthlyItemSource,
     #[error("exchange rate currency pair does not match the requested conversion")]
     CurrencyMismatch,
     #[error("all capacity inputs must use the same base currency")]

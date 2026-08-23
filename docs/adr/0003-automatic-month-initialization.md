@@ -19,7 +19,7 @@ ensure_month_initialized(month, trigger, optional_rate_overrides)
 自动触发：
 
 - 应用启动并完成数据库迁移后，处理当前自然月；
-- 新建 PlanItem 后，处理当前自然月。
+- 新建或修改 PlanItem 后，处理当前自然月。
 
 显式触发：
 
@@ -34,12 +34,14 @@ ensure_month_initialized(month, trigger, optional_rate_overrides)
 - 在一个写事务中读取、校验、计算和插入；
 - 先验证全部应计项目，再进行首次插入；
 - `UNIQUE(source_plan_item_id, month)` 是最终幂等屏障；
-- 冲突只增加 `skipped`，不执行 UPDATE；
+- 已有正式快照的冲突只增加 `skipped`，不执行 UPDATE；
+- 已有同来源、同月 `ACTUAL_ONLY` 时，只允许在事务内原位提升为 `PLANNED`，保留 ID、实际条目和确认事实；
 - 缺失汇率或非法计划导致整批回滚；
 - 返回 `created`、`skipped`、`excluded` 和警告。
 
 项目改名不改变来源 UUID，因此不会绕过幂等约束。修改计划或汇率也不会触发已有快照
-更新。
+更新。仅实际快照的条件式原位提升是唯一例外，因为它补齐的是此前不存在的正式计划事实，
+不会覆盖实际事实。
 
 ## 零项目月份
 
@@ -65,6 +67,7 @@ ensure_month_initialized(month, trigger, optional_rate_overrides)
 - 重试和重复启动安全；
 - 历史和未来不会因浏览被污染；
 - 新增当月计划能自动补入。
+- 计划外实际不会阻止后来形成正式计划快照，也不会在提升时丢失。
 
 代价：
 

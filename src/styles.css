@@ -1100,6 +1100,12 @@ textarea {
   min-width: 190px;
 }
 
+.header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+
 .month-context {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) auto auto;
@@ -1295,6 +1301,43 @@ textarea {
   font-size: 10px;
 }
 
+.entry-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px;
+  background: #f1f1eb;
+  border-radius: 12px;
+}
+
+.entry-list > p {
+  margin: 0;
+  color: #748078;
+  font-size: 11px;
+}
+
+.entry-row {
+  display: grid;
+  grid-template-columns: 92px minmax(120px, auto) minmax(160px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  background: rgb(255 255 255 / 62%);
+  border: 1px solid rgb(42 67 55 / 8%);
+  border-radius: 9px;
+  color: #607067;
+  font-size: 11px;
+}
+
+.entry-row strong {
+  color: #2f4439;
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-dialog {
+  width: min(560px, 100%);
+}
+
 .initialization-dialog details {
   color: #526259;
   font-size: 12px;
@@ -1348,6 +1391,11 @@ textarea {
     flex-direction: column;
   }
 
+  .header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .toolbar,
   .field-grid,
   .mode-options,
@@ -1371,6 +1419,14 @@ textarea {
   .batch-controls {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .entry-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .entry-row > span:nth-child(3) {
+    grid-column: 1 / -1;
   }
 }
 

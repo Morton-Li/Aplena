@@ -4,15 +4,16 @@ use std::{
 };
 
 use pfcm_domain::{
-    Amount, Category, CurrencyCode, ExchangeRate, FlowType, MonthlyItem, PlanItem, RecognitionMode,
-    Settings, YearMonth,
+    ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, Category,
+    CurrencyCode, ExchangeRate, FlowType, MonthlyItem, MonthlyItemSource, PlanItem,
+    RecognitionMode, Settings, SignedAmount, YearMonth,
 };
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, pool::PoolConnection};
 use uuid::Uuid;
 
 use super::{
-    DeletePlanResult, StoreError, StoredExchangeRate, StoredMonthlyItem, StoredPlanItem,
-    StoredSettings,
+    DeletePlanResult, StoreError, StoredActualEntry, StoredExchangeRate, StoredMonthlyItem,
+    StoredPlanItem, StoredSettings,
 };
 
 #[derive(Debug, Clone)]
@@ -171,7 +172,7 @@ impl Store {
     pub async fn get_plan_item(&self, id: Uuid) -> Result<StoredPlanItem, StoreError> {
         let row = sqlx::query(
             "SELECT id, name, category, planned_amount_scaled, currency_code, period_months, \
-                    recognition_mode, start_month, end_month, note, created_at, updated_at, \
+                    recognition_mode, start_date, end_date, note, created_at, updated_at, \
                     (SELECT COUNT(*) FROM monthly_items m WHERE m.source_plan_item_id = plan_items.id) \
                     AS history_month_count \
              FROM plan_items WHERE id = ?",
@@ -190,7 +191,7 @@ impl Store {
     ) -> Result<StoredPlanItem, StoreError> {
         sqlx::query(
             "INSERT INTO plan_items (id, name, category, planned_amount_scaled, currency_code, \
-                    period_months, recognition_mode, start_month, end_month, note, created_at, updated_at) \
+                    period_months, recognition_mode, start_date, end_date, note, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(plan_item.id().to_string())
@@ -200,8 +201,8 @@ impl Store {
         .bind(plan_item.currency().as_str())
         .bind(i64::from(plan_item.period_months()))
         .bind(plan_item.recognition_mode().code())
-        .bind(plan_item.start_month().database_anchor())
-        .bind(plan_item.end_month().map(YearMonth::database_anchor))
+        .bind(plan_item.start_date().to_string())
+        .bind(plan_item.end_date().map(|date| date.to_string()))
         .bind(plan_item.note())
         .bind(timestamp)
         .bind(timestamp)
@@ -217,8 +218,8 @@ impl Store {
     ) -> Result<StoredPlanItem, StoreError> {
         let result = sqlx::query(
             "UPDATE plan_items SET name = ?, category = ?, planned_amount_scaled = ?, \
-                    currency_code = ?, period_months = ?, recognition_mode = ?, start_month = ?, \
-                    end_month = ?, note = ?, updated_at = ? WHERE id = ?",
+                    currency_code = ?, period_months = ?, recognition_mode = ?, start_date = ?, \
+                    end_date = ?, note = ?, updated_at = ? WHERE id = ?",
         )
         .bind(plan_item.name())
         .bind(plan_item.category().code())
@@ -226,8 +227,8 @@ impl Store {
         .bind(plan_item.currency().as_str())
         .bind(i64::from(plan_item.period_months()))
         .bind(plan_item.recognition_mode().code())
-        .bind(plan_item.start_month().database_anchor())
-        .bind(plan_item.end_month().map(YearMonth::database_anchor))
+        .bind(plan_item.start_date().to_string())
+        .bind(plan_item.end_date().map(|date| date.to_string()))
         .bind(plan_item.note())
         .bind(timestamp)
         .bind(plan_item.id().to_string())
@@ -262,12 +263,17 @@ impl Store {
     ) -> Result<Vec<StoredMonthlyItem>, StoreError> {
         let next_month = month.next_month()?;
         let rows = sqlx::query(
-            "SELECT id, source_plan_item_id, month, snapshot_name, category, flow_type, \
-                    recognition_mode, planned_amount_scaled, actual_amount_scaled, currency_code, \
-                    note, created_at, updated_at \
-             FROM monthly_items \
-             WHERE month >= ? AND month < ? \
-             ORDER BY flow_type, category, snapshot_name, id",
+            "SELECT m.id, m.source_plan_item_id, m.month, m.snapshot_name, m.category, m.flow_type, \
+                    m.recognition_mode, m.item_source, m.scheduled_date, m.planned_amount_scaled, \
+                    CASE WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL \
+                      THEN COALESCE(SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END), 0) \
+                      ELSE NULL END AS derived_actual_amount_scaled, \
+                    COUNT(e.id) AS actual_entry_count, m.actual_confirmed_at, m.currency_code, \
+                    m.note, m.created_at, m.updated_at \
+             FROM monthly_items m LEFT JOIN actual_entries e ON e.monthly_item_id = m.id \
+             WHERE m.month >= ? AND m.month < ? \
+             GROUP BY m.id \
+             ORDER BY m.flow_type, m.category, m.snapshot_name, m.id",
         )
         .bind(month.database_anchor())
         .bind(next_month.database_anchor())
@@ -297,24 +303,6 @@ impl Store {
         Ok(u64::try_from(count).unwrap_or_default())
     }
 
-    pub async fn update_monthly_actual(
-        &self,
-        id: Uuid,
-        actual_amount: Option<Amount>,
-        timestamp: &str,
-    ) -> Result<StoredMonthlyItem, StoreError> {
-        let result = sqlx::query(
-            "UPDATE monthly_items SET actual_amount_scaled = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(actual_amount.map(Amount::scaled_i64))
-        .bind(timestamp)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?;
-        require_changed(result.rows_affected())?;
-        self.get_monthly_item(id).await
-    }
-
     pub async fn update_monthly_note(
         &self,
         id: Uuid,
@@ -332,7 +320,7 @@ impl Store {
         self.get_monthly_item(id).await
     }
 
-    pub async fn confirm_unset_actuals(
+    pub async fn confirm_actuals(
         &self,
         month: YearMonth,
         category: Option<Category>,
@@ -343,10 +331,11 @@ impl Store {
             Some(category) => {
                 sqlx::query(
                     "UPDATE monthly_items \
-                     SET actual_amount_scaled = planned_amount_scaled, updated_at = ? \
+                     SET actual_confirmed_at = ?, updated_at = ? \
                      WHERE month >= ? AND month < ? AND category = ? \
-                       AND actual_amount_scaled IS NULL",
+                       AND actual_confirmed_at IS NULL",
                 )
+                .bind(timestamp)
                 .bind(timestamp)
                 .bind(month.database_anchor())
                 .bind(next_month.database_anchor())
@@ -357,9 +346,10 @@ impl Store {
             None => {
                 sqlx::query(
                     "UPDATE monthly_items \
-                     SET actual_amount_scaled = planned_amount_scaled, updated_at = ? \
-                     WHERE month >= ? AND month < ? AND actual_amount_scaled IS NULL",
+                     SET actual_confirmed_at = ?, updated_at = ? \
+                     WHERE month >= ? AND month < ? AND actual_confirmed_at IS NULL",
                 )
+                .bind(timestamp)
                 .bind(timestamp)
                 .bind(month.database_anchor())
                 .bind(next_month.database_anchor())
@@ -370,18 +360,163 @@ impl Store {
         Ok(result.rows_affected())
     }
 
+    pub async fn confirm_monthly_item(
+        &self,
+        id: Uuid,
+        timestamp: &str,
+    ) -> Result<StoredMonthlyItem, StoreError> {
+        let result = sqlx::query(
+            "UPDATE monthly_items SET actual_confirmed_at = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(timestamp)
+        .bind(timestamp)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        require_changed(result.rows_affected())?;
+        self.get_monthly_item(id).await
+    }
+
+    pub async fn insert_monthly_item(
+        &self,
+        monthly_item: &MonthlyItem,
+        timestamp: &str,
+    ) -> Result<StoredMonthlyItem, StoreError> {
+        let mut connection = self.acquire().await?;
+        Self::insert_monthly_item_on(&mut connection, monthly_item, timestamp).await?;
+        // The in-memory test store deliberately has a single connection. Release
+        // it before the follow-up aggregate read so this method cannot deadlock
+        // while waiting for another lease from the same pool.
+        drop(connection);
+        self.get_monthly_item_by_source_month(
+            monthly_item
+                .source_plan_item_id()
+                .ok_or(StoreError::InvalidUuid)?,
+            monthly_item.month(),
+        )
+        .await?
+        .ok_or(StoreError::Database(sqlx::Error::RowNotFound))
+    }
+
     pub async fn get_monthly_item(&self, id: Uuid) -> Result<StoredMonthlyItem, StoreError> {
         let row = sqlx::query(
-            "SELECT id, source_plan_item_id, month, snapshot_name, category, flow_type, \
-                    recognition_mode, planned_amount_scaled, actual_amount_scaled, currency_code, \
-                    note, created_at, updated_at \
-             FROM monthly_items WHERE id = ?",
+            "SELECT m.id, m.source_plan_item_id, m.month, m.snapshot_name, m.category, m.flow_type, \
+                    m.recognition_mode, m.item_source, m.scheduled_date, m.planned_amount_scaled, \
+                    CASE WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL \
+                      THEN COALESCE(SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END), 0) \
+                      ELSE NULL END AS derived_actual_amount_scaled, \
+                    COUNT(e.id) AS actual_entry_count, m.actual_confirmed_at, m.currency_code, \
+                    m.note, m.created_at, m.updated_at \
+             FROM monthly_items m LEFT JOIN actual_entries e ON e.monthly_item_id = m.id \
+             WHERE m.id = ? GROUP BY m.id",
         )
         .bind(id.to_string())
         .fetch_optional(&self.pool)
         .await?
         .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
         monthly_item_from_row(&row)
+    }
+
+    pub async fn get_monthly_item_by_source_month(
+        &self,
+        source_plan_item_id: Uuid,
+        month: YearMonth,
+    ) -> Result<Option<StoredMonthlyItem>, StoreError> {
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM monthly_items WHERE source_plan_item_id = ? AND month = ?",
+        )
+        .bind(source_plan_item_id.to_string())
+        .bind(month.database_anchor())
+        .fetch_optional(&self.pool)
+        .await?;
+        match id {
+            Some(id) => self
+                .get_monthly_item(Uuid::parse_str(&id).map_err(|_| StoreError::InvalidUuid)?)
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn list_actual_entries(
+        &self,
+        monthly_item_id: Uuid,
+    ) -> Result<Vec<StoredActualEntry>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, e.origin, \
+                    e.note, e.created_at, e.updated_at, m.month \
+             FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id \
+             WHERE e.monthly_item_id = ? ORDER BY e.occurred_on DESC, e.created_at DESC, e.id",
+        )
+        .bind(monthly_item_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(actual_entry_from_row).collect()
+    }
+
+    pub async fn insert_actual_entry(
+        &self,
+        entry: &ActualEntry,
+        timestamp: &str,
+    ) -> Result<StoredActualEntry, StoreError> {
+        sqlx::query(
+            "INSERT INTO actual_entries (id, monthly_item_id, occurred_on, effect, amount_scaled, \
+                    origin, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(entry.id().to_string())
+        .bind(entry.monthly_item_id().to_string())
+        .bind(entry.occurred_on().to_string())
+        .bind(entry.effect().code())
+        .bind(entry.amount().scaled_i64())
+        .bind(entry.origin().code())
+        .bind(entry.note())
+        .bind(timestamp)
+        .bind(timestamp)
+        .execute(&self.pool)
+        .await?;
+        self.get_actual_entry(entry.id()).await
+    }
+
+    pub async fn update_actual_entry(
+        &self,
+        entry: &ActualEntry,
+        timestamp: &str,
+    ) -> Result<StoredActualEntry, StoreError> {
+        let result = sqlx::query(
+            "UPDATE actual_entries SET occurred_on = ?, effect = ?, amount_scaled = ?, note = ?, \
+                    updated_at = ? WHERE id = ? AND origin = 'USER'",
+        )
+        .bind(entry.occurred_on().to_string())
+        .bind(entry.effect().code())
+        .bind(entry.amount().scaled_i64())
+        .bind(entry.note())
+        .bind(timestamp)
+        .bind(entry.id().to_string())
+        .execute(&self.pool)
+        .await?;
+        require_changed(result.rows_affected())?;
+        self.get_actual_entry(entry.id()).await
+    }
+
+    pub async fn delete_actual_entry(&self, id: Uuid) -> Result<(), StoreError> {
+        let result = sqlx::query("DELETE FROM actual_entries WHERE id = ? AND origin = 'USER'")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        require_changed(result.rows_affected())
+    }
+
+    pub async fn get_actual_entry(&self, id: Uuid) -> Result<StoredActualEntry, StoreError> {
+        let row = sqlx::query(
+            "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, e.origin, \
+                    e.note, e.created_at, e.updated_at, m.month \
+             FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id WHERE e.id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
+        actual_entry_from_row(&row)
     }
 
     pub async fn get_settings_on(
@@ -401,7 +536,7 @@ impl Store {
     ) -> Result<Vec<StoredPlanItem>, StoreError> {
         let rows = sqlx::query(
             "SELECT id, name, category, planned_amount_scaled, currency_code, period_months, \
-                    recognition_mode, start_month, end_month, note, created_at, updated_at, \
+                    recognition_mode, start_date, end_date, note, created_at, updated_at, \
                     (SELECT COUNT(*) FROM monthly_items m WHERE m.source_plan_item_id = plan_items.id) \
                     AS history_month_count \
              FROM plan_items ORDER BY category, name, id",
@@ -446,6 +581,22 @@ impl Store {
             .collect()
     }
 
+    pub async fn actual_only_source_ids_on(
+        connection: &mut SqliteConnection,
+        month: YearMonth,
+    ) -> Result<Vec<Uuid>, StoreError> {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT source_plan_item_id FROM monthly_items \
+             WHERE month = ? AND item_source = 'ACTUAL_ONLY' AND source_plan_item_id IS NOT NULL",
+        )
+        .bind(month.database_anchor())
+        .fetch_all(&mut *connection)
+        .await?;
+        rows.iter()
+            .map(|value| Uuid::parse_str(value).map_err(|_| StoreError::InvalidUuid))
+            .collect()
+    }
+
     pub async fn insert_monthly_item_on(
         connection: &mut SqliteConnection,
         monthly_item: &MonthlyItem,
@@ -453,10 +604,16 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let result = sqlx::query(
             "INSERT INTO monthly_items (id, source_plan_item_id, month, snapshot_name, category, \
-                    flow_type, recognition_mode, planned_amount_scaled, actual_amount_scaled, \
-                    currency_code, note, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(source_plan_item_id, month) DO NOTHING",
+                    flow_type, recognition_mode, item_source, scheduled_date, planned_amount_scaled, \
+                    actual_confirmed_at, currency_code, note, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(source_plan_item_id, month) DO UPDATE SET \
+               snapshot_name = excluded.snapshot_name, category = excluded.category, \
+               flow_type = excluded.flow_type, recognition_mode = excluded.recognition_mode, \
+               item_source = excluded.item_source, scheduled_date = excluded.scheduled_date, \
+               planned_amount_scaled = excluded.planned_amount_scaled, \
+               currency_code = excluded.currency_code, note = excluded.note, updated_at = excluded.updated_at \
+             WHERE monthly_items.item_source = 'ACTUAL_ONLY' AND excluded.item_source = 'PLANNED'",
         )
         .bind(monthly_item.id().to_string())
         .bind(monthly_item.source_plan_item_id().map(|id| id.to_string()))
@@ -465,8 +622,10 @@ impl Store {
         .bind(monthly_item.category().code())
         .bind(monthly_item.flow_type().code())
         .bind(monthly_item.recognition_mode().code())
+        .bind(monthly_item.item_source().code())
+        .bind(monthly_item.scheduled_date().map(|date| date.to_string()))
         .bind(monthly_item.planned_amount().scaled_i64())
-        .bind(monthly_item.actual_amount().map(Amount::scaled_i64))
+        .bind(monthly_item.actual_confirmed_at())
         .bind(monthly_item.currency().as_str())
         .bind(monthly_item.note())
         .bind(timestamp)
@@ -520,11 +679,11 @@ fn plan_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredPlanItem, S
     let period = u32::try_from(row.try_get::<i64, _>("period_months")?)
         .map_err(|_| StoreError::Domain(pfcm_domain::DomainError::InvalidPeriod))?;
     let mode = RecognitionMode::from_str(row.try_get::<String, _>("recognition_mode")?.as_str())?;
-    let start = YearMonth::from_database_anchor(row.try_get::<String, _>("start_month")?.as_str())?;
+    let start = CalendarDate::from_str(row.try_get::<String, _>("start_date")?.as_str())?;
     let end = row
-        .try_get::<Option<String>, _>("end_month")?
+        .try_get::<Option<String>, _>("end_date")?
         .as_deref()
-        .map(YearMonth::from_database_anchor)
+        .map(CalendarDate::from_str)
         .transpose()?;
     Ok(StoredPlanItem {
         value: PlanItem::new(
@@ -562,9 +721,11 @@ fn monthly_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredMonthlyI
         ));
     }
     let actual_amount = row
-        .try_get::<Option<i64>, _>("actual_amount_scaled")?
-        .map(Amount::from_scaled_i64)
+        .try_get::<Option<i64>, _>("derived_actual_amount_scaled")?
+        .map(SignedAmount::from_scaled_i64)
         .transpose()?;
+    let entry_count =
+        u64::try_from(row.try_get::<i64, _>("actual_entry_count")?).unwrap_or_default();
     Ok(StoredMonthlyItem {
         value: MonthlyItem::rehydrate(
             id,
@@ -574,11 +735,40 @@ fn monthly_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredMonthlyI
             category,
             flow_type,
             RecognitionMode::from_str(row.try_get::<String, _>("recognition_mode")?.as_str())?,
+            MonthlyItemSource::from_str(row.try_get::<String, _>("item_source")?.as_str())?,
+            row.try_get::<Option<String>, _>("scheduled_date")?
+                .as_deref()
+                .map(CalendarDate::from_str)
+                .transpose()?,
             Amount::from_scaled_i64(row.try_get("planned_amount_scaled")?)?,
             actual_amount,
+            entry_count,
+            row.try_get("actual_confirmed_at")?,
             CurrencyCode::new(row.try_get::<String, _>("currency_code")?)?,
             row.try_get("note")?,
         ),
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn actual_entry_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredActualEntry, StoreError> {
+    let id = Uuid::parse_str(row.try_get::<String, _>("id")?.as_str())
+        .map_err(|_| StoreError::InvalidUuid)?;
+    let monthly_item_id = Uuid::parse_str(row.try_get::<String, _>("monthly_item_id")?.as_str())
+        .map_err(|_| StoreError::InvalidUuid)?;
+    let month = YearMonth::from_database_anchor(row.try_get::<String, _>("month")?.as_str())?;
+    Ok(StoredActualEntry {
+        value: ActualEntry::new(
+            id,
+            monthly_item_id,
+            month,
+            CalendarDate::from_str(row.try_get::<String, _>("occurred_on")?.as_str())?,
+            ActualEntryEffect::from_str(row.try_get::<String, _>("effect")?.as_str())?,
+            Amount::from_scaled_i64(row.try_get("amount_scaled")?)?,
+            ActualEntryOrigin::from_str(row.try_get::<String, _>("origin")?.as_str())?,
+            row.try_get("note")?,
+        )?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

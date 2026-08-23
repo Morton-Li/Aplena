@@ -1,7 +1,7 @@
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
-use crate::{Amount, Category, CurrencyCode, DomainError, FlowType, RecognitionMode, YearMonth};
+use crate::{Amount, CalendarDate, Category, CurrencyCode, DomainError, FlowType, RecognitionMode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanItem {
@@ -11,8 +11,8 @@ pub struct PlanItem {
     amount: Amount,
     currency: CurrencyCode,
     period_months: u32,
-    start_month: YearMonth,
-    end_month: Option<YearMonth>,
+    start_date: CalendarDate,
+    end_date: Option<CalendarDate>,
     recognition_mode: RecognitionMode,
     note: Option<String>,
 }
@@ -26,8 +26,8 @@ impl PlanItem {
         amount: Amount,
         currency: CurrencyCode,
         period_months: u32,
-        start_month: YearMonth,
-        end_month: Option<YearMonth>,
+        start_date: CalendarDate,
+        end_date: Option<CalendarDate>,
         recognition_mode: RecognitionMode,
         note: Option<String>,
     ) -> Result<Self, DomainError> {
@@ -39,8 +39,8 @@ impl PlanItem {
         if period_months == 0 {
             return Err(DomainError::InvalidPeriod);
         }
-        if end_month.is_some_and(|end| end < start_month) {
-            return Err(DomainError::EndBeforeStart);
+        if end_date.is_some_and(|end| end < start_date) {
+            return Err(DomainError::EndDateBeforeStart);
         }
 
         Ok(Self {
@@ -50,8 +50,8 @@ impl PlanItem {
             amount,
             currency,
             period_months,
-            start_month,
-            end_month,
+            start_date,
+            end_date,
             recognition_mode,
             note: note
                 .map(|value| value.trim().to_owned())
@@ -87,12 +87,12 @@ impl PlanItem {
         self.period_months
     }
 
-    pub const fn start_month(&self) -> YearMonth {
-        self.start_month
+    pub const fn start_date(&self) -> CalendarDate {
+        self.start_date
     }
 
-    pub const fn end_month(&self) -> Option<YearMonth> {
-        self.end_month
+    pub const fn end_date(&self) -> Option<CalendarDate> {
+        self.end_date
     }
 
     pub const fn recognition_mode(&self) -> RecognitionMode {

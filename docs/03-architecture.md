@@ -1,312 +1,203 @@
-# Aplena 技术架构
+# Aplena 架构设计
 
-## 1. 架构目标
+## 1. 技术栈
 
-架构优先满足以下质量属性：
+- macOS 桌面壳：Tauri 2；
+- 后端：Rust；
+- 数据库：SQLite、SQLx、WAL；
+- 前端：React、TypeScript、Vite；
+- 服务端状态：TanStack Query；
+- 精确计算：Rust `Decimal` 与缩放整数；
+- 测试：Rust 单元/集成测试、Vitest、Testing Library。
 
-1. 历史快照不会被未来计划或汇率变化污染；
-2. 财务计算精确、确定且可以通过纯领域测试验证；
-3. 默认离线，用户数据不需要离开设备；
-4. 单用户桌面场景下安装、备份和恢复简单；
-5. 前端无法绕过业务规则直接修改数据库；
-6. 首发 macOS，同时避免锁死后续 Windows；
-7. 不为未来云同步提前引入服务器复杂度。
+应用是本地优先单用户桌面软件，不需要服务器、账号系统或网络同步。
 
-## 2. 总体结构
-
-```text
-┌──────────────── React + TypeScript ────────────────┐
-│ 页面 / 表单 / 数据表格 / 图表 / 无障碍交互         │
-│ TanStack Query：调用、缓存和失效；不计算权威财务值 │
-└──────────────────────┬─────────────────────────────┘
-                       │ typed Tauri commands
-┌──────────────────────▼─────────────────────────────┐
-│ Rust Application Layer                             │
-│ 命令编排、事务、权限边界、DTO、错误翻译            │
-├────────────────────────────────────────────────────┤
-│ PFCM Domain                                        │
-│ YearMonth / Decimal / 计入规则 / 聚合 / 承载能力   │
-├────────────────────────────────────────────────────┤
-│ Repository + Query Layer                           │
-│ SQLx、版本化迁移、参数化 SQL、备份与恢复           │
-└──────────────────────┬─────────────────────────────┘
-                       │ in-process
-┌──────────────────────▼─────────────────────────────┐
-│ SQLite STRICT + foreign_keys + WAL                 │
-│ Settings / ExchangeRate / PlanItem / MonthlyItem   │
-└────────────────────────────────────────────────────┘
-```
-
-应用不运行本地 HTTP 服务器。React 通过 Tauri IPC 调用白名单业务命令；不启用任意 SQL、
-Shell 或不受限文件系统能力。
-
-## 3. 运行时职责
-
-### 3.1 前端
-
-前端负责：
-
-- 路由、导航、表单和数据表格；
-- 对用户输入做快速但非权威的 Zod 校验；
-- 调用业务命令并展示结构化错误；
-- 使用 TanStack Query 管理查询缓存和写入后的精确失效；
-- 将后端提供的数据映射为 ECharts 图表；
-- 金额格式化和业务语义文案。
-
-前端不得：
-
-- 直接打开 SQLite；
-- 计算月度计划金额、汇率结果或承载能力并将其作为事实保存；
-- 自行推断类别与收支方向；
-- 使用 JavaScript `number` 承载权威金额；
-- 把 Dashboard 聚合写回数据库。
-
-金额 DTO 使用十进制字符串，例如 `"1200.0000"`。图表渲染需要数值时，只在确认安全
-范围后创建仅用于显示的 `number`，不得回写。
-
-### 3.2 Rust 应用层
-
-应用层负责一个命令对应一个明确用例：
-
-- 解析 DTO 和构造领域值对象；
-- 打开并提交或回滚事务；
-- 调用领域服务和 Repository；
-- 将内部错误转换为稳定错误代码和可本地化参数；
-- 返回页面需要的完整查询 DTO。
-
-应用层不把数据库行直接暴露给 UI，也不接受前端提供的 `flow_type` 或聚合金额作为权威值。
-
-### 3.3 PFCM 领域层
-
-领域层尽量保持纯 Rust，不依赖 Tauri、SQLite 或 React。核心模块建议为：
+## 2. 代码分层
 
 ```text
-domain/
-  amount
-  currency
-  year_month
-  category
-  recognition
-  plan_item
-  monthly_item
-  capacity
-  analytics
+crates/pfcm-domain
+  纯领域类型、日期/金额规则、计入与承载公式
+
+src-tauri/src/application
+  DTO、用例编排、分析投影、稳定错误协议
+
+src-tauri/src/infrastructure
+  SQLite、迁移、Store、备份恢复、CSV 与文件保护
+
+src-tauri/src/lib.rs
+  Tauri 命令注册、应用启动、隔离冒烟入口保护
+
+src
+  React 页面、查询缓存、交互和展示
 ```
 
-这样可以在没有数据库和窗口环境时完整验证月份边界、舍入、支付周期、零分母及承载公式。
-
-### 3.4 Repository 与查询层
-
-Repository 处理实体写入和按 ID 获取；查询层可以使用专门 SQL/CTE 直接返回 Dashboard DTO，
-避免为了纯粹的读取场景重建完整聚合。
-
-规则是：
-
-- 参数化 SQL；
-- 所有写入经应用服务；
-- 聚合查询只读；
-- 不建立会成为第二事实来源的统计表；
-- 不在 SQL 中执行货币除法或汇率舍入；
-- SQL 对缩放整数求和，Rust 负责比率和业务解释。
-
-## 4. 前端模块
+依赖方向：
 
 ```text
-ui/
-  app-shell
-  dashboard
-  monthly-plan
-  long-term-plan
-  history
-  analytics
-  settings
-  backup
-shared/
-  api
-  forms
-  formatting
-  components
-  charts
+React -> Tauri IPC -> Application -> Domain
+                           |
+                           v
+                     Infrastructure
 ```
 
-共享组件不包含领域常量副本。类别选项、收支方向和能力说明从稳定后端契约取得；中文标签
-由 UI 国际化资源呈现。
+领域层不依赖 Tauri、SQLite、WebView、文件系统或当前时间。
 
-## 5. IPC 契约
+## 3. 权威计算边界
 
-Tauri 命令按用例分组，不提供 `execute_sql` 一类通用入口。
+Rust 后端是金额、日期计入、偏差、比例和承载能力的唯一权威实现。前端只验证显而易见的输入形状、调用命令、展示结果，不复制财务公式。
 
-关键约束：
+金额协议：
 
-- UUID、枚举代码和月份作为字符串传输；
-- 金额和汇率作为十进制字符串传输；
-- 比率使用可空字符串或基点；
-- 所有命令返回稳定 `error_code`、字段路径和消息参数；
-- 备注等用户文本不进入错误日志；
-- DTO 使用独立版本，备份格式版本与 IPC 版本分离。
+- 输入与输出是十进制字符串；
+- 金额最多两位，汇率最多八位；
+- 数据库金额为分的 `INTEGER`；
+- 所有乘除在十进制中进行，最终金额只舍入一次；
+- 实际净额和偏差可以是带符号字符串。
 
-示例：
+日期协议：
+
+- 月份为 `YYYY-MM`；
+- 业务日期为 `YYYY-MM-DD`；
+- 日期类型不经过 JavaScript Date/UTC 序列化；
+- PAYMENT 支付日由 Rust 以原始开始日锚点计算。
+
+## 4. 持久化与派生数据
+
+持久化五张核心业务表：
 
 ```text
-create_plan_item(input) -> PlanItemView
-ensure_month_initialized(input) -> InitializationResult
-update_monthly_actual(input) -> MonthlyItemView
-get_month_dashboard(month) -> MonthlyDashboard
-get_financial_capacity(month) -> FinancialCapacity
+settings
+exchange_rates
+plan_items
+monthly_items
+actual_entries
 ```
 
-## 6. 自动初始化时序
+以下内容不建表：月度报告、Dashboard、趋势、分类结构、项目排名、偏差榜、实际总额。查询通过 `monthly_items LEFT JOIN actual_entries` 聚合，并在应用层生成统一分析 DTO。
+
+这保证条目变更后查询缓存失效即可刷新所有视图，无需“重新生成报表”。
+
+## 5. 月度初始化架构
+
+### 5.1 自动边界
+
+启动时只自动初始化当前自然月。创建或更新计划后也只自动补齐当前自然月。读取历史或未来月份绝不隐式写入。
+
+### 5.2 显式边界
+
+未来初始化与历史补录经过两步：
+
+1. `preview_month` 只读返回方向、候选、排除、既有项、缺少币种、支付日和警告；
+2. `initialize_month` 要求确认，并在一个事务中写入全部快照。
+
+历史补录的临时汇率只存在于命令输入，不写回汇率表。
+
+### 5.3 并发和原位提升
+
+应用服务用操作门协调初始化、备份和恢复；数据库唯一键防止同来源同月重复。初始化在连接事务中读取实际仅项目 ID，并使用带条件的 UPSERT 将 `ACTUAL_ONLY` 原位提升为 `PLANNED`。如果任何汇率或写入失败，整月不发生部分提交。
+
+## 6. 实际条目架构
+
+前端提供两条入口：
+
+- 月度卡片上下文入口，月度项目固定；
+- 全局入口，先选计划。目标月没有快照时调用 `ensure_actual_only_monthly_item`，再创建条目。
+
+应用服务验证 UUID、日期、效果、金额、来源计划状态和禁止改挂。Store 写入后，SQLite 触发器清除确认时间。日期同月约束也由触发器防守，避免绕过服务层写入污染数据。
+
+条目查询按日期和 UUID 稳定排序。迁移来源条目允许读取但 Store 拒绝更新和删除。
+
+## 7. 查询与缓存
+
+前端 Query Key 至少区分：
+
+- 设置、汇率、计划；
+- 月份预览与月度项目；
+- 某月度项目的实际条目；
+- 目标月分析、历史分析、承载能力；
+- 现有月份列表和启动状态。
+
+条目 CRUD 或确认后同时失效月度项目、该项目条目、目标月分析、历史分析和月份列表。计划变更还失效预览及承载能力。
+
+## 8. IPC 命令面
+
+命令按职责分组：
 
 ```text
-App starts
-  ↓
-Open database → apply migrations → validate settings
-  ↓
-Resolve current local YearMonth
-  ↓
-ensure_month_initialized(current_month, APP_START)
-  ↓ single write transaction
-Read settings/rates/plans → validate all due items
-  ↓
-Calculate deterministic snapshot values
-  ↓
-Insert missing rows; conflicts become skipped
-  ↓
-Commit all or roll back all
-  ↓
-Invalidate month/dashboard/history/capacity queries
-  ↓
-Show non-blocking summary or actionable error
+settings / exchange rates / plan items
+preview_plan_item / get_financial_capacity
+preview_month / initialize_month / get_startup_status
+list_monthly_items / update_monthly_note
+ensure_actual_only_monthly_item
+list_actual_entries / create_actual_entry
+update_actual_entry / delete_actual_entry
+confirm_monthly_item / confirm_monthly_actuals
+get_month_analytics / get_history_analytics
+create_backup / inspect_backup / restore_backup / export_csv
 ```
 
-新建 PlanItem 后复用同一服务和事务规则。编辑 PlanItem 不调用同步或覆盖逻辑，因为既有快照
-是独立事实。
+DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `field`、`message_key` 和安全参数；数据库路径、SQL、堆栈或原始系统错误不进入 UI。
 
-历史补录先执行只读预览，展示将创建的项目、当前汇率或临时覆盖汇率、风险说明和冲突；
-用户确认后才执行写事务。未来月份也使用预览确认，但不会显示“历史汇率”语义。
+## 9. SQLite 生命周期
 
-## 7. 一致性和并发
+启动流程：
 
-Aplena 是单用户本地应用，但仍可能发生重复点击、窗口重入或异步查询。保护层次为：
+1. 解析应用数据目录；冒烟模式只接受系统临时目录下已经存在的子目录；
+2. 确保目录和数据库/WAL/SHM 权限为当前用户私有；
+3. 检查数据库 schema 是否比应用新；
+4. 若存在待执行迁移，先生成并校验恢复点；
+5. 顺序运行嵌入式追加迁移；
+6. 启用 foreign keys、WAL 和同步策略；
+7. 启动当前自然月自动初始化。
 
-1. UI 在命令进行中禁用重复提交；
-2. 应用服务将同一写用例放入一个事务；
-3. `source_plan_item_id + month` 唯一约束提供最终幂等保护；
-4. 冲突转换为 `skipped`，不执行更新；
-5. TanStack Query 在成功提交后才失效相关缓存。
+本项目不修改已经发布的迁移。schema 3 通过重建表完成日级日期、分精度和实际条目转换。
 
-SQLite 启用 `foreign_keys = ON`、`journal_mode = WAL`、合理的 `busy_timeout`，并使用短事务。
-完整备份使用 SQLite `VACUUM INTO` 生成事务一致副本，不能只复制一个仍依赖 WAL 的裸数据库
-文件。普通业务命令持有数据库操作读门控；恢复持有写门控，因此备份可与 WAL 写入并发，
-恢复则会等待在途业务操作完成后独占关闭和替换连接池。
+## 10. 备份、恢复和导出
 
-## 8. 安全边界
+`.aplena` 是 ZIP 容器，包含数据库快照和 JSON manifest。当前格式 2 描述应用版本、schema、SHA-256、大小、五表摘要和创建时间。
 
-- Tauri capabilities 采用最小权限，只给主窗口所需的命令和受限文件选择能力；
-- 默认不启用网络、Shell、全局文件系统或远程内容；
-- 使用严格 CSP，不执行动态拼接脚本；
-- 应用数据目录在 Unix 上固定为 `0700`，SQLite 主文件及 WAL/SHM sidecar 固定为 `0600`；
-- 不启用 Tauri 的可选 `freezePrototype`：真实 WebKit 冒烟证明它会令当前图表依赖在懒加载时
-  写入只读原型并使页面崩溃；这里依靠严格 CSP、无远程内容和最小 capability 建立边界；
-- SQL 只使用参数绑定；
-- 日志记录错误代码、命令名和相关 UUID，不记录金额、备注或完整名称；
-- 导出和恢复只能经系统文件选择器，并明确目标文件；
-- 自动更新只有在发布基础设施、签名和回滚方案完成后启用。
+检查恢复：
 
-公开发布前必须完成数据库静态加密的跨平台验证。首选方向为 SQLCipher，密钥由系统秘密
-存储或 Tauri Stronghold 保存；Stronghold 只保存密钥，不等同于数据库加密。如果该组合
-不能在 macOS 和 Windows 的签名构建中稳定工作，公开发布应被阻止，直到选定并验证替代
-方案。
+1. 防路径穿越、符号链接、重复文件、压缩炸弹和记录数异常；
+2. 校验 manifest 与数据库摘要；
+3. 格式 1 旧库在隔离副本中执行当前迁移；
+4. 完整验证五表、索引、触发器、外键和业务不变量；
+5. 返回绑定文件指纹、一次性 token 和对比摘要；
+6. 用户输入确认短语后，串行恢复并先创建当前库恢复点；
+7. 原子替换；失败回滚原库。
 
-## 9. 备份与恢复
+CSV 是人类可读导出，包含五张表。字符串执行 RFC 4180 引号和公式注入防护；金额固定两位，汇率固定八位。它不用于恢复。
 
-MVP 需要两种出口：
+## 11. 安全边界
 
-1. 完整 `.aplena` 备份：只含清单与数据库一致快照，记录格式/schema/应用版本、SHA-256、
-   四表记录数、月份范围和设置摘要；
-2. CSV 导出：四张核心表的人类可读数据，使用固定小数字符串、稳定代码和中文标签，不作为
-   无损恢复格式。
+- CSP 和 Tauri capability 最小化；
+- 无 shell、网络、任意文件系统插件权限；
+- 文件选择与保存通过受限对话框；
+- 数据库和备份路径不通过 IPC 暴露；
+- SQL 参数绑定，用户文本不拼接查询；
+- 恢复输入视为不可信文件；
+- 真实应用冒烟必须设置隔离临时数据目录。
 
-恢复流程：
+数据库加密仍是独立发布门，详见 ADR 0006；当前本地数据保护依赖 OS 账户、文件权限、FileVault 建议和备份安全说明。
 
-1. 在 Rust 侧拒绝路径穿越、绝对路径、符号链接、重复/额外条目、超限大小和异常压缩比；
-2. 校验格式版本、schema 版本、SQLite 文件头和 SHA-256；
-3. 在应用私有临时副本运行向前迁移、完整性、外键、schema 与领域不变量检查并展示摘要；
-4. 用户勾选并输入“恢复”，后端再次核对一次性令牌和文件哈希；
-5. 为当前数据创建恢复点，checkpoint 并关闭连接池；
-6. 同文件系统原子换名，重开并复核；失败则换回原数据库并重开；
-7. 前端失效全部查询缓存，重新计算派生数据。
+## 12. 测试策略
 
-系统文件选择器只由 Rust 命令调用，WebView 不接收完整路径，也没有通用文件读写 IPC。
+### 12.1 领域层
 
-数据库迁移前自动创建恢复点。备份密码和加密方案必须经过专门安全审查，不能自行设计
-密码算法。
+验证两位输入、溢出、闰年、日级交集、1 月 31 日锚点、结束日、退款导致负净额、状态机和承载公式。
 
-## 10. 技术选择
+### 12.2 应用与数据库层
 
-| 层 | 选择 | 理由 |
-|---|---|---|
-| 桌面外壳 | Tauri 2 | 系统 WebView、Rust 后端、跨桌面平台和细粒度能力权限 |
-| UI | React + TypeScript + Vite | 适合数据密集桌面界面，类型生态成熟，构建边界简单 |
-| 表单 | React Hook Form + Zod | 表单状态与即时输入提示；后端仍是权威校验 |
-| 查询状态 | TanStack Query | 命令后精确失效 Dashboard、历史和计划查询 |
-| 样式与组件 | 版本控制的原生 CSS + 语义化 HTML | 当前规模下避免额外运行依赖，并保持视觉与无障碍细节可审计 |
-| 图表 | Apache ECharts | 趋势、结构、横向排名和无障碍描述能力 |
-| 后端 | Rust | 领域值对象、精确计算和 Tauri 原生边界 |
-| 数据库 | SQLite STRICT + WAL | 单用户嵌入式数据、事务、备份和成熟文件格式 |
-| 数据访问 | SQLx + SQL migrations | 参数化查询、事务和可版本化迁移；避免重量 ORM |
-| 精确金额 | rust_decimal 或经验证等价物 | 避免二进制浮点，显式舍入模式 |
+验证迁移、WAL、事务回滚、并发幂等、快照不可变、条目 CRUD、确认重开、仅实际原位提升、已删除计划拒绝、分析口径和本位币锁。
 
-依赖版本在第二阶段初始化时根据锁文件固定，不在设计文档中写死容易过期的补丁版本。
+### 12.3 数据保护层
 
-## 11. 不采用的方案
+验证五表往返、并发备份、旧格式 1 前向恢复、恢复点、校验和、一次性 token、路径攻击、压缩炸弹、记录上限、CSV 稳定性和公式注入防护。
 
-### 云端 Web + PostgreSQL
+### 12.4 前端
 
-MVP 没有同步或协作需求。服务器会引入账户、安全、部署、隐私和持续成本，不能改善核心
-月度计划体验。
+验证首次设置、两种计划模式、日级录入、实际四状态、退款/冲减、只读净额、全局仅实际入口、月份浏览、显式初始化、分析展示和恢复确认。
 
-### Electron
+### 12.5 发布级验证
 
-可以实现产品，但会捆绑浏览器运行时，且仍需设计可信后端边界。当前团队基线优先选择
-Tauri；如果后续 Rust 技能或平台兼容性验证失败，再通过 ADR 重新评估。
-
-### React 直接使用 Tauri SQL 插件
-
-会让 UI 获得过宽的数据写入能力，容易复制或绕过领域规则。Aplena 只通过 Rust 业务命令
-访问 SQLx。
-
-### 持久化 Monthly Report
-
-它会成为需要同步更新的第二数据源，增加漂移和修复成本。使用索引良好的实时查询即可。
-
-### 全栈框架或本地 HTTP API
-
-离线单窗口应用不需要 SSR、服务进程或网络协议。Tauri 命令边界更小、更容易限制权限。
-
-## 12. 测试分层
-
-| 层 | 验证内容 |
-|---|---|
-| Rust 单元/性质测试 | 月份、周期、舍入、分类、能力和零分母 |
-| SQLite 集成测试 | 迁移、约束、事务、幂等、删除和查询 |
-| 前端单元测试 | 表单状态、空值、文案和格式化 |
-| 组件测试 | 表格编辑、错误、批量确认和无障碍 |
-| Playwright | 浏览器层核心用户流程，不依赖真实数据库时使用 mock command adapter |
-| Tauri 端到端 | macOS 主流程、数据库和窗口集成；Windows 发布前增加对应验证 |
-| 备份测试 | 一致性快照、损坏检测、版本迁移和恢复回滚 |
-
-本地测试成功只证明对应范围；签名、自动更新、SQLCipher 和 Windows 行为需要各自的真实
-构建证据。
-
-## 13. 官方参考
-
-- [Tauri 2：What is Tauri?](https://v2.tauri.app/start/)
-- [Tauri：Capabilities](https://v2.tauri.app/security/capabilities/)
-- [Tauri：Content Security Policy](https://v2.tauri.app/security/csp/)
-- [SQLite：Datatypes](https://www.sqlite.org/datatype3.html)
-- [SQLite：STRICT Tables](https://www.sqlite.org/stricttables.html)
-- [SQLite：Transactions](https://www.sqlite.org/lang_transaction.html)
-- [SQLx SQLite](https://docs.rs/sqlx/latest/sqlx/sqlite/)
-- [React with TypeScript](https://react.dev/learn/typescript)
-- [Apache ECharts](https://echarts.apache.org/en/)
+除类型、Lint、单元测试和构建外，发布候选必须完成 Tauri release `.app` 构建，并以系统临时目录下的隔离 `APLENA_SMOKE_DATA_DIR` 启动真实应用，检查关键页面和数据写读；禁止连接真实用户数据库。

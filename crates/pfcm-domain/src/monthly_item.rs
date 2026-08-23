@@ -1,6 +1,28 @@
 use uuid::Uuid;
 
-use crate::{Amount, Category, CurrencyCode, FlowType, PlanItem, RecognitionMode, YearMonth};
+use crate::{
+    Amount, CalendarDate, Category, CurrencyCode, FlowType, MonthlyItemSource, PlanItem,
+    RecognitionMode, SignedAmount, YearMonth,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActualDataStatus {
+    Missing,
+    InProgress,
+    ConfirmedZero,
+    Final,
+}
+
+impl ActualDataStatus {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Missing => "MISSING",
+            Self::InProgress => "IN_PROGRESS",
+            Self::ConfirmedZero => "CONFIRMED_ZERO",
+            Self::Final => "FINAL",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MonthlyItem {
@@ -11,8 +33,12 @@ pub struct MonthlyItem {
     category: Category,
     flow_type: FlowType,
     recognition_mode: RecognitionMode,
+    item_source: MonthlyItemSource,
+    scheduled_date: Option<CalendarDate>,
     planned_amount: Amount,
-    actual_amount: Option<Amount>,
+    actual_amount: Option<SignedAmount>,
+    actual_entry_count: u64,
+    actual_confirmed_at: Option<String>,
     currency: CurrencyCode,
     note: Option<String>,
 }
@@ -22,6 +48,44 @@ impl MonthlyItem {
         id: Uuid,
         source: &PlanItem,
         month: YearMonth,
+        scheduled_date: Option<CalendarDate>,
+        planned_amount: Amount,
+        base_currency: CurrencyCode,
+    ) -> Self {
+        Self::from_plan(
+            id,
+            source,
+            month,
+            MonthlyItemSource::Planned,
+            scheduled_date,
+            planned_amount,
+            base_currency,
+        )
+    }
+
+    pub fn actual_only(
+        id: Uuid,
+        source: &PlanItem,
+        month: YearMonth,
+        base_currency: CurrencyCode,
+    ) -> Self {
+        Self::from_plan(
+            id,
+            source,
+            month,
+            MonthlyItemSource::ActualOnly,
+            None,
+            Amount::zero(),
+            base_currency,
+        )
+    }
+
+    fn from_plan(
+        id: Uuid,
+        source: &PlanItem,
+        month: YearMonth,
+        item_source: MonthlyItemSource,
+        scheduled_date: Option<CalendarDate>,
         planned_amount: Amount,
         base_currency: CurrencyCode,
     ) -> Self {
@@ -33,15 +97,15 @@ impl MonthlyItem {
             category: source.category(),
             flow_type: source.flow_type(),
             recognition_mode: source.recognition_mode(),
+            item_source,
+            scheduled_date,
             planned_amount,
             actual_amount: None,
+            actual_entry_count: 0,
+            actual_confirmed_at: None,
             currency: base_currency,
             note: source.note().map(str::to_owned),
         }
-    }
-
-    pub const fn id(&self) -> Uuid {
-        self.id
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -53,8 +117,12 @@ impl MonthlyItem {
         category: Category,
         flow_type: FlowType,
         recognition_mode: RecognitionMode,
+        item_source: MonthlyItemSource,
+        scheduled_date: Option<CalendarDate>,
         planned_amount: Amount,
-        actual_amount: Option<Amount>,
+        actual_amount: Option<SignedAmount>,
+        actual_entry_count: u64,
+        actual_confirmed_at: Option<String>,
         currency: CurrencyCode,
         note: Option<String>,
     ) -> Self {
@@ -66,60 +134,69 @@ impl MonthlyItem {
             category,
             flow_type,
             recognition_mode,
+            item_source,
+            scheduled_date,
             planned_amount,
             actual_amount,
+            actual_entry_count,
+            actual_confirmed_at,
             currency,
             note,
         }
     }
 
+    pub const fn id(&self) -> Uuid {
+        self.id
+    }
     pub const fn source_plan_item_id(&self) -> Option<Uuid> {
         self.source_plan_item_id
     }
-
     pub fn item_name(&self) -> &str {
         &self.item_name
     }
-
     pub const fn month(&self) -> YearMonth {
         self.month
     }
-
     pub const fn category(&self) -> Category {
         self.category
     }
-
     pub const fn flow_type(&self) -> FlowType {
         self.flow_type
     }
-
     pub const fn recognition_mode(&self) -> RecognitionMode {
         self.recognition_mode
     }
-
+    pub const fn item_source(&self) -> MonthlyItemSource {
+        self.item_source
+    }
+    pub const fn scheduled_date(&self) -> Option<CalendarDate> {
+        self.scheduled_date
+    }
     pub const fn planned_amount(&self) -> Amount {
         self.planned_amount
     }
-
-    pub const fn actual_amount(&self) -> Option<Amount> {
+    pub const fn actual_amount(&self) -> Option<SignedAmount> {
         self.actual_amount
     }
-
+    pub const fn actual_entry_count(&self) -> u64 {
+        self.actual_entry_count
+    }
+    pub fn actual_confirmed_at(&self) -> Option<&str> {
+        self.actual_confirmed_at.as_deref()
+    }
     pub fn currency(&self) -> &CurrencyCode {
         &self.currency
     }
-
     pub fn note(&self) -> Option<&str> {
         self.note.as_deref()
     }
 
-    pub fn set_actual_amount(&mut self, actual_amount: Option<Amount>) {
-        self.actual_amount = actual_amount;
-    }
-
-    pub fn set_note(&mut self, note: Option<String>) {
-        self.note = note
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty());
+    pub fn actual_data_status(&self) -> ActualDataStatus {
+        match (self.actual_entry_count, self.actual_confirmed_at.is_some()) {
+            (0, false) => ActualDataStatus::Missing,
+            (_, false) => ActualDataStatus::InProgress,
+            (0, true) => ActualDataStatus::ConfirmedZero,
+            (_, true) => ActualDataStatus::Final,
+        }
     }
 }

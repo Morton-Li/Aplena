@@ -111,7 +111,7 @@ function DataProtectionPanel() {
         <span className="context-chip">本地文件 · Rust 受控路径</span>
       </header>
       <p className="card-copy">
-        完整备份用于灾难恢复，包含四张核心表、版本清单与 SHA-256 校验和；CSV 用于人工查阅，不能用于恢复。
+        完整备份用于灾难恢复，包含五张核心表、版本清单与 SHA-256 校验和；CSV 用于人工查阅，不能用于恢复。
       </p>
       <div className="notice notice-warning">
         当前本地候选版数据库与备份尚未加密。请把 <code>.aplena</code> 和 CSV 文件保存在受信任、已加密的磁盘位置。
@@ -131,7 +131,7 @@ function DataProtectionPanel() {
           type="button"
           onClick={() => csvMutation.mutate()}
         >
-          {csvMutation.isPending ? "正在导出…" : "导出四表 CSV"}
+          {csvMutation.isPending ? "正在导出…" : "导出五表 CSV"}
         </button>
         <button
           className="button button-quiet"
