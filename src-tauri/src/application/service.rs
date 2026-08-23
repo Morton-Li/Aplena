@@ -9,6 +9,7 @@ use pfcm_domain::{
     Amount, Category, CurrencyCode, ExchangeRate, PlanItem, RecognitionMode, Settings, YearMonth,
     create_monthly_snapshot, is_recognized_in,
 };
+use rust_decimal::{Decimal, RoundingStrategy};
 use sqlx::Executor;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -713,11 +714,59 @@ fn plan_item_dto(stored: StoredPlanItem) -> PlanItemDto {
         note: value.note().map(str::to_owned),
         created_at: stored.created_at,
         updated_at: stored.updated_at,
+        history_month_count: stored.history_month_count,
     }
 }
 
 fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
     let value = stored.value;
+    let actual = value.actual_amount();
+    let variance_amount = actual.map(|actual| {
+        format_decimal(
+            actual
+                .as_decimal()
+                .checked_sub(value.planned_amount().as_decimal())
+                .expect("two valid i64-scaled amounts have a representable decimal difference"),
+            4,
+        )
+    });
+    let completion_rate_percent = actual.and_then(|actual| {
+        let planned = value.planned_amount().as_decimal();
+        if planned.is_zero() {
+            None
+        } else {
+            Some(format_decimal(
+                actual
+                    .as_decimal()
+                    .checked_div(planned)?
+                    .checked_mul(Decimal::ONE_HUNDRED)?,
+                2,
+            ))
+        }
+    });
+    let data_status = match actual {
+        None => "MISSING",
+        Some(actual) if actual == Amount::zero() => "CONFIRMED_ZERO",
+        Some(_) => "RECORDED",
+    };
+    let variance_effect = match actual {
+        None => "UNKNOWN",
+        Some(actual) if actual == value.planned_amount() => "ON_PLAN",
+        Some(actual) if value.flow_type() == pfcm_domain::FlowType::Income => {
+            if actual > value.planned_amount() {
+                "FAVORABLE"
+            } else {
+                "UNFAVORABLE"
+            }
+        }
+        Some(actual) => {
+            if actual < value.planned_amount() {
+                "FAVORABLE"
+            } else {
+                "UNFAVORABLE"
+            }
+        }
+    };
     MonthlyItemDto {
         id: value.id().to_string(),
         source_plan_item_id: value.source_plan_item_id().map(|id| id.to_string()),
@@ -727,12 +776,22 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
         flow_type: value.flow_type().code().to_owned(),
         recognition_mode: value.recognition_mode().code().to_owned(),
         planned_amount: value.planned_amount().decimal_string(),
-        actual_amount: value.actual_amount().map(Amount::decimal_string),
+        actual_amount: actual.map(Amount::decimal_string),
+        variance_amount,
+        completion_rate_percent,
+        data_status: data_status.to_owned(),
+        variance_effect: variance_effect.to_owned(),
         currency: value.currency().to_string(),
         note: value.note().map(str::to_owned),
         created_at: stored.created_at,
         updated_at: stored.updated_at,
     }
+}
+
+fn format_decimal(mut value: Decimal, scale: u32) -> String {
+    value = value.round_dp_with_strategy(scale, RoundingStrategy::MidpointAwayFromZero);
+    value.rescale(scale);
+    value.to_string()
 }
 
 fn delete_plan_item_dto(result: DeletePlanResult) -> DeletePlanItemDto {
