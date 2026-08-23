@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useState } from "react";
+import { Component, lazy, Suspense, useState, type ReactNode } from "react";
 import { HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 
 import { SetupPage } from "./features/setup/SetupPage";
@@ -49,10 +49,36 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <HashRouter>
-        <AppBootstrap />
+        <ApplicationErrorBoundary>
+          <AppBootstrap />
+        </ApplicationErrorBoundary>
       </HashRouter>
     </QueryClientProvider>
   );
+}
+
+export class ApplicationErrorBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <LaunchState
+          tone="error"
+          title="界面资源加载失败"
+          detail="请完全退出并重新打开 Aplena；如果问题持续，请保留当前数据库并使用已验证的备份恢复。"
+        />
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function AppBootstrap() {

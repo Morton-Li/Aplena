@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { App } from "./App";
+import { App, ApplicationErrorBoundary } from "./App";
 import type { Invoke } from "./shared/api/domain";
 import type {
   InitializeMonthResult,
@@ -11,6 +11,7 @@ import type {
   MonthPreview,
   MonthlyItem,
   PlanItem,
+  RestoreInspection,
   Settings,
 } from "./shared/api/finance";
 
@@ -23,6 +24,23 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("./shared/components/AnalyticsChart", () => ({
   AnalyticsChart: ({ label }: { label: string }) => <div role="img" aria-label={label} />,
 }));
+
+function BrokenScreen(): never {
+  throw new Error("sensitive diagnostic must not reach the UI");
+}
+
+it("replaces unexpected render failures with a path-safe recovery message", () => {
+  const errorOutput = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  render(
+    <ApplicationErrorBoundary>
+      <BrokenScreen />
+    </ApplicationErrorBoundary>,
+  );
+
+  expect(screen.getByRole("heading", { name: "界面资源加载失败" })).toBeInTheDocument();
+  expect(screen.queryByText(/sensitive diagnostic/)).not.toBeInTheDocument();
+  errorOutput.mockRestore();
+});
 
 const contract = {
   categories: [
@@ -269,6 +287,7 @@ interface HarnessOptions {
   analytics?: MonthAnalytics;
   history?: MonthAnalytics[];
   capacity?: FinancialCapacity;
+  restoreInspection?: RestoreInspection;
 }
 
 function installHarness(options: HarnessOptions = {}) {
@@ -418,6 +437,71 @@ function installHarness(options: HarnessOptions = {}) {
         return undefined as T;
       case "stop_plan_item":
         return examplePlan as T;
+      case "create_backup":
+        return {
+          status: "CREATED",
+          file_name: "Aplena-test.aplena",
+          created_at: "2026-08-23T00:00:00Z",
+          summary: null,
+        } as T;
+      case "export_csv":
+        return {
+          status: "CREATED",
+          folder_name: "Aplena-CSV-test",
+          created_at: "2026-08-23T00:00:00Z",
+          file_count: 4,
+        } as T;
+      case "inspect_backup":
+        return (options.restoreInspection ?? {
+          status: "READY",
+          token: "restore-token",
+          file_name: "Aplena-test.aplena",
+          backup_created_at: "2026-08-22T00:00:00Z",
+          backup_app_version: "0.1.0",
+          schema_version: 2,
+          migrations_applied: false,
+          summary: {
+            settings: {
+              target_month: "2026-08",
+              base_currency: "CNY",
+              minimum_savings_rate_basis_points: 2000,
+            },
+            settings_count: 1,
+            exchange_rate_count: 1,
+            plan_item_count: 2,
+            monthly_item_count: 3,
+            first_month: "2026-07",
+            last_month: "2026-08",
+          },
+          current_summary: {
+            settings: {
+              target_month: "2026-08",
+              base_currency: "CNY",
+              minimum_savings_rate_basis_points: 2000,
+            },
+            settings_count: 1,
+            exchange_rate_count: 1,
+            plan_item_count: 1,
+            monthly_item_count: 1,
+            first_month: "2026-08",
+            last_month: "2026-08",
+          },
+        }) as T;
+      case "restore_backup":
+        return {
+          restored: true,
+          recovery_point_name: "before-restore-test.aplena",
+          restored_at: "2026-08-23T00:00:00Z",
+          summary: {
+            settings: null,
+            settings_count: 1,
+            exchange_rate_count: 1,
+            plan_item_count: 2,
+            monthly_item_count: 3,
+            first_month: "2026-07",
+            last_month: "2026-08",
+          },
+        } as T;
       default:
         throw new Error("Unhandled command in test: " + command);
     }
@@ -605,6 +689,55 @@ describe("planning workflows", () => {
     });
     render(<App />);
     expect(await screen.findByText("已有月度数据，本位币已锁定。")).toBeInTheDocument();
+  });
+
+  it("keeps backup paths in Rust and requires two explicit restore confirmations", async () => {
+    installHarness();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    await screen.findByRole("heading", { name: "备份、恢复与可读导出" });
+
+    await user.click(screen.getByRole("button", { name: "创建完整备份" }));
+    expect(await screen.findByText(/已创建 Aplena-test\.aplena/)).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("create_backup");
+
+    await user.click(screen.getByRole("button", { name: "导出四表 CSV" }));
+    expect(await screen.findByText(/Aplena-CSV-test 中导出 4 个 CSV/)).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("export_csv");
+
+    await user.click(screen.getByRole("button", { name: "选择并检查备份" }));
+    expect(await screen.findByRole("heading", { name: "恢复前只读检查已通过" })).toBeInTheDocument();
+    const comparison = screen.getByRole("table", { name: "恢复数据差异" });
+    expect(within(comparison).getByText("2026-07 — 2026-08")).toBeInTheDocument();
+    expect(within(comparison).getByText("+2")).toBeInTheDocument();
+    const restore = screen.getByRole("button", { name: "确认恢复此备份" });
+    expect(restore).toBeDisabled();
+    await user.click(screen.getByLabelText(/我已核对月份/));
+    await user.type(screen.getByLabelText("输入“恢复”进行第二次确认"), "恢复");
+    expect(restore).toBeEnabled();
+    await user.click(restore);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("restore_backup", {
+        input: { token: "restore-token", confirmed: true, confirmationPhrase: "恢复" },
+      }),
+    );
+    expect(await screen.findByText(/替换前恢复点为 before-restore-test\.aplena/)).toBeInTheDocument();
+  });
+
+  it("renders a safe structured backup validation error", async () => {
+    installHarness({
+      rejectCommand: {
+        command: "inspect_backup",
+        error: { error_code: "BACKUP_CHECKSUM_MISMATCH", message_key: "error.backup_checksum_mismatch" },
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "设置" }));
+    await screen.findByRole("heading", { name: "备份、恢复与可读导出" });
+    await user.click(screen.getByRole("button", { name: "选择并检查备份" }));
+    expect(await screen.findByText(/备份内容与校验清单不一致/)).toBeInTheDocument();
   });
 });
 

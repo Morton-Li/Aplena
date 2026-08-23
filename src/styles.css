@@ -1771,6 +1771,136 @@ textarea {
   padding-top: 8px;
 }
 
+.data-protection-card {
+  margin-top: 22px;
+}
+
+.data-protection-heading,
+.restore-preview > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.protection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.restore-preview {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+  padding: 20px;
+  background: #f7f6f0;
+  border: 1px solid #d9ddd3;
+  border-radius: 14px;
+}
+
+.restore-preview h3 {
+  margin: 4px 0 0;
+  font-family: Georgia, serif;
+  font-size: 21px;
+  font-weight: 500;
+}
+
+.restore-preview > header > strong {
+  overflow-wrap: anywhere;
+  color: #385d4b;
+}
+
+.restore-metadata,
+.data-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.restore-metadata > div,
+.data-summary > div {
+  min-width: 0;
+  padding: 12px;
+  background: #fffefb;
+  border: 1px solid #e1e3db;
+  border-radius: 10px;
+}
+
+.restore-metadata dt,
+.data-summary span {
+  display: block;
+  margin-bottom: 5px;
+  color: #718078;
+  font-size: 11px;
+}
+
+.restore-metadata dd,
+.data-summary strong {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.data-summary > div:nth-last-child(-n + 2) {
+  grid-column: span 2;
+}
+
+.restore-comparison {
+  display: grid;
+  gap: 9px;
+}
+
+.restore-comparison h4 {
+  margin: 0;
+  color: #44574e;
+  font-size: 13px;
+}
+
+.restore-comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fffefb;
+  border: 1px solid #e1e3db;
+  font-size: 12px;
+}
+
+.restore-comparison-table th,
+.restore-comparison-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e7e8e1;
+  text-align: left;
+  vertical-align: top;
+}
+
+.restore-comparison-table thead th {
+  color: #718078;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.restore-comparison-table tbody th {
+  color: #44574e;
+  font-weight: 650;
+}
+
+.restore-comparison-table td {
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.notice-danger {
+  color: #713d34;
+  background: #f7e9e5;
+  border-color: #e9c8c0;
+}
+
+.restore-phrase {
+  max-width: 320px;
+}
+
 @media (max-width: 1120px) {
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1791,6 +1921,11 @@ textarea {
   .structure-grid,
   .history-tables {
     grid-template-columns: 1fr;
+  }
+
+  .restore-metadata,
+  .data-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1814,5 +1949,20 @@ textarea {
   .ranking-controls {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .data-protection-heading,
+  .restore-preview > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .restore-metadata,
+  .data-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .data-summary > div:nth-last-child(-n + 2) {
+    grid-column: span 1;
   }
 }

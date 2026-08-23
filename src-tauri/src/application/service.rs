@@ -20,6 +20,7 @@ use crate::infrastructure::{
 
 use super::{
     analytics::build_month_analytics,
+    data_protection::DataProtectionState,
     dto::{
         ConfirmActualsDto, ConfirmActualsInputDto, DeletePlanItemDto, ExchangeRateDto,
         ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
@@ -40,30 +41,39 @@ enum InitializationTrigger {
 
 #[derive(Debug, Clone)]
 pub struct FinanceService {
-    store: Store,
-    startup_status: Arc<RwLock<StartupStatusDto>>,
+    pub(crate) store: Arc<RwLock<Store>>,
+    pub(crate) operation_gate: Arc<RwLock<()>>,
+    pub(crate) startup_status: Arc<RwLock<StartupStatusDto>>,
+    pub(crate) data_protection: Arc<DataProtectionState>,
 }
 
 impl FinanceService {
     pub fn new(store: Store) -> Result<Self, AppError> {
         let current_month = current_natural_month()?;
         Ok(Self {
-            store,
+            store: Arc::new(RwLock::new(store)),
+            operation_gate: Arc::new(RwLock::new(())),
             startup_status: Arc::new(RwLock::new(StartupStatusDto {
                 current_month: current_month.to_string(),
                 initialization: None,
                 error: None,
             })),
+            data_protection: Arc::new(DataProtectionState::default()),
         })
     }
 
     #[cfg(test)]
-    pub fn store(&self) -> &Store {
-        &self.store
+    pub async fn test_store(&self) -> Store {
+        self.current_store().await
+    }
+
+    pub(crate) async fn current_store(&self) -> Store {
+        self.store.read().await.clone()
     }
 
     pub async fn initialize_on_startup(&self) {
-        let result = match self.store.get_settings().await {
+        let _operation = self.operation_gate.read().await;
+        let result = match self.current_store().await.get_settings().await {
             Ok(Some(_)) => {
                 self.ensure_month_initialized(
                     current_natural_month().expect("local calendar month must be valid"),
@@ -94,7 +104,9 @@ impl FinanceService {
     }
 
     pub async fn get_settings(&self) -> Result<Option<SettingsDto>, AppError> {
-        self.store
+        let _operation = self.operation_gate.read().await;
+        self.current_store()
+            .await
             .get_settings()
             .await
             .map_err(AppError::from)
@@ -102,18 +114,26 @@ impl FinanceService {
     }
 
     pub async fn save_settings(&self, input: SettingsInputDto) -> Result<SettingsDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let settings = parse_settings(input)?;
         let timestamp = timestamp();
         let stored = if self
-            .store
+            .current_store()
+            .await
             .get_settings()
             .await
             .map_err(AppError::from)?
             .is_some()
         {
-            self.store.update_settings(&settings, &timestamp).await
+            self.current_store()
+                .await
+                .update_settings(&settings, &timestamp)
+                .await
         } else {
-            self.store.create_settings(&settings, &timestamp).await
+            self.current_store()
+                .await
+                .create_settings(&settings, &timestamp)
+                .await
         }
         .map_err(AppError::from)?;
 
@@ -128,9 +148,15 @@ impl FinanceService {
     }
 
     pub async fn list_exchange_rates(&self) -> Result<Vec<ExchangeRateDto>, AppError> {
+        let _operation = self.operation_gate.read().await;
+        self.list_exchange_rates_unlocked().await
+    }
+
+    async fn list_exchange_rates_unlocked(&self) -> Result<Vec<ExchangeRateDto>, AppError> {
         let settings = self.require_settings().await?;
         let base = settings.value.base_currency().clone();
-        self.store
+        self.current_store()
+            .await
             .list_exchange_rates()
             .await
             .map_err(AppError::from)
@@ -146,30 +172,36 @@ impl FinanceService {
         &self,
         input: ExchangeRateUpsertDto,
     ) -> Result<Vec<ExchangeRateDto>, AppError> {
+        let _operation = self.operation_gate.read().await;
         let settings = self.require_settings().await?;
         let source = CurrencyCode::new(&input.currency)
             .map_err(|error| AppError::from_domain(error, Some("currency")))?;
         let exchange_rate =
             ExchangeRate::from_str(source, settings.value.base_currency().clone(), &input.rate)
                 .map_err(|error| AppError::from_domain(error, Some("rate")))?;
-        self.store
+        self.current_store()
+            .await
             .upsert_exchange_rate(&exchange_rate, &timestamp())
             .await
             .map_err(AppError::from)?;
-        self.list_exchange_rates().await
+        self.list_exchange_rates_unlocked().await
     }
 
     pub async fn delete_exchange_rate(&self, currency: String) -> Result<(), AppError> {
+        let _operation = self.operation_gate.read().await;
         let currency = CurrencyCode::new(currency)
             .map_err(|error| AppError::from_domain(error, Some("currency")))?;
-        self.store
+        self.current_store()
+            .await
             .delete_exchange_rate(&currency)
             .await
             .map_err(AppError::from)
     }
 
     pub async fn list_plan_items(&self) -> Result<Vec<PlanItemDto>, AppError> {
-        self.store
+        let _operation = self.operation_gate.read().await;
+        self.current_store()
+            .await
             .list_plan_items()
             .await
             .map_err(AppError::from)
@@ -180,11 +212,13 @@ impl FinanceService {
         &self,
         input: PlanItemInputDto,
     ) -> Result<PlanMutationDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         self.require_settings().await?;
         let plan_item = parse_plan_item(input, false)?;
         self.require_currency_rate(plan_item.currency()).await?;
         let stored = self
-            .store
+            .current_store()
+            .await
             .insert_plan_item(&plan_item, &timestamp())
             .await
             .map_err(AppError::from)?;
@@ -202,10 +236,12 @@ impl FinanceService {
     }
 
     pub async fn update_plan_item(&self, input: PlanItemInputDto) -> Result<PlanItemDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         self.require_settings().await?;
         let plan_item = parse_plan_item(input, true)?;
         self.require_currency_rate(plan_item.currency()).await?;
-        self.store
+        self.current_store()
+            .await
             .update_plan_item(&plan_item, &timestamp())
             .await
             .map_err(AppError::from)
@@ -216,8 +252,14 @@ impl FinanceService {
         &self,
         input: StopPlanItemRequestDto,
     ) -> Result<PlanItemDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let id = parse_uuid(&input.id, "id")?;
-        let stored = self.store.get_plan_item(id).await.map_err(AppError::from)?;
+        let stored = self
+            .current_store()
+            .await
+            .get_plan_item(id)
+            .await
+            .map_err(AppError::from)?;
         let end_month = parse_month(&input.end_month, "endMonth")?;
         let value = &stored.value;
         let stopped = PlanItem::new(
@@ -233,7 +275,8 @@ impl FinanceService {
             value.note().map(str::to_owned),
         )
         .map_err(|error| AppError::from_domain(error, Some("endMonth")))?;
-        self.store
+        self.current_store()
+            .await
             .update_plan_item(&stopped, &timestamp())
             .await
             .map_err(AppError::from)
@@ -241,8 +284,10 @@ impl FinanceService {
     }
 
     pub async fn delete_plan_item(&self, id: String) -> Result<DeletePlanItemDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let result = self
-            .store
+            .current_store()
+            .await
             .delete_plan_item(parse_uuid(&id, "id")?)
             .await
             .map_err(AppError::from)?;
@@ -250,8 +295,10 @@ impl FinanceService {
     }
 
     pub async fn list_monthly_items(&self, month: String) -> Result<Vec<MonthlyItemDto>, AppError> {
+        let _operation = self.operation_gate.read().await;
         let month = parse_month(&month, "month")?;
-        self.store
+        self.current_store()
+            .await
             .list_monthly_items(month)
             .await
             .map_err(AppError::from)
@@ -262,6 +309,7 @@ impl FinanceService {
         &self,
         input: MonthlyActualInputDto,
     ) -> Result<MonthlyItemDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let id = parse_uuid(&input.id, "id")?;
         let actual_amount = input
             .actual_amount
@@ -269,7 +317,8 @@ impl FinanceService {
             .map(Amount::from_str)
             .transpose()
             .map_err(|error| AppError::from_domain(error, Some("actualAmount")))?;
-        self.store
+        self.current_store()
+            .await
             .update_monthly_actual(id, actual_amount, &timestamp())
             .await
             .map_err(AppError::from)
@@ -280,7 +329,9 @@ impl FinanceService {
         &self,
         input: MonthlyNoteInputDto,
     ) -> Result<MonthlyItemDto, AppError> {
-        self.store
+        let _operation = self.operation_gate.read().await;
+        self.current_store()
+            .await
             .update_monthly_note(
                 parse_uuid(&input.id, "id")?,
                 input.note.as_deref(),
@@ -295,6 +346,7 @@ impl FinanceService {
         &self,
         input: ConfirmActualsInputDto,
     ) -> Result<ConfirmActualsDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let month = parse_month(&input.month, "month")?;
         let category = input
             .category
@@ -303,7 +355,8 @@ impl FinanceService {
             .transpose()
             .map_err(|error| AppError::from_domain(error, Some("category")))?;
         let updated_count = self
-            .store
+            .current_store()
+            .await
             .confirm_unset_actuals(month, category, &timestamp())
             .await
             .map_err(AppError::from)?;
@@ -311,7 +364,9 @@ impl FinanceService {
     }
 
     pub async fn list_existing_months(&self) -> Result<Vec<String>, AppError> {
-        self.store
+        let _operation = self.operation_gate.read().await;
+        self.current_store()
+            .await
             .list_existing_months()
             .await
             .map_err(AppError::from)
@@ -319,10 +374,12 @@ impl FinanceService {
     }
 
     pub async fn month_analytics(&self, month: String) -> Result<MonthAnalyticsDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let month = parse_month(&month, "month")?;
         let settings = self.require_settings().await?;
         let items = self
-            .store
+            .current_store()
+            .await
             .list_monthly_items(month)
             .await
             .map_err(AppError::from)?
@@ -338,9 +395,11 @@ impl FinanceService {
     }
 
     pub async fn history_analytics(&self) -> Result<HistoryAnalyticsDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let settings = self.require_settings().await?;
         let mut months = self
-            .store
+            .current_store()
+            .await
             .list_existing_months()
             .await
             .map_err(AppError::from)?;
@@ -348,7 +407,8 @@ impl FinanceService {
         let mut analytics = Vec::with_capacity(months.len());
         for month in months {
             let items = self
-                .store
+                .current_store()
+                .await
                 .list_monthly_items(month)
                 .await
                 .map_err(AppError::from)?
@@ -369,14 +429,25 @@ impl FinanceService {
         &self,
         target_month: Option<String>,
     ) -> Result<FinancialCapacityDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let settings = self.require_settings().await?;
         let target_month = target_month
             .as_deref()
             .map(|month| parse_month(month, "targetMonth"))
             .transpose()?
             .unwrap_or(settings.value.target_month());
-        let plans = self.store.list_plan_items().await.map_err(AppError::from)?;
-        let mut connection = self.store.acquire().await.map_err(AppError::from)?;
+        let plans = self
+            .current_store()
+            .await
+            .list_plan_items()
+            .await
+            .map_err(AppError::from)?;
+        let mut connection = self
+            .current_store()
+            .await
+            .acquire()
+            .await
+            .map_err(AppError::from)?;
         let mut parsed = Vec::with_capacity(plans.len());
         for stored in plans {
             let plan = stored.value;
@@ -431,9 +502,11 @@ impl FinanceService {
         &self,
         month: String,
     ) -> Result<MonthInitializationStatusDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let month = parse_month(&month, "month")?;
         let item_count = self
-            .store
+            .current_store()
+            .await
             .count_monthly_items(month)
             .await
             .map_err(AppError::from)?;
@@ -448,11 +521,13 @@ impl FinanceService {
         &self,
         input: InitializeMonthInputDto,
     ) -> Result<MonthPreviewDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let month = parse_month(&input.month, "month")?;
         let settings = self.require_settings().await?;
         let overrides = parse_rate_overrides(input.rate_overrides, settings.value.base_currency())?;
         let existing = self
-            .store
+            .current_store()
+            .await
             .list_monthly_items(month)
             .await
             .map_err(AppError::from)?;
@@ -460,7 +535,12 @@ impl FinanceService {
             .iter()
             .filter_map(|item| item.value.source_plan_item_id())
             .collect::<HashSet<_>>();
-        let plans = self.store.list_plan_items().await.map_err(AppError::from)?;
+        let plans = self
+            .current_store()
+            .await
+            .list_plan_items()
+            .await
+            .map_err(AppError::from)?;
         let mut missing_currencies = BTreeSet::new();
         let mut candidate_count = 0_u64;
         let mut excluded_count = 0_u64;
@@ -525,6 +605,7 @@ impl FinanceService {
         &self,
         input: InitializeMonthInputDto,
     ) -> Result<InitializeMonthDto, AppError> {
+        let _operation = self.operation_gate.read().await;
         let month = parse_month(&input.month, "month")?;
         if month != current_natural_month()? && !input.confirmed {
             return Err(AppError::business(
@@ -539,7 +620,8 @@ impl FinanceService {
     }
 
     async fn require_settings(&self) -> Result<StoredSettings, AppError> {
-        self.store
+        self.current_store()
+            .await
             .get_settings()
             .await
             .map_err(AppError::from)?
@@ -548,7 +630,12 @@ impl FinanceService {
 
     async fn require_currency_rate(&self, currency: &CurrencyCode) -> Result<(), AppError> {
         let settings = self.require_settings().await?;
-        let mut connection = self.store.acquire().await.map_err(AppError::from)?;
+        let mut connection = self
+            .current_store()
+            .await
+            .acquire()
+            .await
+            .map_err(AppError::from)?;
         let rate =
             Store::get_exchange_rate_on(&mut connection, currency, settings.value.base_currency())
                 .await
@@ -568,7 +655,12 @@ impl FinanceService {
         if let Some(rate) = overrides.get(source) {
             return Ok(Some(rate.clone()));
         }
-        let mut connection = self.store.acquire().await.map_err(AppError::from)?;
+        let mut connection = self
+            .current_store()
+            .await
+            .acquire()
+            .await
+            .map_err(AppError::from)?;
         Store::get_exchange_rate_on(&mut connection, source, base)
             .await
             .map_err(AppError::from)
@@ -588,7 +680,12 @@ impl FinanceService {
             ));
         }
 
-        let mut connection = self.store.acquire().await.map_err(AppError::from)?;
+        let mut connection = self
+            .current_store()
+            .await
+            .acquire()
+            .await
+            .map_err(AppError::from)?;
         connection
             .execute("BEGIN IMMEDIATE")
             .await

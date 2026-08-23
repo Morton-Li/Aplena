@@ -405,16 +405,17 @@ async fn missing_rate_rolls_back_the_entire_month() {
             .unwrap();
     }
 
+    let test_store = service.test_store().await;
     sqlx::query("PRAGMA foreign_keys = OFF")
-        .execute(service.store().pool())
+        .execute(test_store.pool())
         .await
         .unwrap();
     sqlx::query("DELETE FROM exchange_rates WHERE currency_code = 'USD'")
-        .execute(service.store().pool())
+        .execute(test_store.pool())
         .await
         .unwrap();
     sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(service.store().pool())
+        .execute(test_store.pool())
         .await
         .unwrap();
 

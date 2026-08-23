@@ -1,4 +1,7 @@
-use std::str::FromStr;
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use pfcm_domain::{
     Amount, Category, CurrencyCode, ExchangeRate, FlowType, MonthlyItem, PlanItem, RecognitionMode,
@@ -15,16 +18,27 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: SqlitePool,
+    database_path: Option<PathBuf>,
 }
 
 impl Store {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: SqlitePool, database_path: Option<PathBuf>) -> Self {
+        Self {
+            pool,
+            database_path,
+        }
     }
 
-    #[cfg(test)]
-    pub fn pool(&self) -> &SqlitePool {
+    pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub(crate) fn database_path(&self) -> Option<&Path> {
+        self.database_path.as_deref()
+    }
+
+    pub(crate) async fn close(&self) {
+        self.pool.close().await;
     }
 
     pub async fn acquire(&self) -> Result<PoolConnection<Sqlite>, StoreError> {

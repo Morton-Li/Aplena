@@ -10,12 +10,12 @@ Aplena 不是逐笔记账软件。它维护长期计划，将计划冻结为独�
 
 ## 当前阶段
 
-目标 A 的本地功能闭环已经落地：Aplena 现在包含 SQLite 持久化、自动月度快照、首次设置、
-长期计划、月度执行、Dashboard、历史趋势、结构分析和财务承载能力。所有页面都通过受限
-Tauri IPC 使用真实 Rust 领域规则与本地数据库，不包含演示用虚构数据。
+目标 B 的本地候选闭环已经落地：除计划、月度执行、Dashboard、历史、分析和财务承载能力
+外，Aplena 现在还提供 WAL 一致完整备份、安全恢复、迁移前恢复点和四表 CSV 导出。生产
+CSP、文件选择边界、归档防护和失败回滚均由 Rust 控制，前端没有任意文件系统能力。
 
-下一目标聚焦数据保护与发布门禁，包括一致性备份/恢复、导出、迁移恢复点、加密技术验证、
-macOS 签名公证和 Windows 安装验证；这些能力尚不能由当前本地检查替代。
+当前只定位为无 Developer ID 签名（构建产物仅为 ad-hoc/linker-signed）、未加密的本地 macOS 候选版。SQLCipher 跨平台验证、macOS Developer
+ID 签名/公证和真实 Windows 安装仍是公开发布门禁，不能由本地构建或模拟测试替代。
 
 ## 已冻结的核心原则
 
@@ -37,10 +37,13 @@ macOS 签名公证和 Windows 安装验证；这些能力尚不能由当前本�
 - [数据库设计](docs/04-database-schema.md)
 - [信息架构与用户流程](docs/05-ux-and-user-flows.md)
 - [MVP 路线图](docs/06-mvp-roadmap.md)
+- [本地候选与外部门禁](docs/07-release-readiness.md)
 - [ADR：本地优先的 Tauri + SQLite](docs/adr/0001-local-first-tauri-sqlite.md)
 - [ADR：双计入模式](docs/adr/0002-recognition-modes.md)
 - [ADR：月度自动初始化](docs/adr/0003-automatic-month-initialization.md)
 - [ADR：金额、月份与舍入](docs/adr/0004-money-date-and-rounding.md)
+- [ADR：版本化备份、安全恢复与迁移保护](docs/adr/0005-versioned-backup-restore-and-migration-protection.md)
+- [ADR：数据库静态加密发布门禁](docs/adr/0006-database-encryption-release-gate.md)
 
 ## 技术栈
 
@@ -83,6 +86,10 @@ docs/                 产品、领域、架构、数据库与路线图基线
 - 动态 Dashboard、历史时间序列、分类结构、项目排名和重要偏差；
 - 以稳定收入和长期月均负担计算的保留预算后承载力与最大承载力，`PAYMENT` 项目在
   非支付月份仍计入长期负担。
+- `.aplena` 完整备份清单、SHA-256、临时迁移与完整性检查、替换前恢复点、原子替换及
+  失败回滚；迁移只在一致恢复点成功后执行；
+- `settings`、`exchange_rates`、`plan_items`、`monthly_items` 四表 CSV，保留固定精度、
+  NULL/0 语义、稳定枚举代码和中文标签，并防止电子表格公式注入。
 
 主要页面：`总览`、`月度计划`、`长期计划`、`历史`、`分析`、`设置`。图表均有 ARIA
 描述和对应数值表；不完整月份明确显示“当前已录”，零分母显示 `N/A`。
@@ -98,15 +105,18 @@ pnpm install --frozen-lockfile
 启动桌面开发模式：
 
 ```bash
-pnpm tauri dev
+pnpm tauri:dev
 ```
+
+该命令显式合并 `src-tauri/tauri.dev.conf.json`；发布基线配置不包含开发服务器地址或
+WebSocket CSP。
 
 如果 Homebrew `rustup` 未加入全局 `PATH`，无需修改 shell 配置；可以仅给当前命令提供环境：
 
 ```bash
 env CARGO_HOME="$PWD/.cargo-home" \
   PATH="/opt/homebrew/opt/rustup/bin:$PATH" \
-  pnpm tauri dev
+  pnpm tauri:dev
 ```
 
 这不会修改全局环境，也不会影响已经运行的其他任务。
@@ -123,17 +133,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo check --workspace
 pnpm tauri build --no-bundle
+pnpm tauri build --bundles app
 ```
 
-最后一条命令只生成未签名的本地可执行文件，不制作或发布安装包。macOS 签名、公证、
-Windows 构建和真实发布仍需在后续发布阶段单独验证。
+倒数第二条只生成本地可执行文件；最后一条生成无 Developer ID 签名的本地 `.app`。两者都不发布。完整安全与
+发布清单见 `docs/07-release-readiness.md`。
 
 ## 当前边界
 
 - 单用户、单账本、本地优先；不提供账户、云同步、遥测或后台网络服务。
 - 不记录逐笔交易，也不新增持久化报表或派生统计表。
-- Scenario 模式、备份/恢复、CSV 导出、数据库静态加密和正式发布包不在目标 A 范围内。
-- `bundle.active` 仍为 `false`；当前构建只用于本地未签名验证，不能视为已发布产品。
+- Scenario 模式和数据库静态加密尚未实现；备份与 CSV 也明确未加密。
+- `bundle.active` 仍为 `false`，只在本地门禁显式请求 macOS `app` bundle；当前构建不能
+  视为已签名、公证、Windows 验证或公开发布产品。
 
 ## 分支模型
 

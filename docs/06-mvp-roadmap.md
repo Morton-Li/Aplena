@@ -123,21 +123,24 @@
 
 ## 7. 第六阶段：数据保护与 MVP 发布门禁
 
+状态：本地数据保护与无 Developer ID 签名的 macOS 候选门禁已于 `feature/release-hardening` 完成；公开发布
+仍被数据库静态加密、签名公证和真实 Windows 验证阻塞。
+
 范围：
 
 - 一致性备份、检查、恢复和 CSV 导出；
 - migration 前恢复点；
-- SQLCipher 与秘密存储的 macOS/Windows 技术验证；
+- SQLCipher 与秘密存储的 macOS/Windows 技术评估；真实跨平台验证保留为发布阻塞项；
 - 日志隐私、CSP 和 Tauri capabilities 审计；
-- macOS 签名、公证和安装验证；
-- Windows 构建和安装验证；
+- 本地无 Developer ID 签名（仅 ad-hoc）的 macOS `.app` 构建与隔离烟测；
+- macOS 签名、公证及 Windows 构建安装只记录为外部门禁，不伪造验证结论；
 - 崩溃恢复和损坏备份测试。
 
 完成定义：
 
 - 备份恢复后所有实体数、月份和聚合一致；
 - 损坏或不兼容备份无法覆盖当前数据；
-- 数据库静态加密方案得到真实签名构建证据；
+- 数据库静态加密未获真实跨平台证据时，产品明确显示未加密并阻塞公开发布；
 - 发布包不具有非必要网络、Shell 或文件系统权限；
 - 安装、升级、回滚和卸载路径有记录证据。
 
@@ -193,6 +196,8 @@
 | 计入模式与承载口径 | `adr/0002-recognition-modes.md` |
 | 自动初始化触发和幂等性 | `adr/0003-automatic-month-initialization.md` |
 | 金额、月份和舍入 | `adr/0004-money-date-and-rounding.md` |
+| 备份、恢复、迁移保护和 CSV | `adr/0005-versioned-backup-restore-and-migration-protection.md` |
+| 数据库静态加密发布门禁 | `adr/0006-database-encryption-release-gate.md` |
 
 ## 10. 风险登记
 
