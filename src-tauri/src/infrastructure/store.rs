@@ -157,7 +157,9 @@ impl Store {
     pub async fn get_plan_item(&self, id: Uuid) -> Result<StoredPlanItem, StoreError> {
         let row = sqlx::query(
             "SELECT id, name, category, planned_amount_scaled, currency_code, period_months, \
-                    recognition_mode, start_month, end_month, note, created_at, updated_at \
+                    recognition_mode, start_month, end_month, note, created_at, updated_at, \
+                    (SELECT COUNT(*) FROM monthly_items m WHERE m.source_plan_item_id = plan_items.id) \
+                    AS history_month_count \
              FROM plan_items WHERE id = ?",
         )
         .bind(id.to_string())
@@ -385,7 +387,9 @@ impl Store {
     ) -> Result<Vec<StoredPlanItem>, StoreError> {
         let rows = sqlx::query(
             "SELECT id, name, category, planned_amount_scaled, currency_code, period_months, \
-                    recognition_mode, start_month, end_month, note, created_at, updated_at \
+                    recognition_mode, start_month, end_month, note, created_at, updated_at, \
+                    (SELECT COUNT(*) FROM monthly_items m WHERE m.source_plan_item_id = plan_items.id) \
+                    AS history_month_count \
              FROM plan_items ORDER BY category, name, id",
         )
         .fetch_all(&mut *connection)
@@ -523,6 +527,7 @@ fn plan_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredPlanItem, S
         )?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        history_month_count: row.try_get("history_month_count")?,
     })
 }
 

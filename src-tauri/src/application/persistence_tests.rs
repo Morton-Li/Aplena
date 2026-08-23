@@ -611,6 +611,10 @@ async fn plan_rate_changes_and_deletion_never_rewrite_history() {
     assert_eq!(before_delete[0].category, "FIXED_COMMITMENT_EXPENSE");
     assert_eq!(before_delete[0].recognition_mode, "AMORTIZED");
     assert_eq!(before_delete[0].planned_amount, "7.0000");
+    assert_eq!(
+        service.list_plan_items().await.unwrap()[0].history_month_count,
+        1
+    );
 
     let deleted = service
         .delete_plan_item(created.plan_item.id)
@@ -648,6 +652,8 @@ async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct
         .unwrap()
         .remove(0);
     assert_eq!(item.actual_amount, None);
+    assert_eq!(item.data_status, "MISSING");
+    assert_eq!(item.variance_amount, None);
 
     let zero = service
         .update_monthly_actual(MonthlyActualInputDto {
@@ -657,6 +663,10 @@ async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct
         .await
         .unwrap();
     assert_eq!(zero.actual_amount.as_deref(), Some("0.0000"));
+    assert_eq!(zero.variance_amount.as_deref(), Some("-300.0000"));
+    assert_eq!(zero.completion_rate_percent.as_deref(), Some("0.00"));
+    assert_eq!(zero.data_status, "CONFIRMED_ZERO");
+    assert_eq!(zero.variance_effect, "FAVORABLE");
     service
         .update_monthly_actual(MonthlyActualInputDto {
             id: item.id,
@@ -672,15 +682,17 @@ async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct
         .await
         .unwrap();
     assert_eq!(confirmed.updated_count, 1);
+    let confirmed_item = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(confirmed_item.actual_amount.as_deref(), Some("300.0000"));
     assert_eq!(
-        service
-            .list_monthly_items(current.to_string())
-            .await
-            .unwrap()[0]
-            .actual_amount
-            .as_deref(),
-        Some("300.0000")
+        confirmed_item.completion_rate_percent.as_deref(),
+        Some("100.00")
     );
+    assert_eq!(confirmed_item.variance_effect, "ON_PLAN");
 
     let error = service
         .save_settings(SettingsInputDto {

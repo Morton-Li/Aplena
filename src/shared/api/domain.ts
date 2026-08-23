@@ -16,6 +16,7 @@ export interface AppError {
   error_code: string;
   field?: string;
   message_key: string;
+  params?: Record<string, string>;
 }
 
 export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;

@@ -21,6 +21,7 @@ pub struct StoredPlanItem {
     pub value: PlanItem,
     pub created_at: String,
     pub updated_at: String,
+    pub history_month_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

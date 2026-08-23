@@ -49,6 +49,7 @@ pub struct PlanItemDto {
     pub note: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub history_month_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -62,6 +63,10 @@ pub struct MonthlyItemDto {
     pub recognition_mode: String,
     pub planned_amount: String,
     pub actual_amount: Option<String>,
+    pub variance_amount: Option<String>,
+    pub completion_rate_percent: Option<String>,
+    pub data_status: String,
+    pub variance_effect: String,
     pub currency: String,
     pub note: Option<String>,
     pub created_at: String,
