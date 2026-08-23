@@ -134,12 +134,12 @@ pnpm tauri build --bundles app
 
 ## 6. Git 门
 
-- [ ] 功能分支工作已提交；
-- [ ] 显式合并至 `develop`；
-- [ ] `develop` 合并结果通过必要复核；
-- [ ] 显式合并至 `main`；
-- [ ] `main` 工作树干净；
-- [ ] 未 push、未 tag、未发布。
+- [x] 功能分支工作已提交；
+- [x] 显式合并至 `develop`；
+- [x] `develop` 合并结果通过必要复核；
+- [x] 显式合并至 `main`；
+- [x] `main` 工作树干净；
+- [x] 未 push、未 tag、未发布。
 
 ## 7. 当前验证记录
 
@@ -151,4 +151,4 @@ pnpm tauri build --bundles app
 - release：`target/release/bundle/macos/Aplena.app` 构建成功；
 - 真实应用：使用 `/private/var/folders/62/f1367xwj2f1glbw1b_d8zxd40000gn/T/aplena-smoke.HOYyAQ`；首次设置、自动快照、支出/退款、确认重开、仅实际原位提升、实时分析和重启持久化通过；验证后隔离目录及一次失败启动产生的空目录均已删除；
 - 隔离库：`PRAGMA integrity_check = ok`、外键检查为空；1 个计划、2 个月度快照、3 条实际条目；两个快照均为 `PLANNED`，证明原位提升完成；
-- Git：待本地提交与合并后补记最终提交；未 push、未 tag、未发布。
+- Git：功能分支按后端、前端、文档拆分提交，并显式合并到 `develop` 与 `main`；最终 `main` 工作树干净；未 push、未 tag、未发布。
