@@ -1,5 +1,182 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsInputDto {
+    pub target_month: String,
+    pub base_currency: String,
+    pub minimum_savings_rate_basis_points: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SettingsDto {
+    pub target_month: String,
+    pub base_currency: String,
+    pub minimum_savings_rate_basis_points: u16,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExchangeRateUpsertDto {
+    pub currency: String,
+    pub rate: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExchangeRateDto {
+    pub currency: String,
+    pub base_currency: String,
+    pub rate: String,
+    pub is_base_currency: bool,
+    pub plan_reference_count: i64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlanItemDto {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub flow_type: String,
+    pub planned_amount: String,
+    pub currency: String,
+    pub period_months: u32,
+    pub start_month: String,
+    pub end_month: Option<String>,
+    pub recognition_mode: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MonthlyItemDto {
+    pub id: String,
+    pub source_plan_item_id: Option<String>,
+    pub item_name: String,
+    pub month: String,
+    pub category: String,
+    pub flow_type: String,
+    pub recognition_mode: String,
+    pub planned_amount: String,
+    pub actual_amount: Option<String>,
+    pub currency: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopPlanItemRequestDto {
+    pub id: String,
+    pub end_month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeletePlanItemDto {
+    pub plan_item_id: String,
+    pub detached_monthly_items: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthlyActualInputDto {
+    pub id: String,
+    pub actual_amount: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthlyNoteInputDto {
+    pub id: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmActualsInputDto {
+    pub month: String,
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfirmActualsDto {
+    pub updated_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateOverrideDto {
+    pub currency: String,
+    pub rate: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeMonthInputDto {
+    pub month: String,
+    #[serde(default)]
+    pub confirmed: bool,
+    #[serde(default)]
+    pub rate_overrides: Vec<RateOverrideDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MonthInitializationStatusDto {
+    pub month: String,
+    pub initialized: bool,
+    pub item_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MonthPreviewItemDto {
+    pub source_plan_item_id: String,
+    pub name: String,
+    pub category: String,
+    pub recognition_mode: String,
+    pub status: String,
+    pub planned_amount: Option<String>,
+    pub currency: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MonthPreviewDto {
+    pub month: String,
+    pub direction: String,
+    pub requires_confirmation: bool,
+    pub existing_count: u64,
+    pub candidate_count: u64,
+    pub excluded_count: u64,
+    pub missing_currencies: Vec<String>,
+    pub warnings: Vec<String>,
+    pub items: Vec<MonthPreviewItemDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InitializeMonthDto {
+    pub month: String,
+    pub created_count: u64,
+    pub skipped_existing_count: u64,
+    pub excluded_count: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlanMutationDto {
+    pub plan_item: PlanItemDto,
+    pub current_month_initialization: Option<InitializeMonthDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StartupStatusDto {
+    pub current_month: String,
+    pub initialization: Option<InitializeMonthDto>,
+    pub error: Option<crate::application::error::AppError>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnumOptionDto {
     pub code: String,

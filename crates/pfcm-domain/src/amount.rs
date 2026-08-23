@@ -32,6 +32,13 @@ impl Amount {
         Self(Decimal::new(0, AMOUNT_SCALE))
     }
 
+    pub fn from_scaled_i64(value: i64) -> Result<Self, DomainError> {
+        if value < 0 {
+            return Err(DomainError::NegativeAmount);
+        }
+        Self::from_decimal(Decimal::new(value, AMOUNT_SCALE))
+    }
+
     pub const fn as_decimal(self) -> Decimal {
         self.0
     }
@@ -106,8 +113,12 @@ impl ExchangeRate {
         }
 
         let value = rounded(value, RATE_SCALE)?;
-        if value <= Decimal::ZERO || (source_currency == base_currency && value != Decimal::ONE) {
+        if value <= Decimal::ZERO {
             return Err(DomainError::InvalidExchangeRate);
+        }
+        i64::try_from(value.mantissa()).map_err(|_| DomainError::ExchangeRateOutOfRange)?;
+        if source_currency == base_currency && value != Decimal::ONE {
+            return Err(DomainError::InvalidBaseCurrencyRate);
         }
 
         Ok(Self {
@@ -141,6 +152,22 @@ impl ExchangeRate {
 
     pub fn decimal_string(&self) -> String {
         format!("{:.8}", self.value)
+    }
+
+    pub fn scaled_i64(&self) -> i64 {
+        i64::try_from(self.value.mantissa()).expect("ExchangeRate invariant guarantees i64 range")
+    }
+
+    pub fn from_scaled_i64(
+        source_currency: CurrencyCode,
+        base_currency: CurrencyCode,
+        value: i64,
+    ) -> Result<Self, DomainError> {
+        Self::new(
+            source_currency,
+            base_currency,
+            Decimal::new(value, RATE_SCALE),
+        )
     }
 }
 

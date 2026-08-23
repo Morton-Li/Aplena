@@ -6,6 +6,7 @@ mod error;
 mod monthly_item;
 mod plan_item;
 mod recognition;
+mod settings;
 mod year_month;
 
 pub use amount::{Amount, ExchangeRate, Ratio, SavingsRate};
@@ -16,6 +17,8 @@ pub use error::DomainError;
 pub use monthly_item::MonthlyItem;
 pub use plan_item::PlanItem;
 pub use recognition::{
-    create_monthly_snapshot, is_effective_in, monthly_equivalent, recognized_amount,
+    create_monthly_snapshot, is_effective_in, is_recognized_in, monthly_equivalent,
+    recognized_amount,
 };
+pub use settings::Settings;
 pub use year_month::YearMonth;

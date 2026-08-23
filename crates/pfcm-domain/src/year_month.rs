@@ -31,6 +31,13 @@ impl YearMonth {
         format!("{self}-01")
     }
 
+    pub fn from_database_anchor(value: &str) -> Result<Self, DomainError> {
+        if value.len() != 10 || !value.ends_with("-01") {
+            return Err(DomainError::InvalidYearMonth);
+        }
+        value[0..7].parse()
+    }
+
     pub fn add_months(self, months: i32) -> Result<Self, DomainError> {
         let month_index = self.month_index() + i64::from(months);
         let year = month_index.div_euclid(12);

@@ -119,7 +119,7 @@ fn exchange_and_savings_rates_validate_their_ranges() {
     );
     assert_eq!(
         ExchangeRate::from_str(currency("CNY"), currency("CNY"), "1.01"),
-        Err(DomainError::InvalidExchangeRate)
+        Err(DomainError::InvalidBaseCurrencyRate)
     );
     assert_eq!(
         SavingsRate::from_basis_points(10_000)
@@ -137,7 +137,7 @@ fn exchange_and_savings_rates_validate_their_ranges() {
 fn plan_item_normalizes_name_derives_flow_and_enforces_invariants() {
     let item = plan(
         "  ＣｈａｔＧＰＴ  ",
-        Category::FixedCommitment,
+        Category::FixedCommitmentExpense,
         "20",
         "USD",
         1,
@@ -200,7 +200,7 @@ fn plan_item_normalizes_name_derives_flow_and_enforces_invariants() {
 fn amortized_mode_recognizes_every_effective_month_and_rounds_only_final_result() {
     let item = plan(
         "年度服务",
-        Category::FixedCommitment,
+        Category::FixedCommitmentExpense,
         "1.0000",
         "USD",
         6,
@@ -280,7 +280,7 @@ fn monthly_quarterly_half_year_and_one_time_schedules_cross_year_correctly() {
     for (period, due_month, not_due_month) in cases {
         let item = plan(
             "周期项目",
-            Category::FixedCommitment,
+            Category::FixedCommitmentExpense,
             "600",
             "CNY",
             period,
@@ -326,7 +326,7 @@ fn monthly_quarterly_half_year_and_one_time_schedules_cross_year_correctly() {
 fn conversion_validates_the_currency_pair() {
     let item = plan(
         "订阅",
-        Category::FixedCommitment,
+        Category::FixedCommitmentExpense,
         "20",
         "USD",
         1,
@@ -347,7 +347,7 @@ fn monthly_snapshot_copies_plan_facts_and_distinguishes_missing_from_zero_actual
     let original = PlanItem::new(
         id,
         "旧名称",
-        Category::FixedCommitment,
+        Category::FixedCommitmentExpense,
         amount("20"),
         currency("USD"),
         1,
@@ -411,7 +411,7 @@ fn financial_capacity_uses_monthly_equivalents_and_excludes_variable_income_from
     );
     let commitment = plan(
         "年度承诺",
-        Category::FixedCommitment,
+        Category::FixedCommitmentExpense,
         "36000",
         "CNY",
         12,
