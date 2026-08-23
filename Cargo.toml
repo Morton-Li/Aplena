@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/pfcm-domain", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+rust_decimal = { version = "1.42.1", features = ["serde-with-str"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tauri = "2.11.5"
+tauri-build = "2.6.3"
+thiserror = "2.0.20"
+unicode-normalization = "0.1.25"
+uuid = { version = "1.25.0", features = ["serde", "v4"] }
