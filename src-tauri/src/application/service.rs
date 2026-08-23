@@ -6,8 +6,8 @@ use std::{
 
 use chrono::{Datelike, Local, Utc};
 use pfcm_domain::{
-    Amount, Category, CurrencyCode, ExchangeRate, PlanItem, RecognitionMode, Settings, YearMonth,
-    create_monthly_snapshot, is_recognized_in,
+    Amount, CapacityInput, Category, CurrencyCode, ExchangeRate, PlanItem, RecognitionMode,
+    Settings, YearMonth, calculate_financial_capacity, create_monthly_snapshot, is_recognized_in,
 };
 use rust_decimal::{Decimal, RoundingStrategy};
 use sqlx::Executor;
@@ -19,12 +19,14 @@ use crate::infrastructure::{
 };
 
 use super::{
+    analytics::build_month_analytics,
     dto::{
         ConfirmActualsDto, ConfirmActualsInputDto, DeletePlanItemDto, ExchangeRateDto,
-        ExchangeRateUpsertDto, InitializeMonthDto, InitializeMonthInputDto,
-        MonthInitializationStatusDto, MonthPreviewDto, MonthPreviewItemDto, MonthlyActualInputDto,
-        MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto, PlanMutationDto,
-        RateOverrideDto, SettingsDto, SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
+        ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
+        InitializeMonthInputDto, MonthAnalyticsDto, MonthInitializationStatusDto, MonthPreviewDto,
+        MonthPreviewItemDto, MonthlyActualInputDto, MonthlyItemDto, MonthlyNoteInputDto,
+        PlanItemDto, PlanItemInputDto, PlanMutationDto, RateOverrideDto, SettingsDto,
+        SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
     },
     error::AppError,
 };
@@ -314,6 +316,115 @@ impl FinanceService {
             .await
             .map_err(AppError::from)
             .map(|months| months.into_iter().map(|month| month.to_string()).collect())
+    }
+
+    pub async fn month_analytics(&self, month: String) -> Result<MonthAnalyticsDto, AppError> {
+        let month = parse_month(&month, "month")?;
+        let settings = self.require_settings().await?;
+        let items = self
+            .store
+            .list_monthly_items(month)
+            .await
+            .map_err(AppError::from)?
+            .into_iter()
+            .map(|stored| stored.value)
+            .collect::<Vec<_>>();
+        Ok(build_month_analytics(
+            month,
+            settings.value.base_currency().as_str(),
+            settings.value.minimum_savings_rate(),
+            &items,
+        ))
+    }
+
+    pub async fn history_analytics(&self) -> Result<HistoryAnalyticsDto, AppError> {
+        let settings = self.require_settings().await?;
+        let mut months = self
+            .store
+            .list_existing_months()
+            .await
+            .map_err(AppError::from)?;
+        months.sort_unstable();
+        let mut analytics = Vec::with_capacity(months.len());
+        for month in months {
+            let items = self
+                .store
+                .list_monthly_items(month)
+                .await
+                .map_err(AppError::from)?
+                .into_iter()
+                .map(|stored| stored.value)
+                .collect::<Vec<_>>();
+            analytics.push(build_month_analytics(
+                month,
+                settings.value.base_currency().as_str(),
+                settings.value.minimum_savings_rate(),
+                &items,
+            ));
+        }
+        Ok(HistoryAnalyticsDto { months: analytics })
+    }
+
+    pub async fn financial_capacity(
+        &self,
+        target_month: Option<String>,
+    ) -> Result<FinancialCapacityDto, AppError> {
+        let settings = self.require_settings().await?;
+        let target_month = target_month
+            .as_deref()
+            .map(|month| parse_month(month, "targetMonth"))
+            .transpose()?
+            .unwrap_or(settings.value.target_month());
+        let plans = self.store.list_plan_items().await.map_err(AppError::from)?;
+        let mut connection = self.store.acquire().await.map_err(AppError::from)?;
+        let mut parsed = Vec::with_capacity(plans.len());
+        for stored in plans {
+            let plan = stored.value;
+            let rate = Store::get_exchange_rate_on(
+                &mut connection,
+                plan.currency(),
+                settings.value.base_currency(),
+            )
+            .await
+            .map_err(AppError::from)?
+            .ok_or_else(|| missing_rate_error(plan.currency()))?;
+            parsed.push((plan, rate));
+        }
+        let inputs = parsed
+            .iter()
+            .map(|(plan_item, exchange_rate)| CapacityInput {
+                plan_item,
+                exchange_rate,
+            })
+            .collect::<Vec<_>>();
+        let result = calculate_financial_capacity(
+            target_month,
+            settings.value.minimum_savings_rate(),
+            settings.value.base_currency().clone(),
+            &inputs,
+        )
+        .map_err(|error| AppError::from_domain(error, None))?;
+        Ok(FinancialCapacityDto {
+            target_month: target_month.to_string(),
+            base_currency: result.base_currency().to_string(),
+            minimum_savings_rate_percent: format_decimal(
+                settings.value.minimum_savings_rate().factor() * Decimal::ONE_HUNDRED,
+                2,
+            ),
+            stable_income: result.stable_income().decimal_string(),
+            variable_income: result.variable_income().decimal_string(),
+            essential_expenses: result.essential_expenses().decimal_string(),
+            fixed_commitments: result.fixed_commitments().decimal_string(),
+            discretionary_budget: result.discretionary_budget().decimal_string(),
+            preserved_capacity: result.preserved_capacity().decimal_string(),
+            maximum_capacity: result.maximum_capacity().decimal_string(),
+            fixed_commitment_ratio_percent: result
+                .fixed_commitment_ratio()
+                .map(|ratio| format_decimal(ratio.as_decimal() * Decimal::ONE_HUNDRED, 2)),
+            stable_income_coverage_ratio: result
+                .stable_income_coverage_ratio()
+                .map(|ratio| format_decimal(ratio.as_decimal(), 2)),
+        })
     }
 
     pub async fn initialization_status(

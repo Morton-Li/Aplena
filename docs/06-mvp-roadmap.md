@@ -52,6 +52,8 @@
 
 ## 4. 第三阶段：SQLite 持久化与自动初始化
 
+状态：已于 `feature/persistence-and-snapshots` 完成实现、验证并合并到 `develop`。
+
 范围：
 
 - 把逻辑 schema 转为 SQLx migrations；
@@ -74,6 +76,8 @@
 
 ## 5. 第四阶段：计划与月度执行界面
 
+状态：已于 `feature/planning-workflows` 完成实现、验证并合并到 `develop`。
+
 范围：
 
 - 首次设置；
@@ -94,6 +98,8 @@
 建议分支：`feature/planning-workflows`。
 
 ## 6. 第五阶段：Dashboard、历史、分析与承载能力
+
+状态：已于 `feature/dashboard-and-capacity` 完成实现与验证，并按目标 A 流程合并到 `develop`。
 
 范围：
 

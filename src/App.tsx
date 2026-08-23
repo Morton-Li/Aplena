@@ -1,18 +1,37 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 
-import { MonthlyPage } from "./features/monthly/MonthlyPage";
-import { PlansPage } from "./features/plans/PlansPage";
-import { SettingsPage } from "./features/settings/SettingsPage";
 import { SetupPage } from "./features/setup/SetupPage";
 import { getDomainContract } from "./shared/api/domain";
 import { getSettings, queryKeys, type Settings } from "./shared/api/finance";
 import { describeError } from "./shared/formatting/errors";
 
+const AnalysisPage = lazy(() =>
+  import("./features/analytics/AnalysisPage").then((module) => ({ default: module.AnalysisPage })),
+);
+const DashboardPage = lazy(() =>
+  import("./features/dashboard/DashboardPage").then((module) => ({ default: module.DashboardPage })),
+);
+const HistoryPage = lazy(() =>
+  import("./features/history/HistoryPage").then((module) => ({ default: module.HistoryPage })),
+);
+const MonthlyPage = lazy(() =>
+  import("./features/monthly/MonthlyPage").then((module) => ({ default: module.MonthlyPage })),
+);
+const PlansPage = lazy(() =>
+  import("./features/plans/PlansPage").then((module) => ({ default: module.PlansPage })),
+);
+const SettingsPage = lazy(() =>
+  import("./features/settings/SettingsPage").then((module) => ({ default: module.SettingsPage })),
+);
+
 const navigation = [
+  { to: "/dashboard", label: "总览" },
   { to: "/monthly", label: "月度计划" },
   { to: "/plans", label: "长期计划" },
+  { to: "/history", label: "历史" },
+  { to: "/analysis", label: "分析" },
   { to: "/settings", label: "设置" },
 ];
 
@@ -59,11 +78,14 @@ function AppBootstrap() {
   return (
     <Routes>
       <Route element={<AppLayout settings={settingsQuery.data} />}>
-        <Route index element={<Navigate replace to="/monthly" />} />
+        <Route index element={<Navigate replace to="/dashboard" />} />
+        <Route path="dashboard" element={<DashboardPage />} />
         <Route path="monthly" element={<MonthlyPage />} />
         <Route path="plans" element={<PlansPage contract={contractQuery.data} />} />
+        <Route path="history" element={<HistoryPage />} />
+        <Route path="analysis" element={<AnalysisPage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate replace to="/monthly" />} />
+        <Route path="*" element={<Navigate replace to="/dashboard" />} />
       </Route>
     </Routes>
   );
@@ -101,7 +123,9 @@ function AppLayout({ settings }: { settings: Settings }) {
         </div>
       </aside>
       <main className="main-content">
-        <Outlet />
+        <Suspense fallback={<section className="state-card">正在打开页面…</section>}>
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   );

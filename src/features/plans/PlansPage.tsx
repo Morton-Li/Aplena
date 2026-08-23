@@ -79,13 +79,21 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
     );
   }, [category, plansQuery.data, search]);
 
-  const refreshPlans = async () => {
-    await Promise.all([
+  const refreshPlans = async (snapshotMonth?: string) => {
+    const invalidations = [
       queryClient.invalidateQueries({ queryKey: queryKeys.plans }),
-      queryClient.invalidateQueries({ queryKey: ["monthly-items"] }),
       queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.existingMonths }),
-    ]);
+      queryClient.invalidateQueries({ queryKey: ["financial-capacity"] }),
+    ];
+    if (snapshotMonth) {
+      invalidations.push(
+        queryClient.invalidateQueries({ queryKey: queryKeys.monthly(snapshotMonth) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.existingMonths }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.monthAnalytics(snapshotMonth) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
+      );
+    }
+    await Promise.all(invalidations);
   };
 
   return (
@@ -171,10 +179,10 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
           rates={ratesQuery.data}
           settings={settingsQuery.data}
           onClose={() => setEditor(null)}
-          onSaved={async (message) => {
+          onSaved={async (message, snapshotMonth) => {
             setEditor(null);
             setFeedback(message);
-            await refreshPlans();
+            await refreshPlans(snapshotMonth);
           }}
         />
       )}
@@ -217,7 +225,7 @@ function PlanEditor({
   rates: ExchangeRate[];
   settings: Settings;
   onClose: () => void;
-  onSaved: (message: string) => Promise<void>;
+  onSaved: (message: string, snapshotMonth?: string) => Promise<void>;
 }) {
   const defaults: PlanValues = existing
     ? {
@@ -272,7 +280,10 @@ function PlanEditor({
       const detail = initialization?.created_count
         ? `并已为当前月新增 ${initialization.created_count} 个快照。`
         : "当前月快照未被覆盖。";
-      await onSaved(`计划已保存，${detail}`);
+      await onSaved(
+        `计划已保存，${detail}`,
+        initialization?.created_count ? initialization.month : undefined,
+      );
     },
   });
   const category = contract.categories.find((item) => item.code === values.category);

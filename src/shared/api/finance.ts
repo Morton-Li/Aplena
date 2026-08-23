@@ -135,6 +135,78 @@ export interface StartupStatus {
   error: AppError | null;
 }
 
+export interface AmountComparison {
+  planned: string;
+  actual_to_date: string | null;
+  variance: string | null;
+  variance_effect: "UNKNOWN" | "ON_PLAN" | "FAVORABLE" | "UNFAVORABLE";
+}
+
+export interface CategoryBreakdown {
+  category: string;
+  flow_type: string;
+  planned_amount: string;
+  actual_to_date: string | null;
+  planned_share_percent: string | null;
+  actual_share_percent: string | null;
+  missing_actual_count: number;
+}
+
+export interface ProjectBreakdown {
+  monthly_item_id: string;
+  name: string;
+  category: string;
+  flow_type: string;
+  planned_amount: string;
+  actual_amount: string | null;
+  variance_amount: string | null;
+  variance_effect: "UNKNOWN" | "ON_PLAN" | "FAVORABLE" | "UNFAVORABLE";
+  planned_share_percent: string | null;
+  actual_share_percent: string | null;
+  planned_rank: number;
+  actual_rank: number | null;
+}
+
+export interface MonthAnalytics {
+  month: string;
+  currency: string;
+  actual_status: "EMPTY" | "PARTIAL" | "COMPLETE";
+  total_item_count: number;
+  recorded_item_count: number;
+  completeness_percent: string | null;
+  income: AmountComparison;
+  expense: AmountComparison;
+  net_balance: AmountComparison;
+  planned_savings_rate_percent: string | null;
+  actual_savings_rate_percent: string | null;
+  savings_rate_percentage_point_variance: string | null;
+  savings_rate_target_completion_percent: string | null;
+  savings_rate_relative_deviation_percent: string | null;
+  minimum_savings_rate_percent: string;
+  categories: CategoryBreakdown[];
+  projects: ProjectBreakdown[];
+  important_variances: ProjectBreakdown[];
+}
+
+export interface HistoryAnalytics {
+  months: MonthAnalytics[];
+}
+
+export interface FinancialCapacity {
+  target_month: string;
+  base_currency: string;
+  minimum_savings_rate_percent: string;
+  stable_income: string;
+  variable_income: string;
+  essential_expenses: string;
+  fixed_commitments: string;
+  discretionary_budget: string;
+  preserved_capacity: string;
+  maximum_capacity: string;
+  fixed_commitment_ratio_percent: string | null;
+  stable_income_coverage_ratio: string | null;
+}
+
 export const queryKeys = {
   domain: ["domain-contract"] as const,
   settings: ["settings"] as const,
@@ -143,6 +215,9 @@ export const queryKeys = {
   plans: ["plan-items"] as const,
   existingMonths: ["existing-months"] as const,
   monthly: (month: string) => ["monthly-items", month] as const,
+  monthAnalytics: (month: string) => ["month-analytics", month] as const,
+  historyAnalytics: ["history-analytics"] as const,
+  capacity: (month: string) => ["financial-capacity", month] as const,
   monthPreview: (month: string, overrides: RateOverrideInput[] = []) =>
     ["month-preview", month, overrides] as const,
 };
@@ -302,4 +377,22 @@ export function confirmMonthlyActuals(
   invokeCommand: Invoke = invoke,
 ): Promise<{ updated_count: number }> {
   return invokeCommand<{ updated_count: number }>("confirm_monthly_actuals", { input });
+}
+
+export function getMonthAnalytics(
+  month: string,
+  invokeCommand: Invoke = invoke,
+): Promise<MonthAnalytics> {
+  return invokeCommand<MonthAnalytics>("get_month_analytics", { month });
+}
+
+export function getHistoryAnalytics(invokeCommand: Invoke = invoke): Promise<HistoryAnalytics> {
+  return invokeCommand<HistoryAnalytics>("get_history_analytics");
+}
+
+export function getFinancialCapacity(
+  targetMonth: string,
+  invokeCommand: Invoke = invoke,
+): Promise<FinancialCapacity> {
+  return invokeCommand<FinancialCapacity>("get_financial_capacity", { targetMonth });
 }

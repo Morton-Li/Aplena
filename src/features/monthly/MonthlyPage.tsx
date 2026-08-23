@@ -52,6 +52,8 @@ export function MonthlyPage() {
       queryClient.invalidateQueries({ queryKey: queryKeys.monthly(month) }),
       queryClient.invalidateQueries({ queryKey: ["month-preview", month] }),
       queryClient.invalidateQueries({ queryKey: queryKeys.existingMonths }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.monthAnalytics(month) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
     ]);
   };
   const batchMutation = useMutation({
