@@ -381,6 +381,7 @@ fn summary_dto(summary: DatabaseSummary) -> DataSummaryDto {
         exchange_rate_count: count("exchange_rates"),
         plan_item_count: count("plan_items"),
         monthly_item_count: count("monthly_items"),
+        actual_entry_count: count("actual_entries"),
         first_month: summary.first_month,
         last_month: summary.last_month,
     }

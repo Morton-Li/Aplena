@@ -4,12 +4,13 @@ use sqlx::Row;
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::infrastructure::{open_database, open_memory_database};
+use crate::infrastructure::{create_version_two_fixture, open_database, open_memory_database};
 
 use super::{
     dto::{
-        ConfirmActualsInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto,
-        MonthlyActualInputDto, PlanItemInputDto, RateOverrideDto, SettingsInputDto,
+        ActualEntryInputDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto,
+        EnsureActualOnlyInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto, PlanItemInputDto,
+        RateOverrideDto, SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -50,8 +51,8 @@ fn plan(
         planned_amount: amount.to_owned(),
         currency: currency.to_owned(),
         period_months,
-        start_month: start.to_string(),
-        end_month: end.map(|month| month.to_string()),
+        start_date: format!("{start}-01"),
+        end_date: end.map(|month| format!("{month}-01")),
         recognition_mode: mode.to_owned(),
         note: None,
     }
@@ -84,12 +85,12 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             let name: String = row.try_get("name").ok()?;
             matches!(
                 name.as_str(),
-                "settings" | "exchange_rates" | "plan_items" | "monthly_items"
+                "settings" | "exchange_rates" | "plan_items" | "monthly_items" | "actual_entries"
             )
             .then(|| (name, row.try_get::<i64, _>("strict").unwrap()))
         })
         .collect::<Vec<_>>();
-    assert_eq!(business_tables.len(), 4);
+    assert_eq!(business_tables.len(), 5);
     assert!(business_tables.iter().all(|(_, strict)| *strict == 1));
 
     let names: Vec<String> =
@@ -113,7 +114,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
     .fetch_all(store.pool())
     .await
     .unwrap();
-    assert!(indexes.contains(&"idx_plan_items_active_months".to_owned()));
+    assert!(indexes.contains(&"idx_plan_items_active_dates".to_owned()));
     assert!(indexes.contains(&"idx_monthly_items_month_category_flow".to_owned()));
 
     let strict_error = sqlx::query(
@@ -127,7 +128,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
 
     let foreign_key_error = sqlx::query(
         "INSERT INTO plan_items (id, name, category, planned_amount_scaled, currency_code, \
-         period_months, recognition_mode, start_month, end_month, note, created_at, updated_at) \
+         period_months, recognition_mode, start_date, end_date, note, created_at, updated_at) \
          VALUES ('00000000-0000-0000-0000-000000000001', '无汇率项目', 'ESSENTIAL_EXPENSE', \
          10000, 'USD', 1, 'AMORTIZED', '2026-01-01', NULL, NULL, \
          '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
@@ -172,6 +173,86 @@ async fn migration_reopens_existing_database_without_losing_data_and_uses_wal() 
 }
 
 #[tokio::test]
+async fn legacy_four_decimal_database_migrates_to_cents_entries_and_confirmation_states() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("legacy.sqlite3");
+    create_version_two_fixture(&path).await.unwrap();
+    let url = format!("sqlite://{}", path.display());
+    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
+    sqlx::query("INSERT INTO exchange_rates VALUES ('CNY', 100000000, 't')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO settings VALUES (1, '2026-01-01', 'CNY', 2000, 't', 't')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO plan_items VALUES \
+         ('11111111-1111-4111-8111-111111111111', '迁移计划', 'ESSENTIAL_EXPENSE', 12345, \
+          'CNY', 1, 'PAYMENT', '2026-01-01', NULL, NULL, 't', 't')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (id, month, actual) in [
+        ("22222222-2222-4222-8222-222222222221", "2026-01-01", None),
+        (
+            "22222222-2222-4222-8222-222222222222",
+            "2026-02-01",
+            Some(0_i64),
+        ),
+        (
+            "22222222-2222-4222-8222-222222222223",
+            "2026-03-01",
+            Some(10055_i64),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO monthly_items (id, source_plan_item_id, month, snapshot_name, category, \
+             flow_type, recognition_mode, planned_amount_scaled, actual_amount_scaled, currency_code, \
+             note, created_at, updated_at) VALUES (?, '11111111-1111-4111-8111-111111111111', ?, \
+             '迁移计划', 'ESSENTIAL_EXPENSE', 'EXPENSE', 'PAYMENT', 12345, ?, 'CNY', NULL, 't', 't')",
+        ).bind(id).bind(month).bind(actual).execute(&pool).await.unwrap();
+    }
+    pool.close().await;
+
+    let store = open_database(&path).await.unwrap();
+    let plans = store.list_plan_items().await.unwrap();
+    assert_eq!(plans[0].value.amount().decimal_string(), "1.23");
+    assert_eq!(plans[0].value.start_date().to_string(), "2026-01-01");
+    let january = store
+        .list_monthly_items(YearMonth::from_str("2026-01").unwrap())
+        .await
+        .unwrap();
+    let february = store
+        .list_monthly_items(YearMonth::from_str("2026-02").unwrap())
+        .await
+        .unwrap();
+    let march = store
+        .list_monthly_items(YearMonth::from_str("2026-03").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(january[0].value.actual_data_status().code(), "MISSING");
+    assert_eq!(
+        february[0].value.actual_data_status().code(),
+        "CONFIRMED_ZERO"
+    );
+    assert_eq!(march[0].value.actual_data_status().code(), "FINAL");
+    assert_eq!(
+        march[0].value.actual_amount().unwrap().decimal_string(),
+        "1.01"
+    );
+    let entries = store
+        .list_actual_entries(march[0].value.id())
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].value.origin().code(), "MIGRATED_AGGREGATE");
+    assert_eq!(entries[0].value.amount().decimal_string(), "1.01");
+}
+
+#[tokio::test]
 async fn startup_automatically_initializes_only_the_current_natural_month() {
     let store = open_memory_database().await.unwrap();
     let current = current_month();
@@ -191,7 +272,7 @@ async fn startup_automatically_initializes_only_the_current_natural_month() {
                 Amount::from_str("10000").unwrap(),
                 CurrencyCode::new("CNY").unwrap(),
                 1,
-                current,
+                current.first_date(),
                 None,
                 RecognitionMode::Amortized,
                 None,
@@ -319,6 +400,103 @@ async fn initialization_is_idempotent_concurrency_safe_and_requires_noncurrent_c
 }
 
 #[tokio::test]
+async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejects_new_entries() {
+    let service = test_service().await;
+    let current = current_month();
+    let next = current.next_month().unwrap();
+    let created = service
+        .create_plan_item(plan(
+            "年付后续退款",
+            "ESSENTIAL_EXPENSE",
+            "1200",
+            "CNY",
+            12,
+            "PAYMENT",
+            current,
+            None,
+        ))
+        .await
+        .unwrap();
+    let actual_only = service
+        .ensure_actual_only(EnsureActualOnlyInputDto {
+            plan_item_id: created.plan_item.id.clone(),
+            month: next.to_string(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(actual_only.item_source, "ACTUAL_ONLY");
+    assert_eq!(actual_only.planned_amount, "0.00");
+    assert_eq!(actual_only.scheduled_date, None);
+    service
+        .create_actual_entry(ActualEntryInputDto {
+            id: None,
+            monthly_item_id: actual_only.id.clone(),
+            occurred_on: format!("{next}-01"),
+            effect: "DECREASE".to_owned(),
+            amount: "25.00".to_owned(),
+            note: Some("迟到退款".to_owned()),
+        })
+        .await
+        .unwrap();
+
+    service
+        .update_plan_item(PlanItemInputDto {
+            id: Some(created.plan_item.id.clone()),
+            name: created.plan_item.name.clone(),
+            category: created.plan_item.category.clone(),
+            planned_amount: created.plan_item.planned_amount.clone(),
+            currency: created.plan_item.currency.clone(),
+            period_months: 1,
+            start_date: created.plan_item.start_date.clone(),
+            end_date: None,
+            recognition_mode: "PAYMENT".to_owned(),
+            note: None,
+        })
+        .await
+        .unwrap();
+    let promoted = service.initialize_month(init(next)).await.unwrap();
+    assert_eq!(promoted.created_count, 1);
+    let item = service
+        .list_monthly_items(next.to_string())
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(item.id, actual_only.id);
+    assert_eq!(item.item_source, "PLANNED");
+    assert_eq!(item.planned_amount, "1200.00");
+    assert!(item.scheduled_date.is_some());
+    assert_eq!(item.actual_amount.as_deref(), Some("-25.00"));
+    assert_eq!(
+        service
+            .list_actual_entries(item.id.clone())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let repeated = service.initialize_month(init(next)).await.unwrap();
+    assert_eq!(repeated.created_count, 0);
+    assert_eq!(repeated.skipped_existing_count, 1);
+
+    service
+        .delete_plan_item(created.plan_item.id)
+        .await
+        .unwrap();
+    let error = service
+        .create_actual_entry(ActualEntryInputDto {
+            id: None,
+            monthly_item_id: item.id,
+            occurred_on: format!("{next}-02"),
+            effect: "INCREASE".to_owned(),
+            amount: "1.00".to_owned(),
+            note: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.error_code, "DELETED_PLAN_CANNOT_ACCEPT_ENTRY");
+}
+
+#[tokio::test]
 async fn preview_is_read_only_and_temporary_backfill_rate_is_not_persisted() {
     let service = test_service().await;
     service
@@ -366,7 +544,7 @@ async fn preview_is_read_only_and_temporary_backfill_rate_is_not_persisted() {
         .list_monthly_items(historical.to_string())
         .await
         .unwrap();
-    assert_eq!(snapshots[0].planned_amount, "65.0000");
+    assert_eq!(snapshots[0].planned_amount, "65.00");
     let rates = service.list_exchange_rates().await.unwrap();
     assert_eq!(
         rates
@@ -505,7 +683,7 @@ async fn payment_and_amortized_schedules_cover_periods_boundaries_and_cross_year
             .find(|item| item.item_name == "均摊")
             .unwrap()
             .planned_amount,
-        "100.0000"
+        "100.00"
     );
 
     let quarterly = YearMonth::new(2026, 2).unwrap();
@@ -611,7 +789,7 @@ async fn plan_rate_changes_and_deletion_never_rewrite_history() {
     assert_eq!(before_delete[0].item_name, "旧名称");
     assert_eq!(before_delete[0].category, "FIXED_COMMITMENT_EXPENSE");
     assert_eq!(before_delete[0].recognition_mode, "AMORTIZED");
-    assert_eq!(before_delete[0].planned_amount, "7.0000");
+    assert_eq!(before_delete[0].planned_amount, "7.00");
     assert_eq!(
         service.list_plan_items().await.unwrap()[0].history_month_count,
         1
@@ -627,11 +805,11 @@ async fn plan_rate_changes_and_deletion_never_rewrite_history() {
         .await
         .unwrap();
     assert_eq!(after_delete[0].source_plan_item_id, None);
-    assert_eq!(after_delete[0].planned_amount, "7.0000");
+    assert_eq!(after_delete[0].planned_amount, "7.00");
 }
 
 #[tokio::test]
-async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct_and_safe() {
+async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distinct_and_safe() {
     let service = test_service().await;
     let current = current_month();
     service
@@ -660,28 +838,56 @@ async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct
     assert_eq!(before_actual.expense.actual_to_date, None);
 
     let zero = service
-        .update_monthly_actual(MonthlyActualInputDto {
+        .confirm_monthly_item(ConfirmMonthlyItemInputDto {
             id: item.id.clone(),
-            actual_amount: Some("0".to_owned()),
         })
         .await
         .unwrap();
-    assert_eq!(zero.actual_amount.as_deref(), Some("0.0000"));
-    assert_eq!(zero.variance_amount.as_deref(), Some("-300.0000"));
+    assert_eq!(zero.actual_amount.as_deref(), Some("0.00"));
+    assert_eq!(zero.variance_amount.as_deref(), Some("-300.00"));
     assert_eq!(zero.completion_rate_percent.as_deref(), Some("0.00"));
     assert_eq!(zero.data_status, "CONFIRMED_ZERO");
     assert_eq!(zero.variance_effect, "FAVORABLE");
     let after_zero = service.month_analytics(current.to_string()).await.unwrap();
     assert_eq!(after_zero.actual_status, "COMPLETE");
-    assert_eq!(after_zero.expense.actual_to_date.as_deref(), Some("0.0000"));
-    assert_eq!(after_zero.expense.variance.as_deref(), Some("-300.0000"));
-    service
-        .update_monthly_actual(MonthlyActualInputDto {
-            id: item.id,
-            actual_amount: None,
+    assert_eq!(after_zero.expense.actual_to_date.as_deref(), Some("0.00"));
+    assert_eq!(after_zero.expense.variance.as_deref(), Some("-300.00"));
+
+    let expense_entry = service
+        .create_actual_entry(ActualEntryInputDto {
+            id: None,
+            monthly_item_id: item.id.clone(),
+            occurred_on: format!("{current}-15"),
+            effect: "INCREASE".to_owned(),
+            amount: "427.00".to_owned(),
+            note: None,
         })
         .await
         .unwrap();
+    let reopened = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(reopened.data_status, "IN_PROGRESS");
+    assert_eq!(reopened.actual_amount.as_deref(), Some("427.00"));
+    let refund_entry = service
+        .create_actual_entry(ActualEntryInputDto {
+            id: None,
+            monthly_item_id: item.id.clone(),
+            occurred_on: format!("{current}-16"),
+            effect: "DECREASE".to_owned(),
+            amount: "500.00".to_owned(),
+            note: Some("退款超过本月支出".to_owned()),
+        })
+        .await
+        .unwrap();
+    let negative = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(negative.actual_amount.as_deref(), Some("-73.00"));
     let confirmed = service
         .confirm_actuals(ConfirmActualsInputDto {
             month: current.to_string(),
@@ -695,12 +901,61 @@ async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct
         .await
         .unwrap()
         .remove(0);
-    assert_eq!(confirmed_item.actual_amount.as_deref(), Some("300.0000"));
-    assert_eq!(
-        confirmed_item.completion_rate_percent.as_deref(),
-        Some("100.00")
-    );
-    assert_eq!(confirmed_item.variance_effect, "ON_PLAN");
+    assert_eq!(confirmed_item.actual_amount.as_deref(), Some("-73.00"));
+    assert_eq!(confirmed_item.data_status, "FINAL");
+
+    let wrong_month = current.next_month().unwrap();
+    let wrong_date = service
+        .update_actual_entry(ActualEntryInputDto {
+            id: Some(refund_entry.id.clone()),
+            monthly_item_id: item.id.clone(),
+            occurred_on: format!("{wrong_month}-01"),
+            effect: "DECREASE".to_owned(),
+            amount: "400.00".to_owned(),
+            note: Some("调整退款".to_owned()),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(wrong_date.error_code, "ACTUAL_ENTRY_DATE_OUTSIDE_MONTH");
+
+    let updated = service
+        .update_actual_entry(ActualEntryInputDto {
+            id: Some(refund_entry.id.clone()),
+            monthly_item_id: item.id.clone(),
+            occurred_on: format!("{current}-17"),
+            effect: "DECREASE".to_owned(),
+            amount: "400.00".to_owned(),
+            note: Some("调整退款".to_owned()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(updated.amount, "400.00");
+    assert_eq!(updated.note.as_deref(), Some("调整退款"));
+    let after_edit = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(after_edit.actual_amount.as_deref(), Some("27.00"));
+    assert_eq!(after_edit.data_status, "IN_PROGRESS");
+
+    service
+        .confirm_monthly_item(ConfirmMonthlyItemInputDto {
+            id: item.id.clone(),
+        })
+        .await
+        .unwrap();
+    service.delete_actual_entry(refund_entry.id).await.unwrap();
+    let after_delete = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(after_delete.actual_amount.as_deref(), Some("427.00"));
+    assert_eq!(after_delete.data_status, "IN_PROGRESS");
+    let entries = service.list_actual_entries(item.id).await.unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, expense_entry.id);
 
     let error = service
         .save_settings(SettingsInputDto {
@@ -761,9 +1016,9 @@ async fn persisted_capacity_uses_payment_items_monthly_equivalent_even_between_p
         .financial_capacity(Some("2026-02".to_owned()))
         .await
         .unwrap();
-    assert_eq!(capacity.stable_income, "30000.0000");
-    assert_eq!(capacity.fixed_commitments, "3000.0000");
-    assert_eq!(capacity.preserved_capacity, "21000.0000");
+    assert_eq!(capacity.stable_income, "30000.00");
+    assert_eq!(capacity.fixed_commitments, "3000.00");
+    assert_eq!(capacity.preserved_capacity, "21000.00");
     assert_eq!(
         capacity.fixed_commitment_ratio_percent.as_deref(),
         Some("10.00")

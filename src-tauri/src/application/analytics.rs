@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use pfcm_domain::{Amount, Category, FlowType, MonthlyItem, SavingsRate, YearMonth};
+use pfcm_domain::{Category, FlowType, MonthlyItem, SavingsRate, SignedAmount, YearMonth};
 use rust_decimal::{Decimal, RoundingStrategy};
 
 use super::dto::{
@@ -27,17 +27,23 @@ pub fn build_month_analytics(
     let actual_expense = sum_actual(items, FlowType::Expense);
     let recorded_count = items
         .iter()
-        .filter(|item| item.actual_amount().is_some())
+        .filter(|item| {
+            matches!(
+                item.actual_data_status(),
+                pfcm_domain::ActualDataStatus::ConfirmedZero | pfcm_domain::ActualDataStatus::Final
+            )
+        })
         .count();
+    let any_actual = items.iter().any(|item| item.actual_amount().is_some());
     let total_count = items.len();
-    let actual_status = if total_count == 0 || recorded_count == 0 {
+    let actual_status = if total_count == 0 || (!any_actual && recorded_count == 0) {
         "EMPTY"
     } else if recorded_count == total_count {
         "COMPLETE"
     } else {
         "PARTIAL"
     };
-    let any_recorded = recorded_count > 0;
+    let any_recorded = any_actual || recorded_count > 0;
     let planned_net = planned_income - planned_expense;
     let actual_net = any_recorded
         .then(|| actual_income.unwrap_or(Decimal::ZERO) - actual_expense.unwrap_or(Decimal::ZERO));
@@ -74,7 +80,7 @@ pub fn build_month_analytics(
                 .sum::<Decimal>();
             let actual_values = category_items
                 .iter()
-                .filter_map(|item| item.actual_amount().map(Amount::as_decimal))
+                .filter_map(|item| item.actual_amount().map(SignedAmount::as_decimal))
                 .collect::<Vec<_>>();
             let actual = (!actual_values.is_empty()).then(|| actual_values.into_iter().sum());
             let flow_total = match category.flow_type() {
@@ -96,7 +102,13 @@ pub fn build_month_analytics(
                 missing_actual_count: u64::try_from(
                     category_items
                         .iter()
-                        .filter(|item| item.actual_amount().is_none())
+                        .filter(|item| {
+                            !matches!(
+                                item.actual_data_status(),
+                                pfcm_domain::ActualDataStatus::ConfirmedZero
+                                    | pfcm_domain::ActualDataStatus::Final
+                            )
+                        })
                         .count(),
                 )
                 .unwrap_or(u64::MAX),
@@ -145,7 +157,7 @@ pub fn build_month_analytics(
         .enumerate()
         .map(|(index, item)| {
             let planned = item.planned_amount().as_decimal();
-            let actual = item.actual_amount().map(Amount::as_decimal);
+            let actual = item.actual_amount().map(SignedAmount::as_decimal);
             let flow_planned_total = match item.flow_type() {
                 FlowType::Income => planned_income,
                 FlowType::Expense => planned_expense,
@@ -179,7 +191,7 @@ pub fn build_month_analytics(
             project
                 .variance_amount
                 .as_deref()
-                .is_some_and(|variance| variance != "0.0000")
+                .is_some_and(|variance| variance != "0.00")
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -232,7 +244,7 @@ fn sum_actual(items: &[MonthlyItem], flow_type: FlowType) -> Option<Decimal> {
     let values = items
         .iter()
         .filter(|item| item.flow_type() == flow_type)
-        .filter_map(|item| item.actual_amount().map(Amount::as_decimal))
+        .filter_map(|item| item.actual_amount().map(SignedAmount::as_decimal))
         .collect::<Vec<_>>();
     (!values.is_empty()).then(|| values.into_iter().sum())
 }
@@ -291,7 +303,7 @@ fn decimal_abs(value: &Option<String>) -> Decimal {
 }
 
 fn format_amount(value: Decimal) -> String {
-    format_decimal(value, 4)
+    format_decimal(value, 2)
 }
 
 fn format_percent(value: Decimal) -> String {
@@ -306,7 +318,9 @@ fn format_decimal(mut value: Decimal, scale: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use pfcm_domain::{CurrencyCode, MonthlyItem, RecognitionMode};
+    use pfcm_domain::{
+        CurrencyCode, MonthlyItem, MonthlyItemSource, RecognitionMode, SignedAmount,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -320,8 +334,12 @@ mod tests {
             category,
             category.flow_type(),
             RecognitionMode::Amortized,
+            MonthlyItemSource::Planned,
+            None,
             planned.parse().unwrap(),
-            actual.map(str::parse).transpose().unwrap(),
+            actual.map(|value| SignedAmount::from_decimal(value.parse().unwrap()).unwrap()),
+            u64::from(actual.is_some()),
+            actual.map(|_| "2026-07-01T00:00:00Z".to_owned()),
             CurrencyCode::new("CNY").unwrap(),
             None,
         )
@@ -342,20 +360,14 @@ mod tests {
             &items,
         );
 
-        assert_eq!(analytics.income.planned, "11000.0000");
-        assert_eq!(
-            analytics.income.actual_to_date.as_deref(),
-            Some("11000.0000")
-        );
-        assert_eq!(analytics.expense.planned, "3500.0000");
-        assert_eq!(
-            analytics.expense.actual_to_date.as_deref(),
-            Some("3600.0000")
-        );
-        assert_eq!(analytics.net_balance.planned, "7500.0000");
+        assert_eq!(analytics.income.planned, "11000.00");
+        assert_eq!(analytics.income.actual_to_date.as_deref(), Some("11000.00"));
+        assert_eq!(analytics.expense.planned, "3500.00");
+        assert_eq!(analytics.expense.actual_to_date.as_deref(), Some("3600.00"));
+        assert_eq!(analytics.net_balance.planned, "7500.00");
         assert_eq!(
             analytics.net_balance.actual_to_date.as_deref(),
-            Some("7400.0000")
+            Some("7400.00")
         );
         assert_eq!(
             analytics.planned_savings_rate_percent.as_deref(),

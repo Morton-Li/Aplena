@@ -1,93 +1,154 @@
-# Aplena 本地发布候选与外部门禁
+# Aplena 发布就绪检查
 
-## 当前结论
+本文件是本地发布候选门禁清单，不授权推送、标签、签名、公证或分发。
 
-目标 B 交付的是无 Developer ID 签名、仅由链接器 ad-hoc 签名的本地 macOS 候选版。完整备份、安全恢复、迁移前恢复点、四表 CSV、
-生产 CSP、最小 capability 和自动化可靠性检查已进入本地门禁。它不是公开发布授权。
+## 1. 候选范围
 
-## 已实现的本地门禁
+当前候选包含：
 
-- WAL 一致 `.aplena` 备份、版本清单、SHA-256 与记录摘要；
-- 恶意归档和解压大小防护；
-- 临时迁移、SQLite 完整性、外键、schema 和领域不变量检查；
-- 不合理记录数限制、按月分类聚合重算，以及当前数据与备份摘要差异预览；
-- 双重确认、替换前恢复点、数据库独占门控、原子换名、重开复核和失败回滚；
-- 待迁移数据库先备份，备份失败则不迁移；
-- 四张业务表的确定性 UTF-8 CSV，稳定代码和中文标签、NULL/0 与公式注入防护；
-- Rust 侧系统文件选择器，前端无任意文件系统能力；
-- 生产 CSP 不包含开发 WebSocket，主窗口 capability 仍只含 `core:default`；
-- 开发服务器地址和 `devCsp` 仅存在于由 `pnpm tauri:dev` 显式加载的覆盖配置，普通发布构建
-  不会合并该文件；
-- Unix 应用数据目录为 `0700`，SQLite/WAL/SHM 为 `0600`；
-- 全局 UI 故障页不展示原始异常；`freezePrototype` 因真实 WebKit 与图表依赖不兼容而保持
-  Tauri 默认的关闭状态，安全边界由严格 CSP、无远程内容和最小 capability 承担；
-- 自动化测试覆盖数据往返、并发、损坏、版本、迁移、CSV 和恢复 UI。
+- 分精度权威金额与八位汇率；
+- 日级计划开始/结束日期；
+- AMORTIZED 月区间交集与 PAYMENT 原始日锚点；
+- 项目关联实际条目、退款/冲减和四种确认状态；
+- `ACTUAL_ONLY` 与事务内原位提升；
+- 从旧聚合实际和四位金额到 schema 3 的前向迁移；
+- 五表格式 2 备份、格式 1 旧备份恢复及五文件 CSV；
+- 条目驱动的 Dashboard、历史、分析与承载能力。
 
-## 每次候选构建必须执行
+不包含 Scenario、云同步、交易导入、数据库加密发布门或线上发布。
 
-```bash
-pnpm install --frozen-lockfile
+## 2. 自动门禁
+
+Rust 使用项目本地 Cargo 缓存和命令级 rustup 路径，不改变全局环境：
+
+```sh
+CARGO_HOME="$PWD/.cargo-home" \
+PATH=/opt/homebrew/opt/rustup/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+/opt/homebrew/opt/rustup/bin/cargo fmt --all -- --check
+
+CARGO_HOME="$PWD/.cargo-home" \
+PATH=/opt/homebrew/opt/rustup/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+/opt/homebrew/opt/rustup/bin/cargo check --workspace --offline
+
+CARGO_HOME="$PWD/.cargo-home" \
+PATH=/opt/homebrew/opt/rustup/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+/opt/homebrew/opt/rustup/bin/cargo test --workspace --offline
+
+CARGO_HOME="$PWD/.cargo-home" \
+PATH=/opt/homebrew/opt/rustup/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+/opt/homebrew/opt/rustup/bin/cargo clippy --workspace --all-targets --offline -- -D warnings
+```
+
+前端：
+
+```sh
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
-cargo fmt --all -- --check
-cargo check --workspace
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-# 必须输出 `warning: nothing to print.`，否则不得使用下一行的定向例外
-cargo tree -i rkyv@0.7.46 --workspace --target aarch64-apple-darwin
-cargo audit --target-os macos --target-arch aarch64 --ignore RUSTSEC-2026-0235
-pnpm audit --prod
-pnpm licenses list --prod
-pnpm tauri build --no-bundle
+```
+
+发布构建：
+
+```sh
+CARGO_HOME="$PWD/.cargo-home" \
+PATH=/opt/homebrew/opt/rustup/bin:/usr/bin:/bin:/usr/sbin:/sbin \
 pnpm tauri build --bundles app
 ```
 
-随后检查可执行文件架构和动态链接、`.app` 内容、生产 CSP、capability、秘密扫描和干净 Git
-状态。桌面烟测必须使用隔离的测试数据库目录或测试 bundle identifier，不能触碰真实用户库。
-本地自动化可先在系统临时目录创建一个专用子目录，再仅对该次进程设置
-`APLENA_SMOKE_DATA_DIR`；应用会拒绝不存在的目录、临时目录根本身及其范围外的路径。
-未设置该变量时仍使用正常的操作系统应用数据目录。
+## 3. 测试覆盖门
 
-## 依赖审计说明（2026-08-23）
+### 3.1 领域
 
-- 未带例外的 RustSec 扫描会报告 `RUSTSEC-2026-0235`：`rust_decimal 1.42.1`
-  在 lockfile 中声明了可选的 `rkyv 0.7.46`。Aplena 只启用 `default`、`serde`、`std` 和
-  `serde-with-str`；针对 `aarch64-apple-darwin` 的反向依赖树确认该 `rkyv` 不在实际构建图中。
-  该例外只适用于这一条不可达的 lockfile 记录；一旦反向依赖树出现调用链，候选构建必须失败。
-- RustSec 其余 17 条为允许的维护性或健全性警告：GTK3/proc-macro 项不在 macOS 构建图；
-  Tauri 当前传递依赖中的旧 `unic-*` 项仍在构建图，但没有被报告为漏洞。应随上游 Tauri
-  升级持续清理，不能把“允许警告”等同于公开发布安全证明。
-- 前端生产依赖扫描没有已知漏洞；前端许可证为 MIT、Apache-2.0、BSD 或 0BSD。Rust
-  依赖元数据未发现缺失许可证或强 copyleft-only 许可证；`r-efi` 的 LGPL 仅为可选许可证之一。
+- [x] 两位金额、第三位拒绝、边界溢出；
+- [x] 闰年和日级区间交集；
+- [x] 1 月 31 日 PAYMENT 短月夹取与长月恢复；
+- [x] 结束日早于计划支付日时不生成；
+- [x] 退款/冲减允许派生负净额；
+- [x] 四种完整状态。
 
-## 尚未满足的外部门禁
+### 3.2 数据库与应用
 
-| 门禁 | 状态 | 阻塞原因 |
-|---|---|---|
-| SQLCipher 静态加密 | 未验证 | 需要 SQLx/底层链接、错误密钥、WAL、迁移、备份和崩溃测试 |
-| macOS Developer ID 签名 | 未执行 | 需要外部证书、授权和签名身份 |
-| Apple 公证与 stapling | 未执行 | 需要 Apple 凭据、网络提交和显式发布授权 |
-| 真实 Windows 构建/安装/卸载 | 未执行 | 必须在真实 Windows 环境及 Credential Manager 上验证 |
-| 公开分发 | 阻塞 | 以上门禁及加密 ADR 尚未 Accepted |
+- [x] 五张 STRICT 业务表、外键、索引和触发器；
+- [x] 初始化幂等、并发安全、缺汇率整体回滚；
+- [x] 快照不受计划、汇率和计划删除影响；
+- [x] 实际条目 CRUD、跨月拒绝、确认自动重开；
+- [x] 已结束计划迟到事实与已删除计划拒绝；
+- [x] `ACTUAL_ONLY` 原位提升保持 ID 和条目；
+- [x] schema 2 旧库分精度、日级日期和旧实际迁移。
 
-Docker、Linux、交叉编译、WebView mock 和无 Developer ID 签名的本地 `.app` 都不能替代这些外部证据。
+### 3.3 数据保护
 
-## 本地 macOS 候选版实机烟测（2026-08-23）
+- [x] 格式 2 五表备份往返；
+- [x] 格式 1 旧备份隔离前向迁移、检查和恢复；
+- [x] WAL 并发备份一致；
+- [x] 恢复 token 一次性和文件变更检测；
+- [x] 路径、链接、重复项、校验和、未来版本、压缩炸弹和记录上限拒绝；
+- [x] 五份 CSV 稳定、RFC 引号、公式安全、两位金额和 NULL/0 区分。
 
-本次烟测通过 LaunchServices 启动 release `.app`，并只为该进程设置位于系统临时目录下的
-`APLENA_SMOKE_DATA_DIR`。验证结果：
+### 3.4 前端
 
-- 首次设置、退出后重启、总览/图表/导航和承载力页面均能正常读取隔离数据库；
-- 系统文件选择器完成 `.aplena` 备份与四表 CSV 导出，备份检查正确展示应用版本、schema、
-  记录数、月份范围和设置摘要；
-- 勾选确认并输入“恢复”后，真实执行数据库替换，生成替换前恢复点，恢复成功通知保持可见；
-- 恢复后返回总览，查询重新读取且页面无错误；通过应用常规退出关闭；
-- 应用数据目录权限为 `0700`，数据库、WAL、SHM、备份、恢复点和 CSV 文件均为 `0600`；
-- 应用标准输出和标准错误均为空，隔离目录之外没有作为烟测目标的数据。
+- [x] 首次设置与日级计划预览；
+- [x] 月度净额只读，支出/退款、收入/冲减条目录入；
+- [x] 无计划快照时创建仅实际项目；
+- [x] 确认零、记录中、最终确认和重新打开；
+- [x] 历史/未来浏览无隐式写入；
+- [x] 分析、承载、备份恢复和 CSV UI。
 
-产物为 arm64 Mach-O，`LC_BUILD_VERSION` 与 `Info.plist` 的最低系统版本均为 macOS 11.0，
-动态链接只指向系统库；产物中未命中开发服务器地址、开发 WebSocket 或常见秘密模式。严格
-`codesign --verify --deep --strict` 会因当前候选版只有 linker ad-hoc 签名且无资源封印而失败，
-这与上表的 Developer ID 外部门禁一致。
+完成发布验证后把上述项改为 `[x]`，并在第 7 节记录命令和结果。
+
+## 4. 真实应用隔离冒烟
+
+必须使用 release `.app`，且数据目录满足：
+
+- 由 `mktemp -d` 创建在 macOS 系统临时根目录下；
+- 启动前目录已存在；
+- 只通过本进程的 `APLENA_SMOKE_DATA_DIR` 传入；
+- 路径不是用户正式应用支持目录；
+- 测试结束后报告目录位置和清理状态。
+
+发布候选的实际旅程：
+
+1. 启动并完成本位币/目标月设置；
+2. 创建日级 AMORTIZED 计划，验证当前月自动快照；
+3. 添加支出和退款，核对派生净额与偏差；
+4. 最终确认后再编辑条目，核对状态重开；
+5. 切换无正式快照月份并建立仅实际退款；
+6. 显式初始化该未来月，核对仅实际标签消失、计划金额补齐且条目保留；
+7. 检查 Dashboard、历史和分析实时刷新；
+8. 退出并重启同一隔离目录，核对持久化；
+9. 正常退出，不触碰真实数据库。
+
+月末 PAYMENT 支付日由领域测试和前端预览测试覆盖；真实应用冒烟验证日级控件、预览与保存链路，不重复自动测试的全部日期组合。
+
+## 5. 安全与依赖检查
+
+- Tauri capability 与 CSP 无新增宽权限；
+- 无网络、shell 或任意路径访问能力；
+- `cargo audit` / `pnpm audit --prod` 在工具和索引可用时执行并记录；
+- Rust/前端直接依赖许可证清单无禁止许可证；
+- UI 错误不泄露路径、SQL 或内部诊断；
+- release 包只包含预期 `.app`，未签名候选不对外分发。
+
+数据库加密仍受 ADR 0006 约束，不得把当前候选描述为静态加密完成。
+
+## 6. Git 门
+
+- [x] 功能分支工作已提交；
+- [x] 显式合并至 `develop`；
+- [x] `develop` 合并结果通过必要复核；
+- [x] 显式合并至 `main`；
+- [x] `main` 工作树干净；
+- [x] 未 push、未 tag、未发布。
+
+## 7. 当前验证记录
+
+验证日期：2026-08-23
+
+- 前端：类型检查、ESLint、生产构建通过；Vitest 2 个文件、18 项通过；
+- Rust：格式、workspace check、Clippy `-D warnings` 通过；31 项应用/数据库测试与 8 项领域测试通过；
+- 安全与许可证：`pnpm audit --prod --audit-level high` 无已知漏洞；前端生产依赖许可证为 MIT、Apache-2.0、0BSD、BSD-3-Clause；Rust 依赖树许可证已列出，无禁止许可证；本机未安装 `cargo-audit`，未为此改变环境；
+- release：`target/release/bundle/macos/Aplena.app` 构建成功；
+- 真实应用：使用 `/private/var/folders/62/f1367xwj2f1glbw1b_d8zxd40000gn/T/aplena-smoke.HOYyAQ`；首次设置、自动快照、支出/退款、确认重开、仅实际原位提升、实时分析和重启持久化通过；验证后隔离目录及一次失败启动产生的空目录均已删除；
+- 隔离库：`PRAGMA integrity_check = ok`、外键检查为空；1 个计划、2 个月度快照、3 条实际条目；两个快照均为 `PLANNED`，证明原位提升完成；
+- Git：功能分支按后端、前端、文档拆分提交，并显式合并到 `develop` 与 `main`；最终 `main` 工作树干净；未 push、未 tag、未发布。

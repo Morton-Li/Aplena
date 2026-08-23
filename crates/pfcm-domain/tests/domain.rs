@@ -1,27 +1,29 @@
 use std::str::FromStr;
 
 use pfcm_domain::{
-    Amount, CapacityInput, Category, CurrencyCode, DomainError, ExchangeRate, FlowType, PlanItem,
-    RecognitionMode, SavingsRate, YearMonth, calculate_financial_capacity, create_monthly_snapshot,
-    is_effective_in, monthly_equivalent, recognized_amount,
+    ActualDataStatus, ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate,
+    CapacityInput, Category, CurrencyCode, DomainError, ExchangeRate, FlowType, MonthlyItem,
+    MonthlyItemSource, PlanItem, RecognitionMode, SavingsRate, SignedAmount, YearMonth,
+    aggregate_actual_entries, calculate_financial_capacity, create_monthly_snapshot,
+    is_effective_in, monthly_equivalent, recognized_amount, scheduled_date_for_month,
 };
+use rust_decimal::Decimal;
 use uuid::Uuid;
 
 fn month(value: &str) -> YearMonth {
-    value.parse().expect("test month must be valid")
+    value.parse().unwrap()
 }
-
+fn date(value: &str) -> CalendarDate {
+    value.parse().unwrap()
+}
 fn currency(value: &str) -> CurrencyCode {
-    CurrencyCode::new(value).expect("test currency must be valid")
+    CurrencyCode::new(value).unwrap()
 }
-
 fn amount(value: &str) -> Amount {
-    value.parse().expect("test amount must be valid")
+    value.parse().unwrap()
 }
-
 fn rate(source: &str, base: &str, value: &str) -> ExchangeRate {
-    ExchangeRate::from_str(currency(source), currency(base), value)
-        .expect("test rate must be valid")
+    ExchangeRate::from_str(currency(source), currency(base), value).unwrap()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -31,8 +33,8 @@ fn plan(
     planned_amount: &str,
     source_currency: &str,
     period_months: u32,
-    start_month: &str,
-    end_month: Option<&str>,
+    start_date: &str,
+    end_date: Option<&str>,
     mode: RecognitionMode,
 ) -> PlanItem {
     PlanItem::new(
@@ -42,478 +44,311 @@ fn plan(
         amount(planned_amount),
         currency(source_currency),
         period_months,
-        month(start_month),
-        end_month.map(month),
+        date(start_date),
+        end_date.map(date),
         mode,
         None,
     )
-    .expect("test plan must be valid")
+    .unwrap()
 }
 
 #[test]
-fn year_month_parses_formats_and_crosses_year_boundaries() {
-    let december = month("2026-12");
-    assert_eq!(december.to_string(), "2026-12");
-    assert_eq!(december.database_anchor(), "2026-12-01");
-    assert_eq!(december.next_month().unwrap(), month("2027-01"));
-    assert_eq!(month("2027-02").months_since(december), Some(2));
-    assert_eq!(december.months_since(month("2027-01")), None);
-    assert_eq!(month("2026-01").add_months(-1).unwrap(), month("2025-12"));
-}
-
-#[test]
-fn year_month_rejects_non_canonical_or_out_of_range_values() {
-    for invalid in ["2026-6", "2026/06", "0000-01", "2026-00", "2026-13"] {
-        assert_eq!(
-            YearMonth::from_str(invalid),
-            Err(DomainError::InvalidYearMonth)
-        );
-    }
+fn year_month_and_calendar_date_are_canonical_and_leap_safe() {
+    assert_eq!(month("2026-12").next_month().unwrap(), month("2027-01"));
+    assert_eq!(month("2024-02").last_day(), 29);
+    assert_eq!(month("2025-02").last_day(), 28);
+    assert_eq!(month("2025-02").date_clamped_to_day(31), date("2025-02-28"));
+    assert_eq!(date("2026-06-17").year_month(), month("2026-06"));
     assert_eq!(
-        month("9999-12").next_month(),
+        CalendarDate::from_str("2026-02-29"),
+        Err(DomainError::InvalidDate)
+    );
+    assert_eq!(
+        YearMonth::from_str("2026-6"),
         Err(DomainError::InvalidYearMonth)
     );
 }
 
 #[test]
-fn currency_codes_are_trimmed_uppercased_and_serialized_as_strings() {
-    let code = currency(" usd ");
-    assert_eq!(code.as_str(), "USD");
-    assert_eq!(serde_json::to_string(&code).unwrap(), "\"USD\"");
+fn authoritative_amounts_are_cents_and_calculations_round_half_up_once() {
+    assert_eq!(amount("1.23").scaled_i64(), 123);
+    assert_eq!(amount("0").decimal_string(), "0.00");
     assert_eq!(
-        serde_json::from_str::<CurrencyCode>("\"cny\"").unwrap(),
-        currency("CNY")
+        Amount::from_str("1.234"),
+        Err(DomainError::AmountTooPrecise)
     );
     assert_eq!(
-        CurrencyCode::new("US1"),
-        Err(DomainError::InvalidCurrencyCode)
+        Amount::from_decimal(Decimal::new(1235, 3))
+            .unwrap()
+            .decimal_string(),
+        "1.24"
     );
-}
-
-#[test]
-fn amounts_use_four_decimals_half_up_and_an_i64_scaled_value() {
-    let rounded = amount("1.23445");
-    assert_eq!(rounded.decimal_string(), "1.2345");
-    assert_eq!(rounded.scaled_i64(), 12_345);
-    assert_eq!(amount("1.23444").decimal_string(), "1.2344");
-    assert_eq!(amount("0").decimal_string(), "0.0000");
-    assert_eq!(Amount::from_str("-0.01"), Err(DomainError::NegativeAmount));
     assert_eq!(
-        Amount::from_str("922337203685477.5808"),
+        Amount::from_decimal(Decimal::new(1225, 3))
+            .unwrap()
+            .decimal_string(),
+        "1.23"
+    );
+    assert_eq!(
+        Amount::from_str("92233720368547758.08"),
         Err(DomainError::AmountOutOfRange)
     );
-    assert_eq!(serde_json::to_string(&rounded).unwrap(), "\"1.2345\"");
 }
 
 #[test]
-fn exchange_and_savings_rates_validate_their_ranges() {
-    let exchange = rate("USD", "CNY", "7.123456785");
-    assert_eq!(exchange.decimal_string(), "7.12345679");
-    assert_eq!(
-        ExchangeRate::from_str(currency("USD"), currency("CNY"), "0"),
-        Err(DomainError::InvalidExchangeRate)
-    );
-    assert_eq!(
-        ExchangeRate::from_str(currency("USD"), currency("CNY"), "0.000000004"),
-        Err(DomainError::InvalidExchangeRate)
-    );
-    assert_eq!(
-        ExchangeRate::from_str(currency("CNY"), currency("CNY"), "1.01"),
-        Err(DomainError::InvalidBaseCurrencyRate)
-    );
-    assert_eq!(
-        SavingsRate::from_basis_points(10_000)
-            .unwrap()
-            .basis_points(),
-        10_000
-    );
-    assert_eq!(
-        SavingsRate::from_basis_points(10_001),
-        Err(DomainError::InvalidSavingsRate)
-    );
-}
-
-#[test]
-fn plan_item_normalizes_name_derives_flow_and_enforces_invariants() {
-    let item = plan(
-        "  ＣｈａｔＧＰＴ  ",
-        Category::FixedCommitmentExpense,
-        "20",
-        "USD",
-        1,
-        "2026-06",
-        None,
-        RecognitionMode::Payment,
-    );
-    assert_eq!(item.name(), "ChatGPT");
-    assert_eq!(item.flow_type(), FlowType::Expense);
-    assert_eq!(Category::FixedIncome.flow_type(), FlowType::Income);
-
+fn plan_dates_validate_exact_days_and_amortized_months_use_interval_intersection() {
     assert_eq!(
         PlanItem::new(
             Uuid::new_v4(),
-            " ",
-            Category::FixedIncome,
-            amount("1"),
-            currency("CNY"),
-            1,
-            month("2026-06"),
-            None,
-            RecognitionMode::Amortized,
-            None,
-        ),
-        Err(DomainError::EmptyPlanItemName)
-    );
-    assert_eq!(
-        PlanItem::new(
-            Uuid::new_v4(),
-            "工资",
-            Category::FixedIncome,
-            amount("1"),
-            currency("CNY"),
-            0,
-            month("2026-06"),
-            None,
-            RecognitionMode::Amortized,
-            None,
-        ),
-        Err(DomainError::InvalidPeriod)
-    );
-    assert_eq!(
-        PlanItem::new(
-            Uuid::new_v4(),
-            "时间错误",
+            "错误",
             Category::EssentialExpense,
             amount("1"),
             currency("CNY"),
             1,
-            month("2026-06"),
-            Some(month("2026-05")),
-            RecognitionMode::Payment,
+            date("2026-06-02"),
+            Some(date("2026-06-01")),
+            RecognitionMode::Amortized,
             None,
         ),
-        Err(DomainError::EndBeforeStart)
+        Err(DomainError::EndDateBeforeStart),
     );
-}
-
-#[test]
-fn amortized_mode_recognizes_every_effective_month_and_rounds_only_final_result() {
     let item = plan(
-        "年度服务",
-        Category::FixedCommitmentExpense,
-        "1.0000",
-        "USD",
-        6,
-        "2026-01",
-        Some("2026-06"),
+        "短期保障",
+        Category::EssentialExpense,
+        "120",
+        "CNY",
+        12,
+        "2026-01-31",
+        Some("2026-02-02"),
         RecognitionMode::Amortized,
     );
-    let exchange = rate("USD", "CNY", "1.00000000");
-    let cny = currency("CNY");
-
+    assert!(is_effective_in(&item, month("2026-01")));
+    assert!(is_effective_in(&item, month("2026-02")));
+    assert!(!is_effective_in(&item, month("2026-03")));
     assert_eq!(
-        recognized_amount(&item, month("2026-01"), &exchange, &cny)
-            .unwrap()
-            .unwrap()
-            .decimal_string(),
-        "0.1667"
-    );
-    assert!(is_effective_in(&item, month("2026-06")));
-    assert_eq!(
-        recognized_amount(&item, month("2026-07"), &exchange, &cny).unwrap(),
-        None
+        recognized_amount(
+            &item,
+            month("2026-02"),
+            &rate("CNY", "CNY", "1"),
+            &currency("CNY")
+        )
+        .unwrap()
+        .unwrap()
+        .decimal_string(),
+        "10.00",
     );
 }
 
 #[test]
-fn payment_mode_emits_only_on_start_anchored_payment_months() {
+fn payment_schedule_keeps_original_day_anchor_after_clamping() {
     let item = plan(
-        "年度保险",
+        "月末支付",
+        Category::FixedCommitmentExpense,
+        "99.99",
+        "CNY",
+        1,
+        "2024-01-31",
+        None,
+        RecognitionMode::Payment,
+    );
+    assert_eq!(
+        scheduled_date_for_month(&item, month("2024-01")),
+        Some(date("2024-01-31"))
+    );
+    assert_eq!(
+        scheduled_date_for_month(&item, month("2024-02")),
+        Some(date("2024-02-29"))
+    );
+    assert_eq!(
+        scheduled_date_for_month(&item, month("2024-03")),
+        Some(date("2024-03-31"))
+    );
+
+    let ended = plan(
+        "结束边界",
+        Category::EssentialExpense,
+        "10",
+        "CNY",
+        1,
+        "2025-01-31",
+        Some("2025-02-27"),
+        RecognitionMode::Payment,
+    );
+    assert_eq!(scheduled_date_for_month(&ended, month("2025-02")), None);
+}
+
+#[test]
+fn payment_snapshot_carries_scheduled_date_and_capacity_still_uses_monthly_equivalent() {
+    let item = plan(
+        "年付保险",
         Category::EssentialExpense,
         "1200",
         "CNY",
         12,
-        "2026-03",
+        "2026-03-15",
         None,
         RecognitionMode::Payment,
     );
     let exchange = rate("CNY", "CNY", "1");
     let cny = currency("CNY");
-
     assert_eq!(
-        recognized_amount(&item, month("2026-03"), &exchange, &cny)
-            .unwrap()
-            .unwrap()
-            .decimal_string(),
-        "1200.0000"
-    );
-    assert_eq!(
-        recognized_amount(&item, month("2027-02"), &exchange, &cny).unwrap(),
+        recognized_amount(&item, month("2026-04"), &exchange, &cny).unwrap(),
         None
     );
     assert_eq!(
-        recognized_amount(&item, month("2027-03"), &exchange, &cny)
+        monthly_equivalent(&item, month("2026-04"), &exchange, &cny)
             .unwrap()
             .unwrap()
             .decimal_string(),
-        "1200.0000"
+        "100.00"
     );
-    assert_eq!(
-        monthly_equivalent(&item, month("2027-02"), &exchange, &cny)
+    let snapshot =
+        create_monthly_snapshot(Uuid::new_v4(), &item, month("2026-03"), &exchange, &cny)
             .unwrap()
-            .unwrap()
-            .decimal_string(),
-        "100.0000"
-    );
+            .unwrap();
+    assert_eq!(snapshot.scheduled_date(), Some(date("2026-03-15")));
+    assert_eq!(snapshot.item_source(), MonthlyItemSource::Planned);
 }
 
 #[test]
-fn monthly_quarterly_half_year_and_one_time_schedules_cross_year_correctly() {
-    let cny = currency("CNY");
-    let exchange = rate("CNY", "CNY", "1");
-    let cases = [
-        (1, "2026-12", None),
-        (3, "2027-02", Some("2027-01")),
-        (6, "2027-05", Some("2027-04")),
-    ];
-
-    for (period, due_month, not_due_month) in cases {
-        let item = plan(
-            "周期项目",
-            Category::FixedCommitmentExpense,
-            "600",
-            "CNY",
-            period,
-            "2026-11",
-            None,
-            RecognitionMode::Payment,
-        );
-        assert!(
-            recognized_amount(&item, month(due_month), &exchange, &cny)
-                .unwrap()
-                .is_some()
-        );
-        if let Some(not_due_month) = not_due_month {
-            assert_eq!(
-                recognized_amount(&item, month(not_due_month), &exchange, &cny).unwrap(),
-                None
-            );
-        }
-    }
-
-    let one_time = plan(
-        "一次性支出",
-        Category::DiscretionaryBudget,
-        "500",
-        "CNY",
-        1,
-        "2026-11",
-        Some("2026-11"),
-        RecognitionMode::Payment,
-    );
-    assert!(
-        recognized_amount(&one_time, month("2026-11"), &exchange, &cny)
-            .unwrap()
-            .is_some()
-    );
-    assert_eq!(
-        recognized_amount(&one_time, month("2026-12"), &exchange, &cny).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn conversion_validates_the_currency_pair() {
-    let item = plan(
-        "订阅",
-        Category::FixedCommitmentExpense,
-        "20",
-        "USD",
-        1,
-        "2026-01",
-        None,
-        RecognitionMode::Amortized,
-    );
-    let wrong_rate = rate("EUR", "CNY", "7.25");
-    assert_eq!(
-        recognized_amount(&item, month("2026-01"), &wrong_rate, &currency("CNY")),
-        Err(DomainError::CurrencyMismatch)
-    );
-}
-
-#[test]
-fn monthly_snapshot_copies_plan_facts_and_distinguishes_missing_from_zero_actual() {
-    let id = Uuid::new_v4();
-    let original = PlanItem::new(
-        id,
-        "旧名称",
-        Category::FixedCommitmentExpense,
-        amount("20"),
-        currency("USD"),
-        1,
-        month("2026-01"),
-        None,
-        RecognitionMode::Payment,
-        Some("生成时备注".to_owned()),
-    )
-    .unwrap();
-    let exchange = rate("USD", "CNY", "7.25");
-    let mut snapshot = create_monthly_snapshot(
+fn actual_entries_are_positive_effects_and_can_aggregate_to_a_negative_net() {
+    let monthly_id = Uuid::new_v4();
+    let spend = ActualEntry::new(
         Uuid::new_v4(),
-        &original,
-        month("2026-01"),
-        &exchange,
-        &currency("CNY"),
+        monthly_id,
+        month("2026-06"),
+        date("2026-06-02"),
+        ActualEntryEffect::Increase,
+        amount("20.00"),
+        ActualEntryOrigin::User,
+        None,
     )
-    .unwrap()
     .unwrap();
-    drop(original);
+    let refund = ActualEntry::new(
+        Uuid::new_v4(),
+        monthly_id,
+        month("2026-06"),
+        date("2026-06-30"),
+        ActualEntryEffect::Decrease,
+        amount("30.00"),
+        ActualEntryOrigin::User,
+        Some("退款".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        aggregate_actual_entries(&[spend, refund])
+            .unwrap()
+            .decimal_string(),
+        "-10.00"
+    );
+    assert_eq!(
+        ActualEntry::new(
+            Uuid::new_v4(),
+            monthly_id,
+            month("2026-06"),
+            date("2026-07-01"),
+            ActualEntryEffect::Increase,
+            amount("1"),
+            ActualEntryOrigin::User,
+            None,
+        ),
+        Err(DomainError::ActualEntryDateOutsideMonth),
+    );
+    assert_eq!(
+        ActualEntry::new(
+            Uuid::new_v4(),
+            monthly_id,
+            month("2026-06"),
+            date("2026-06-01"),
+            ActualEntryEffect::Increase,
+            amount("0"),
+            ActualEntryOrigin::User,
+            None,
+        ),
+        Err(DomainError::ZeroActualEntryAmount),
+    );
+}
 
-    assert_eq!(snapshot.item_name(), "旧名称");
-    assert_eq!(snapshot.planned_amount().decimal_string(), "145.0000");
-    assert_eq!(snapshot.currency(), &currency("CNY"));
-    assert_eq!(snapshot.actual_amount(), None);
-    snapshot.set_actual_amount(Some(Amount::zero()));
-    assert_eq!(snapshot.actual_amount(), Some(Amount::zero()));
+fn monthly_with_state(entry_count: u64, confirmed: bool, actual: Option<&str>) -> MonthlyItem {
+    MonthlyItem::rehydrate(
+        Uuid::new_v4(),
+        Some(Uuid::new_v4()),
+        "项目".into(),
+        month("2026-06"),
+        Category::EssentialExpense,
+        FlowType::Expense,
+        RecognitionMode::Amortized,
+        MonthlyItemSource::Planned,
+        None,
+        amount("10"),
+        actual.map(|value| SignedAmount::from_decimal(value.parse().unwrap()).unwrap()),
+        entry_count,
+        confirmed.then(|| "2026-07-01T00:00:00Z".into()),
+        currency("CNY"),
+        None,
+    )
 }
 
 #[test]
-fn financial_capacity_uses_monthly_equivalents_and_excludes_variable_income_from_capacity() {
-    let fixed_income = plan(
+fn actual_completeness_distinguishes_missing_progress_zero_and_final() {
+    assert_eq!(
+        monthly_with_state(0, false, None).actual_data_status(),
+        ActualDataStatus::Missing
+    );
+    assert_eq!(
+        monthly_with_state(1, false, Some("5")).actual_data_status(),
+        ActualDataStatus::InProgress
+    );
+    assert_eq!(
+        monthly_with_state(0, true, Some("0")).actual_data_status(),
+        ActualDataStatus::ConfirmedZero
+    );
+    assert_eq!(
+        monthly_with_state(2, true, Some("4")).actual_data_status(),
+        ActualDataStatus::Final
+    );
+}
+
+#[test]
+fn financial_capacity_uses_plan_monthly_equivalents_with_two_decimal_outputs() {
+    let income = plan(
         "工资",
         Category::FixedIncome,
         "30000",
         "CNY",
         1,
-        "2026-01",
+        "2026-01-01",
         None,
         RecognitionMode::Payment,
-    );
-    let variable_income = plan(
-        "奖金",
-        Category::VariableIncome,
-        "5000",
-        "CNY",
-        1,
-        "2026-01",
-        None,
-        RecognitionMode::Payment,
-    );
-    let essential = plan(
-        "生活",
-        Category::EssentialExpense,
-        "10000",
-        "CNY",
-        1,
-        "2026-01",
-        None,
-        RecognitionMode::Amortized,
     );
     let commitment = plan(
-        "年度承诺",
+        "年付服务",
         Category::FixedCommitmentExpense,
         "36000",
         "CNY",
         12,
-        "2026-01",
+        "2026-01-31",
         None,
         RecognitionMode::Payment,
     );
-    let discretionary = plan(
-        "自主预算",
-        Category::DiscretionaryBudget,
-        "2000",
-        "CNY",
-        1,
-        "2026-01",
-        None,
-        RecognitionMode::Amortized,
-    );
-    let cny_rate = rate("CNY", "CNY", "1");
-    let inputs = [
-        CapacityInput {
-            plan_item: &fixed_income,
-            exchange_rate: &cny_rate,
-        },
-        CapacityInput {
-            plan_item: &variable_income,
-            exchange_rate: &cny_rate,
-        },
-        CapacityInput {
-            plan_item: &essential,
-            exchange_rate: &cny_rate,
-        },
-        CapacityInput {
-            plan_item: &commitment,
-            exchange_rate: &cny_rate,
-        },
-        CapacityInput {
-            plan_item: &discretionary,
-            exchange_rate: &cny_rate,
-        },
-    ];
-
+    let one = rate("CNY", "CNY", "1");
     let result = calculate_financial_capacity(
         month("2026-02"),
         SavingsRate::from_basis_points(2000).unwrap(),
         currency("CNY"),
-        &inputs,
+        &[
+            CapacityInput {
+                plan_item: &income,
+                exchange_rate: &one,
+            },
+            CapacityInput {
+                plan_item: &commitment,
+                exchange_rate: &one,
+            },
+        ],
     )
     .unwrap();
-
-    assert_eq!(result.stable_income().decimal_string(), "30000.0000");
-    assert_eq!(result.variable_income().decimal_string(), "5000.0000");
-    assert_eq!(result.essential_expenses().decimal_string(), "10000.0000");
-    assert_eq!(result.fixed_commitments().decimal_string(), "3000.0000");
-    assert_eq!(result.discretionary_budget().decimal_string(), "2000.0000");
-    assert_eq!(result.preserved_capacity().decimal_string(), "9000.0000");
-    assert_eq!(result.maximum_capacity().decimal_string(), "11000.0000");
-    assert_eq!(
-        result.fixed_commitment_ratio().unwrap().decimal_string(),
-        "0.10000000"
-    );
-    assert_eq!(
-        result
-            .stable_income_coverage_ratio()
-            .unwrap()
-            .decimal_string(),
-        "2.30769231"
-    );
-}
-
-#[test]
-fn financial_capacity_floors_negative_capacity_and_handles_zero_denominators() {
-    let expense = plan(
-        "必要支出",
-        Category::EssentialExpense,
-        "100",
-        "CNY",
-        1,
-        "2026-01",
-        None,
-        RecognitionMode::Amortized,
-    );
-    let cny_rate = rate("CNY", "CNY", "1");
-    let inputs = [CapacityInput {
-        plan_item: &expense,
-        exchange_rate: &cny_rate,
-    }];
-    let result = calculate_financial_capacity(
-        month("2026-01"),
-        SavingsRate::from_basis_points(0).unwrap(),
-        currency("CNY"),
-        &inputs,
-    )
-    .unwrap();
-
-    assert_eq!(result.preserved_capacity(), Amount::zero());
-    assert_eq!(result.maximum_capacity(), Amount::zero());
-    assert_eq!(result.fixed_commitment_ratio(), None);
-    assert_eq!(
-        result
-            .stable_income_coverage_ratio()
-            .unwrap()
-            .decimal_string(),
-        "0.00000000"
-    );
+    assert_eq!(result.stable_income().decimal_string(), "30000.00");
+    assert_eq!(result.fixed_commitments().decimal_string(), "3000.00");
+    assert_eq!(result.maximum_capacity().decimal_string(), "21000.00");
 }

@@ -36,20 +36,20 @@ const planSchema = z
     plannedAmount: z
       .string()
       .trim()
-      .regex(/^\d+(\.\d{1,4})?$/, "金额最多保留四位小数"),
+      .regex(/^\d+(\.\d{1,2})?$/, "金额最多保留两位小数"),
     currency: z.string().length(3, "请选择币种"),
     periodMonths: z.number().int("周期必须为整数").positive("周期必须大于 0"),
-    startMonth: z.string().regex(/^\d{4}-\d{2}$/, "请选择开始月份"),
-    endMonth: z.string(),
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "请选择开始日期"),
+    endDate: z.string(),
     recognitionMode: z.enum(["AMORTIZED", "PAYMENT"]),
     note: z.string(),
   })
   .superRefine((values, context) => {
-    if (values.endMonth && values.endMonth < values.startMonth) {
+    if (values.endDate && values.endDate < values.startDate) {
       context.addIssue({
         code: "custom",
-        path: ["endMonth"],
-        message: "结束月份不能早于开始月份",
+        path: ["endDate"],
+        message: "结束日期不能早于开始日期",
       });
     }
   });
@@ -153,7 +153,7 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
                 </div>
                 <h2>{item.name}</h2>
                 <p>
-                  {item.start_month} 至 {item.end_month ?? "长期有效"} · {recognitionLabel(item.recognition_mode)}
+                  {item.start_date} 至 {item.end_date ?? "长期有效"} · {recognitionLabel(item.recognition_mode)}
                 </p>
                 {item.note && <small>{item.note}</small>}
               </div>
@@ -234,8 +234,8 @@ function PlanEditor({
         plannedAmount: existing.planned_amount,
         currency: existing.currency,
         periodMonths: existing.period_months,
-        startMonth: existing.start_month,
-        endMonth: existing.end_month ?? "",
+        startDate: existing.start_date,
+        endDate: existing.end_date ?? "",
         recognitionMode: existing.recognition_mode as "AMORTIZED" | "PAYMENT",
         note: existing.note ?? "",
       }
@@ -245,8 +245,8 @@ function PlanEditor({
         plannedAmount: "",
         currency: settings.base_currency,
         periodMonths: 1,
-        startMonth: settings.target_month,
-        endMonth: "",
+        startDate: settings.target_month + "-01",
+        endDate: "",
         recognitionMode: "AMORTIZED",
         note: "",
       };
@@ -262,8 +262,8 @@ function PlanEditor({
     plannedAmount: value.plannedAmount,
     currency: value.currency,
     periodMonths: value.periodMonths,
-    startMonth: value.startMonth,
-    endMonth: value.endMonth || undefined,
+    startDate: value.startDate,
+    endDate: value.endDate || undefined,
     recognitionMode: value.recognitionMode,
     note: value.note || undefined,
   });
@@ -310,8 +310,8 @@ function PlanEditor({
             <label>计划金额<input inputMode="decimal" {...form.register("plannedAmount")} />{form.formState.errors.plannedAmount && <em>{form.formState.errors.plannedAmount.message}</em>}</label>
             <label>币种<select {...form.register("currency")}>{rates.map((rate) => <option key={rate.currency} value={rate.currency}>{rate.currency}</option>)}</select></label>
             <label>周期（月）<input type="number" min="1" step="1" {...form.register("periodMonths", { valueAsNumber: true })} />{form.formState.errors.periodMonths && <em>{form.formState.errors.periodMonths.message}</em>}</label>
-            <label>开始月份<input type="month" {...form.register("startMonth")} /></label>
-            <label>结束月份（可选）<input type="month" {...form.register("endMonth")} />{form.formState.errors.endMonth && <em>{form.formState.errors.endMonth.message}</em>}</label>
+            <label>开始日期<input type="date" {...form.register("startDate")} /></label>
+            <label>结束日期（可选）<input type="date" {...form.register("endDate")} />{form.formState.errors.endDate && <em>{form.formState.errors.endDate.message}</em>}</label>
           </div>
           <fieldset className="mode-options">
             <legend>确认模式</legend>
@@ -321,7 +321,7 @@ function PlanEditor({
             </label>
             <label className={values.recognitionMode === "PAYMENT" ? "mode-option selected" : "mode-option"}>
               <input type="radio" value="PAYMENT" {...form.register("recognitionMode")} />
-              <span><strong>按支付月份确认</strong><small>只在以开始月份为锚点的支付月计入完整金额。</small></span>
+              <span><strong>按支付月份确认</strong><small>只在以开始日期为锚点的支付月计入完整金额。</small></span>
             </label>
             <p>无论哪种模式，财务承载能力都按月均负担计算。</p>
           </fieldset>
@@ -334,6 +334,7 @@ function PlanEditor({
               <div><span>生成月度项目</span><strong>{preview.data.recognized_in_target_month ? "会" : "不会"}</strong></div>
               <div><span>月度等价金额</span><strong>{preview.data.monthly_equivalent ?? "N/A"} {preview.data.base_currency}</strong></div>
               <div><span>当月确认金额</span><strong>{preview.data.recognized_amount ?? "N/A"} {preview.data.base_currency}</strong></div>
+              <div><span>计划支付日</span><strong>{preview.data.scheduled_date ?? "N/A"}</strong></div>
             </div>
           )}
           {(previewMutation.isError || saveMutation.isError) && (
@@ -355,12 +356,12 @@ function PlanEditor({
 }
 
 function StopDialog({ item, onClose, onStopped }: { item: PlanItem; onClose: () => void; onStopped: () => Promise<void> }) {
-  const [endMonth, setEndMonth] = useState(item.end_month ?? item.start_month);
-  const mutation = useMutation({ mutationFn: () => stopPlanItem({ id: item.id, endMonth }), onSuccess: onStopped });
+  const [endDate, setEndDate] = useState(item.end_date ?? item.start_date);
+  const mutation = useMutation({ mutationFn: () => stopPlanItem({ id: item.id, endDate }), onSuccess: onStopped });
   return (
     <ConfirmDialog title={`停止“${item.name}”`} onClose={onClose}>
-      <p>停止只会设置结束月份，不会改动已经生成的月度快照。</p>
-      <label>最后有效月份<input type="month" value={endMonth} onChange={(event) => setEndMonth(event.target.value)} /></label>
+      <p>停止只会设置结束日期，不会改动已经生成的月度快照。</p>
+      <label>最后有效日期<input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
       {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
       <button className="button button-primary" disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>确认停止</button>
     </ConfirmDialog>

@@ -303,7 +303,7 @@ function CategoryHistoryTable({
             <th>{month.month}</th>
             {categoryCodes.map((category) => (
               <td key={category}>
-                {month.categories.find((item) => item.category === category)?.planned_amount ?? "0.0000"}
+                {month.categories.find((item) => item.category === category)?.planned_amount ?? "0.00"}
               </td>
             ))}
           </tr>
@@ -357,7 +357,7 @@ function categoryHistoryOption(history: MonthAnalytics[], flow: FlowFilter) {
       type: "line",
       data: history.map(
         (month) =>
-          month.categories.find((item) => item.category === category)?.planned_amount ?? "0.0000",
+          month.categories.find((item) => item.category === category)?.planned_amount ?? "0.00",
       ),
       itemStyle: { color: colors[index] },
       lineStyle: { color: colors[index] },

@@ -2,12 +2,15 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{
-    Amount, CurrencyCode, DomainError, ExchangeRate, MonthlyItem, PlanItem, RecognitionMode,
-    YearMonth,
+    Amount, CalendarDate, CurrencyCode, DomainError, ExchangeRate, MonthlyItem, PlanItem,
+    RecognitionMode, YearMonth,
 };
 
 pub fn is_effective_in(plan_item: &PlanItem, month: YearMonth) -> bool {
-    plan_item.start_month() <= month && plan_item.end_month().is_none_or(|end| month <= end)
+    plan_item.start_date() <= month.date_clamped_to_day(month.last_day())
+        && plan_item
+            .end_date()
+            .is_none_or(|end| end >= month.first_date())
 }
 
 pub fn is_recognized_in(plan_item: &PlanItem, month: YearMonth) -> bool {
@@ -17,10 +20,24 @@ pub fn is_recognized_in(plan_item: &PlanItem, month: YearMonth) -> bool {
 
     match plan_item.recognition_mode() {
         RecognitionMode::Amortized => true,
-        RecognitionMode::Payment => month
-            .months_since(plan_item.start_month())
-            .is_some_and(|elapsed| elapsed.is_multiple_of(plan_item.period_months())),
+        RecognitionMode::Payment => scheduled_date_for_month(plan_item, month).is_some(),
     }
+}
+
+pub fn scheduled_date_for_month(plan_item: &PlanItem, month: YearMonth) -> Option<CalendarDate> {
+    if plan_item.recognition_mode() != RecognitionMode::Payment {
+        return None;
+    }
+    let start = plan_item.start_date();
+    let elapsed = month.months_since(start.year_month())?;
+    if !elapsed.is_multiple_of(plan_item.period_months()) {
+        return None;
+    }
+    let scheduled = month.date_clamped_to_day(start.day());
+    if scheduled < start || plan_item.end_date().is_some_and(|end| scheduled > end) {
+        return None;
+    }
+    Some(scheduled)
 }
 
 fn converted_value(
@@ -94,6 +111,7 @@ pub fn create_monthly_snapshot(
                 snapshot_id,
                 plan_item,
                 month,
+                scheduled_date_for_month(plan_item, month),
                 planned_amount,
                 base_currency.clone(),
             )
