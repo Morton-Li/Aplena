@@ -3,8 +3,9 @@ mod infrastructure;
 
 use application::{
     FinanceService, calculate_capacity, confirm_monthly_actuals, create_plan_item,
-    delete_exchange_rate, delete_plan_item, get_domain_contract, get_month_initialization_status,
-    get_settings, get_startup_status, initialize_month, list_exchange_rates, list_existing_months,
+    delete_exchange_rate, delete_plan_item, get_domain_contract, get_financial_capacity,
+    get_history_analytics, get_month_analytics, get_month_initialization_status, get_settings,
+    get_startup_status, initialize_month, list_exchange_rates, list_existing_months,
     list_monthly_items, list_plan_items, preview_month, preview_plan_item, save_settings,
     stop_plan_item, update_monthly_actual, update_monthly_note, update_plan_item,
     upsert_exchange_rate,
@@ -48,7 +49,10 @@ pub fn run() {
             list_existing_months,
             get_month_initialization_status,
             preview_month,
-            initialize_month
+            initialize_month,
+            get_month_analytics,
+            get_history_analytics,
+            get_financial_capacity
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aplena");

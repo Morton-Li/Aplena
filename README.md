@@ -10,12 +10,12 @@ Aplena 不是逐笔记账软件。它维护长期计划，将计划冻结为独�
 
 ## 当前阶段
 
-第二阶段“可执行工程与领域内核”已经落地：仓库包含可运行的 Tauri 2 + React +
-TypeScript + Vite 桌面应用骨架、独立 `pfcm-domain` Rust 包、受限 Tauri IPC 边界和自动化
-测试。第一阶段冻结的产品与架构文档仍是后续实现的权威基线。
+目标 A 的本地功能闭环已经落地：Aplena 现在包含 SQLite 持久化、自动月度快照、首次设置、
+长期计划、月度执行、Dashboard、历史趋势、结构分析和财务承载能力。所有页面都通过受限
+Tauri IPC 使用真实 Rust 领域规则与本地数据库，不包含演示用虚构数据。
 
-当前 UI 只用于证明 React 与真实 Rust 命令已经打通，不展示虚构财务数据。SQLite、自动月度
-初始化和完整业务页面属于后续阶段。
+下一目标聚焦数据保护与发布门禁，包括一致性备份/恢复、导出、迁移恢复点、加密技术验证、
+macOS 签名公证和 Windows 安装验证；这些能力尚不能由当前本地检查替代。
 
 ## 已冻结的核心原则
 
@@ -46,21 +46,21 @@ TypeScript + Vite 桌面应用骨架、独立 `pfcm-domain` Rust 包、受限 Ta
 
 - Tauri 2、Rust、React、TypeScript、Vite
 - SQLite STRICT、WAL、SQLx、版本化 SQL migrations
-- React Hook Form、Zod、TanStack Query、Apache ECharts、Tailwind CSS
-- Cargo tests、Vitest、Testing Library、Playwright
+- React Hook Form、Zod、TanStack Query、Apache ECharts、原生 CSS
+- Cargo tests、Vitest、Testing Library
 
 前端不直接访问数据库。所有权威校验、财务计算和数据写入都通过有限的 Tauri 业务命令
 进入 Rust 应用层。
 
-当前依赖已由 `Cargo.lock` 和 `pnpm-lock.yaml` 锁定。第二阶段只引入运行领域内核和最小
-应用骨架所需的包；数据库、表单、查询、图表和端到端测试依赖将在对应阶段按需加入。
+当前依赖已由 `Cargo.lock` 和 `pnpm-lock.yaml` 锁定。金额聚合、占比、排名、储蓄率和承载
+能力都在 Rust 中计算；React 只负责命令调用、查询缓存、表单和展示。
 
 ## 工程结构
 
 ```text
 crates/pfcm-domain/   与 Tauri、SQLite、React 无关的纯 Rust 领域层
-src-tauri/            Tauri 应用层、IPC DTO、稳定错误结构和桌面入口
-src/                  React 最小应用壳与前端命令适配器
+src-tauri/            SQL migrations、Repository、应用服务、IPC DTO 和桌面入口
+src/                  React 页面、查询适配器、表单、图表与样式
 docs/                 产品、领域、架构、数据库与路线图基线
 ```
 
@@ -72,6 +72,20 @@ docs/                 产品、领域、架构、数据库与路线图基线
 - 独立 `MonthlyItem` 快照以及未录入实际值和实际零值的区分；
 - 按月均负担计算的保留预算后承载力、最大承载力、固定承诺占比和稳定收入覆盖倍数；
 - 所有金额与比率通过 IPC 使用十进制字符串传输。
+
+应用层已实现：
+
+- 仅含 `settings`、`exchange_rates`、`plan_items`、`monthly_items` 四张业务表的 SQLite
+  STRICT schema，启用外键、WAL、约束、索引和版本化迁移；
+- 启动和新建计划后幂等补齐当前自然月，历史/未来月份只在用户确认后创建；
+- 汇率与计划事实在月度快照创建时冻结，后续修改或删除来源不污染历史；
+- `NULL`、已确认零值和正实际金额三种状态，以及不覆盖已有实际的批量确认；
+- 动态 Dashboard、历史时间序列、分类结构、项目排名和重要偏差；
+- 以稳定收入和长期月均负担计算的保留预算后承载力与最大承载力，`PAYMENT` 项目在
+  非支付月份仍计入长期负担。
+
+主要页面：`总览`、`月度计划`、`长期计划`、`历史`、`分析`、`设置`。图表均有 ARIA
+描述和对应数值表；不完整月份明确显示“当前已录”，零分母显示 `N/A`。
 
 ## 本地运行
 
@@ -87,8 +101,15 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-如果 Homebrew `rustup` 未加入全局 `PATH`，无需修改 shell 配置；可以只为当前命令临时提供
-`/opt/homebrew/opt/rustup/bin`。这不会影响已经运行的其他任务。
+如果 Homebrew `rustup` 未加入全局 `PATH`，无需修改 shell 配置；可以仅给当前命令提供环境：
+
+```bash
+env CARGO_HOME="$PWD/.cargo-home" \
+  PATH="/opt/homebrew/opt/rustup/bin:$PATH" \
+  pnpm tauri dev
+```
+
+这不会修改全局环境，也不会影响已经运行的其他任务。
 
 ## 验证命令
 
@@ -107,11 +128,12 @@ pnpm tauri build --no-bundle
 最后一条命令只生成未签名的本地可执行文件，不制作或发布安装包。macOS 签名、公证、
 Windows 构建和真实发布仍需在后续发布阶段单独验证。
 
-## 第二阶段边界
+## 当前边界
 
-本阶段明确没有实现 SQLite、SQLx、migration、Repository、计划 CRUD、月度自动初始化、
-Dashboard 或真实财务数据持久化。上述能力不得在前端临时模拟；下一阶段将先实现事务化
-持久化和幂等快照生成，再由后续 UI 阶段使用。
+- 单用户、单账本、本地优先；不提供账户、云同步、遥测或后台网络服务。
+- 不记录逐笔交易，也不新增持久化报表或派生统计表。
+- Scenario 模式、备份/恢复、CSV 导出、数据库静态加密和正式发布包不在目标 A 范围内。
+- `bundle.active` 仍为 `false`；当前构建只用于本地未签名验证，不能视为已发布产品。
 
 ## 分支模型
 

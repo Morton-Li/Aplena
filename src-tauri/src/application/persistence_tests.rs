@@ -654,6 +654,9 @@ async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct
     assert_eq!(item.actual_amount, None);
     assert_eq!(item.data_status, "MISSING");
     assert_eq!(item.variance_amount, None);
+    let before_actual = service.month_analytics(current.to_string()).await.unwrap();
+    assert_eq!(before_actual.actual_status, "EMPTY");
+    assert_eq!(before_actual.expense.actual_to_date, None);
 
     let zero = service
         .update_monthly_actual(MonthlyActualInputDto {
@@ -667,6 +670,10 @@ async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct
     assert_eq!(zero.completion_rate_percent.as_deref(), Some("0.00"));
     assert_eq!(zero.data_status, "CONFIRMED_ZERO");
     assert_eq!(zero.variance_effect, "FAVORABLE");
+    let after_zero = service.month_analytics(current.to_string()).await.unwrap();
+    assert_eq!(after_zero.actual_status, "COMPLETE");
+    assert_eq!(after_zero.expense.actual_to_date.as_deref(), Some("0.0000"));
+    assert_eq!(after_zero.expense.variance.as_deref(), Some("-300.0000"));
     service
         .update_monthly_actual(MonthlyActualInputDto {
             id: item.id,
@@ -714,5 +721,50 @@ async fn actual_null_zero_batch_confirmation_and_base_currency_lock_are_distinct
             .unwrap()
             .iter()
             .any(|rate| rate.currency == "USD")
+    );
+}
+
+#[tokio::test]
+async fn persisted_capacity_uses_payment_items_monthly_equivalent_even_between_payment_months() {
+    let service = test_service().await;
+    let start = YearMonth::new(2026, 1).unwrap();
+    let end = YearMonth::new(2026, 12).unwrap();
+    service
+        .create_plan_item(plan(
+            "固定工资",
+            "FIXED_INCOME",
+            "30000",
+            "CNY",
+            1,
+            "AMORTIZED",
+            start,
+            Some(end),
+        ))
+        .await
+        .unwrap();
+    service
+        .create_plan_item(plan(
+            "年度承诺",
+            "FIXED_COMMITMENT_EXPENSE",
+            "36000",
+            "CNY",
+            12,
+            "PAYMENT",
+            start,
+            Some(end),
+        ))
+        .await
+        .unwrap();
+
+    let capacity = service
+        .financial_capacity(Some("2026-02".to_owned()))
+        .await
+        .unwrap();
+    assert_eq!(capacity.stable_income, "30000.0000");
+    assert_eq!(capacity.fixed_commitments, "3000.0000");
+    assert_eq!(capacity.preserved_capacity, "21000.0000");
+    assert_eq!(
+        capacity.fixed_commitment_ratio_percent.as_deref(),
+        Some("10.00")
     );
 }

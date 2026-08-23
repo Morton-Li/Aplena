@@ -183,6 +183,84 @@ pub struct StartupStatusDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AmountComparisonDto {
+    pub planned: String,
+    pub actual_to_date: Option<String>,
+    pub variance: Option<String>,
+    pub variance_effect: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CategoryBreakdownDto {
+    pub category: String,
+    pub flow_type: String,
+    pub planned_amount: String,
+    pub actual_to_date: Option<String>,
+    pub planned_share_percent: Option<String>,
+    pub actual_share_percent: Option<String>,
+    pub missing_actual_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProjectBreakdownDto {
+    pub monthly_item_id: String,
+    pub name: String,
+    pub category: String,
+    pub flow_type: String,
+    pub planned_amount: String,
+    pub actual_amount: Option<String>,
+    pub variance_amount: Option<String>,
+    pub variance_effect: String,
+    pub planned_share_percent: Option<String>,
+    pub actual_share_percent: Option<String>,
+    pub planned_rank: u64,
+    pub actual_rank: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MonthAnalyticsDto {
+    pub month: String,
+    pub currency: String,
+    pub actual_status: String,
+    pub total_item_count: u64,
+    pub recorded_item_count: u64,
+    pub completeness_percent: Option<String>,
+    pub income: AmountComparisonDto,
+    pub expense: AmountComparisonDto,
+    pub net_balance: AmountComparisonDto,
+    pub planned_savings_rate_percent: Option<String>,
+    pub actual_savings_rate_percent: Option<String>,
+    pub savings_rate_percentage_point_variance: Option<String>,
+    pub savings_rate_target_completion_percent: Option<String>,
+    pub savings_rate_relative_deviation_percent: Option<String>,
+    pub minimum_savings_rate_percent: String,
+    pub categories: Vec<CategoryBreakdownDto>,
+    pub projects: Vec<ProjectBreakdownDto>,
+    pub important_variances: Vec<ProjectBreakdownDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HistoryAnalyticsDto {
+    pub months: Vec<MonthAnalyticsDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FinancialCapacityDto {
+    pub target_month: String,
+    pub base_currency: String,
+    pub minimum_savings_rate_percent: String,
+    pub stable_income: String,
+    pub variable_income: String,
+    pub essential_expenses: String,
+    pub fixed_commitments: String,
+    pub discretionary_budget: String,
+    pub preserved_capacity: String,
+    pub maximum_capacity: String,
+    pub fixed_commitment_ratio_percent: Option<String>,
+    pub stable_income_coverage_ratio: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EnumOptionDto {
     pub code: String,
     pub label: String,

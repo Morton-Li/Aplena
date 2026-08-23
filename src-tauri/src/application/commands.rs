@@ -13,11 +13,11 @@ use super::{
     dto::{
         CapacityDto, CapacityRequestDto, ConfirmActualsDto, ConfirmActualsInputDto,
         DeletePlanItemDto, DomainContractDto, EnumOptionDto, ExchangeRateDto, ExchangeRateInputDto,
-        ExchangeRateUpsertDto, InitializeMonthDto, InitializeMonthInputDto,
-        MonthInitializationStatusDto, MonthPreviewDto, MonthlyActualInputDto, MonthlyItemDto,
-        MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto, PlanMutationDto, PlanPreviewDto,
-        PlanPreviewRequestDto, SettingsDto, SettingsInputDto, StartupStatusDto,
-        StopPlanItemRequestDto,
+        ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
+        InitializeMonthInputDto, MonthAnalyticsDto, MonthInitializationStatusDto, MonthPreviewDto,
+        MonthlyActualInputDto, MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto,
+        PlanMutationDto, PlanPreviewDto, PlanPreviewRequestDto, SettingsDto, SettingsInputDto,
+        StartupStatusDto, StopPlanItemRequestDto,
     },
     error::AppError,
     service::FinanceService,
@@ -168,6 +168,29 @@ pub async fn initialize_month(
     input: InitializeMonthInputDto,
 ) -> Result<InitializeMonthDto, AppError> {
     service.initialize_month(input).await
+}
+
+#[tauri::command]
+pub async fn get_month_analytics(
+    service: State<'_, FinanceService>,
+    month: String,
+) -> Result<MonthAnalyticsDto, AppError> {
+    service.month_analytics(month).await
+}
+
+#[tauri::command]
+pub async fn get_history_analytics(
+    service: State<'_, FinanceService>,
+) -> Result<HistoryAnalyticsDto, AppError> {
+    service.history_analytics().await
+}
+
+#[tauri::command]
+pub async fn get_financial_capacity(
+    service: State<'_, FinanceService>,
+    target_month: Option<String>,
+) -> Result<FinancialCapacityDto, AppError> {
+    service.financial_capacity(target_month).await
 }
 
 #[tauri::command]

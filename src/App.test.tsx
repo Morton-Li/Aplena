@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,8 @@ import { App } from "./App";
 import type { Invoke } from "./shared/api/domain";
 import type {
   InitializeMonthResult,
+  FinancialCapacity,
+  MonthAnalytics,
   MonthPreview,
   MonthlyItem,
   PlanItem,
@@ -16,6 +18,10 @@ const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
+}));
+
+vi.mock("./shared/components/AnalyticsChart", () => ({
+  AnalyticsChart: ({ label }: { label: string }) => <div role="img" aria-label={label} />,
 }));
 
 const contract = {
@@ -95,6 +101,164 @@ function monthlyItem(overrides: Partial<MonthlyItem> = {}): MonthlyItem {
   };
 }
 
+function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics {
+  return {
+    month: "2026-08",
+    currency: "CNY",
+    actual_status: "PARTIAL",
+    total_item_count: 3,
+    recorded_item_count: 2,
+    completeness_percent: "66.67",
+    income: {
+      planned: "30000.0000",
+      actual_to_date: "28700.0000",
+      variance: "-1300.0000",
+      variance_effect: "UNFAVORABLE",
+    },
+    expense: {
+      planned: "9300.0000",
+      actual_to_date: "8427.0000",
+      variance: "-873.0000",
+      variance_effect: "FAVORABLE",
+    },
+    net_balance: {
+      planned: "20700.0000",
+      actual_to_date: "20273.0000",
+      variance: "-427.0000",
+      variance_effect: "UNFAVORABLE",
+    },
+    planned_savings_rate_percent: "69.00",
+    actual_savings_rate_percent: "70.64",
+    savings_rate_percentage_point_variance: "1.64",
+    savings_rate_target_completion_percent: "102.38",
+    savings_rate_relative_deviation_percent: "2.38",
+    minimum_savings_rate_percent: "20.00",
+    categories: [
+      {
+        category: "FIXED_INCOME",
+        flow_type: "INCOME",
+        planned_amount: "30000.0000",
+        actual_to_date: "28700.0000",
+        planned_share_percent: "100.00",
+        actual_share_percent: "100.00",
+        missing_actual_count: 0,
+      },
+      {
+        category: "VARIABLE_INCOME",
+        flow_type: "INCOME",
+        planned_amount: "0.0000",
+        actual_to_date: null,
+        planned_share_percent: "0.00",
+        actual_share_percent: null,
+        missing_actual_count: 0,
+      },
+      {
+        category: "ESSENTIAL_EXPENSE",
+        flow_type: "EXPENSE",
+        planned_amount: "6300.0000",
+        actual_to_date: "6427.0000",
+        planned_share_percent: "67.74",
+        actual_share_percent: "76.27",
+        missing_actual_count: 1,
+      },
+      {
+        category: "FIXED_COMMITMENT_EXPENSE",
+        flow_type: "EXPENSE",
+        planned_amount: "2000.0000",
+        actual_to_date: "2000.0000",
+        planned_share_percent: "21.51",
+        actual_share_percent: "23.73",
+        missing_actual_count: 0,
+      },
+      {
+        category: "DISCRETIONARY_BUDGET",
+        flow_type: "EXPENSE",
+        planned_amount: "1000.0000",
+        actual_to_date: null,
+        planned_share_percent: "10.75",
+        actual_share_percent: null,
+        missing_actual_count: 1,
+      },
+    ],
+    projects: [
+      {
+        monthly_item_id: "salary",
+        name: "工资",
+        category: "FIXED_INCOME",
+        flow_type: "INCOME",
+        planned_amount: "30000.0000",
+        actual_amount: "28700.0000",
+        variance_amount: "-1300.0000",
+        variance_effect: "UNFAVORABLE",
+        planned_share_percent: "100.00",
+        actual_share_percent: "100.00",
+        planned_rank: 1,
+        actual_rank: 1,
+      },
+      {
+        monthly_item_id: "rent",
+        name: "房租",
+        category: "ESSENTIAL_EXPENSE",
+        flow_type: "EXPENSE",
+        planned_amount: "6000.0000",
+        actual_amount: null,
+        variance_amount: null,
+        variance_effect: "UNKNOWN",
+        planned_share_percent: "64.52",
+        actual_share_percent: null,
+        planned_rank: 1,
+        actual_rank: null,
+      },
+      {
+        monthly_item_id: "electricity",
+        name: "电费",
+        category: "ESSENTIAL_EXPENSE",
+        flow_type: "EXPENSE",
+        planned_amount: "300.0000",
+        actual_amount: "427.0000",
+        variance_amount: "127.0000",
+        variance_effect: "UNFAVORABLE",
+        planned_share_percent: "3.23",
+        actual_share_percent: "5.07",
+        planned_rank: 2,
+        actual_rank: 1,
+      },
+    ],
+    important_variances: [
+      {
+        monthly_item_id: "electricity",
+        name: "电费",
+        category: "ESSENTIAL_EXPENSE",
+        flow_type: "EXPENSE",
+        planned_amount: "300.0000",
+        actual_amount: "427.0000",
+        variance_amount: "127.0000",
+        variance_effect: "UNFAVORABLE",
+        planned_share_percent: "3.23",
+        actual_share_percent: "5.07",
+        planned_rank: 2,
+        actual_rank: 1,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+const capacity: FinancialCapacity = {
+  target_month: "2026-08",
+  base_currency: "CNY",
+  minimum_savings_rate_percent: "20.00",
+  stable_income: "30000.0000",
+  variable_income: "3000.0000",
+  essential_expenses: "6000.0000",
+  fixed_commitments: "3000.0000",
+  discretionary_budget: "2000.0000",
+  preserved_capacity: "13000.0000",
+  maximum_capacity: "15000.0000",
+  fixed_commitment_ratio_percent: "10.00",
+  stable_income_coverage_ratio: "3.33",
+};
+
 interface HarnessOptions {
   settings?: Settings | null;
   plans?: PlanItem[];
@@ -102,6 +266,9 @@ interface HarnessOptions {
   startupCreated?: number;
   missingCurrency?: string;
   rejectCommand?: { command: string; error: unknown };
+  analytics?: MonthAnalytics;
+  history?: MonthAnalytics[];
+  capacity?: FinancialCapacity;
 }
 
 function installHarness(options: HarnessOptions = {}) {
@@ -151,6 +318,17 @@ function installHarness(options: HarnessOptions = {}) {
         return Object.keys(monthly) as T;
       case "list_plan_items":
         return plans as T;
+      case "get_month_analytics": {
+        const requestedMonth = args?.month as string;
+        return {
+          ...(options.analytics ?? monthAnalytics()),
+          month: requestedMonth,
+        } as T;
+      }
+      case "get_history_analytics":
+        return { months: options.history ?? [options.analytics ?? monthAnalytics()] } as T;
+      case "get_financial_capacity":
+        return (options.capacity ?? capacity) as T;
       case "preview_plan_item": {
         const request = args?.request as {
           planItem: { recognitionMode: string };
@@ -340,6 +518,7 @@ describe("planning workflows", () => {
       },
     });
     const user = userEvent.setup();
+    window.location.hash = "#/monthly";
     render(<App />);
 
     expect(await screen.findByText(/当前月已自动检查：新增 2 项/)).toBeInTheDocument();
@@ -361,6 +540,7 @@ describe("planning workflows", () => {
   it("browses future and historical months without writes, then explicitly initializes", async () => {
     installHarness();
     const user = userEvent.setup();
+    window.location.hash = "#/monthly";
     render(<App />);
     const picker = await screen.findByLabelText("查看月份");
 
@@ -388,6 +568,7 @@ describe("planning workflows", () => {
   it("requires a temporary rate when a historical snapshot has a missing currency", async () => {
     installHarness({ missingCurrency: "USD" });
     const user = userEvent.setup();
+    window.location.hash = "#/monthly";
     render(<App />);
     fireEvent.change(await screen.findByLabelText("查看月份"), { target: { value: "2025-12" } });
     expect(await screen.findByText("缺少汇率：USD")).toBeInTheDocument();
@@ -402,6 +583,7 @@ describe("planning workflows", () => {
   it("batch confirmation states that existing actual amounts are never overwritten", async () => {
     installHarness({ monthly: { "2026-08": [monthlyItem()] } });
     const user = userEvent.setup();
+    window.location.hash = "#/monthly";
     render(<App />);
     expect(await screen.findByText("确认操作只填充尚未录入项，不覆盖 0 或已有正数。")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "未录入项按计划确认" }));
@@ -423,5 +605,126 @@ describe("planning workflows", () => {
     });
     render(<App />);
     expect(await screen.findByText("已有月度数据，本位币已锁定。")).toBeInTheDocument();
+  });
+});
+
+describe("dashboard and capacity analytics", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    window.location.hash = "";
+  });
+
+  it("labels partial actuals and keeps chart values available in a table", async () => {
+    installHarness();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "本月计划执行到哪里了？" })).toBeInTheDocument();
+    expect(screen.getByText("66.67%")).toBeInTheDocument();
+    expect(screen.getAllByText("当前已录").length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("img", {
+        name: "2026-08 计划与当前实际的收入、支出和净结余柱状图",
+      }),
+    ).toBeInTheDocument();
+    const comparisonTable = screen.getByRole("table", { name: "图表对应数值" });
+    expect(within(comparisonTable).getByText("28700.0000")).toBeInTheDocument();
+    expect(within(comparisonTable).getByText("8427.0000")).toBeInTheDocument();
+    expect(screen.getByText("超支")).toBeInTheDocument();
+    expect(screen.getByText("13000.0000 CNY")).toBeInTheDocument();
+  });
+
+  it("shows N/A for empty actuals and zero-denominator rates", async () => {
+    const emptyComparison = {
+      planned: "0.0000",
+      actual_to_date: null,
+      variance: null,
+      variance_effect: "UNKNOWN" as const,
+    };
+    installHarness({
+      analytics: monthAnalytics({
+        actual_status: "EMPTY",
+        total_item_count: 0,
+        recorded_item_count: 0,
+        completeness_percent: null,
+        income: emptyComparison,
+        expense: emptyComparison,
+        net_balance: emptyComparison,
+        planned_savings_rate_percent: null,
+        actual_savings_rate_percent: null,
+        savings_rate_percentage_point_variance: null,
+        savings_rate_target_completion_percent: null,
+        savings_rate_relative_deviation_percent: null,
+        important_variances: [],
+      }),
+      capacity: {
+        ...capacity,
+        stable_income: "0.0000",
+        fixed_commitment_ratio_percent: null,
+        stable_income_coverage_ratio: null,
+      },
+    });
+    render(<App />);
+
+    expect((await screen.findAllByText("暂无实际")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("N/A").length).toBeGreaterThan(3);
+    expect(screen.getByText("N/A（稳定收入为 0）")).toBeInTheDocument();
+  });
+
+  it("renders historical trends with numerical tables and explicit actual status", async () => {
+    installHarness({
+      history: [
+        monthAnalytics({
+          month: "2026-07",
+          actual_status: "COMPLETE",
+          recorded_item_count: 3,
+          completeness_percent: "100.00",
+        }),
+        monthAnalytics(),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "历史" }));
+
+    expect(await screen.findByRole("heading", { name: "计划与结果如何随时间变化？" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /各月计划与实际收入/ })).toBeInTheDocument();
+    const trendTable = screen.getByRole("table", { name: "财务趋势图对应数值" });
+    expect(within(trendTable).getByText("2026-07")).toBeInTheDocument();
+    expect(within(trendTable).getAllByText("最终实际").length).toBeGreaterThan(0);
+    expect(within(trendTable).getAllByText("当前已录").length).toBeGreaterThan(0);
+  });
+
+  it("uses backend ranks and excludes missing actuals from the actual ranking", async () => {
+    installHarness();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "分析" }));
+
+    expect(await screen.findByRole("heading", { name: "钱的结构与长期负担健康吗？" })).toBeInTheDocument();
+    expect(screen.getAllByText("固定承诺支出").length).toBeGreaterThan(0);
+    expect(screen.getByText("房租")).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("排名依据"), "ACTUAL");
+    expect(screen.queryByText("房租")).not.toBeInTheDocument();
+    const rankingTable = screen.getByRole("table", { name: "项目排名图对应数值" });
+    expect(within(rankingTable).getByText("电费")).toBeInTheDocument();
+    expect(within(rankingTable).getByText("427.0000")).toBeInTheDocument();
+    expect(screen.getByText(/PAYMENT 项目在非支付月份仍计入/)).toBeInTheDocument();
+  });
+
+  it("invalidates month analytics after an actual amount update", async () => {
+    installHarness({ monthly: { "2026-08": [monthlyItem()] } });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "本月计划执行到哪里了？" });
+    const analyticsCallCount = () =>
+      invokeMock.mock.calls.filter(([command]) => command === "get_month_analytics").length;
+    expect(analyticsCallCount()).toBe(1);
+
+    await user.click(screen.getByRole("link", { name: "月度计划" }));
+    await user.type(await screen.findByLabelText("电费 实际金额"), "427");
+    await user.click(screen.getByRole("button", { name: "保存实际" }));
+    await user.click(screen.getByRole("link", { name: "总览" }));
+    await screen.findByRole("heading", { name: "本月计划执行到哪里了？" });
+    await waitFor(() => expect(analyticsCallCount()).toBe(2));
   });
 });

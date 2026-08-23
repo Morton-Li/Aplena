@@ -240,7 +240,7 @@ MVP 需要两种出口：
 | UI | React + TypeScript + Vite | 适合数据密集桌面界面，类型生态成熟，构建边界简单 |
 | 表单 | React Hook Form + Zod | 表单状态与即时输入提示；后端仍是权威校验 |
 | 查询状态 | TanStack Query | 命令后精确失效 Dashboard、历史和计划查询 |
-| 样式与组件 | Tailwind CSS + 无障碍基础组件 | 保持视觉可定制并减少不可访问的自制控件 |
+| 样式与组件 | 版本控制的原生 CSS + 语义化 HTML | 当前规模下避免额外运行依赖，并保持视觉与无障碍细节可审计 |
 | 图表 | Apache ECharts | 趋势、结构、横向排名和无障碍描述能力 |
 | 后端 | Rust | 领域值对象、精确计算和 Tauri 原生边界 |
 | 数据库 | SQLite STRICT + WAL | 单用户嵌入式数据、事务、备份和成熟文件格式 |
