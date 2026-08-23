@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+dist/
+target/
+.cargo-home/
+src-tauri/gen/schemas/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example

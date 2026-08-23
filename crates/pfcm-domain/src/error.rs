@@ -1,0 +1,33 @@
+use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DomainError {
+    #[error("year-month must use YYYY-MM with a year from 1 to 9999")]
+    InvalidYearMonth,
+    #[error("currency code must contain exactly three ASCII letters")]
+    InvalidCurrencyCode,
+    #[error("amount must be a finite decimal number")]
+    InvalidAmount,
+    #[error("amount cannot be negative")]
+    NegativeAmount,
+    #[error("amount is outside the supported i64 scaled range")]
+    AmountOutOfRange,
+    #[error("exchange rate must be greater than zero")]
+    InvalidExchangeRate,
+    #[error("savings rate must be between 0 and 10000 basis points")]
+    InvalidSavingsRate,
+    #[error("ratio cannot be negative")]
+    InvalidRatio,
+    #[error("plan item name cannot be empty")]
+    EmptyPlanItemName,
+    #[error("period must be a positive number of months")]
+    InvalidPeriod,
+    #[error("end month cannot be earlier than start month")]
+    EndBeforeStart,
+    #[error("exchange rate currency pair does not match the requested conversion")]
+    CurrencyMismatch,
+    #[error("all capacity inputs must use the same base currency")]
+    BaseCurrencyMismatch,
+    #[error("decimal arithmetic overflow")]
+    ArithmeticOverflow,
+}

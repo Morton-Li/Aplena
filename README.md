@@ -10,8 +10,12 @@ Aplena 不是逐笔记账软件。它维护长期计划，将计划冻结为独�
 
 ## 当前阶段
 
-仓库目前处于产品与技术基线阶段，尚未生成应用脚手架，也没有可运行的应用代码或本地
-依赖。第一阶段冻结产品边界、领域规则、数据约束、用户流程和架构决策。
+第二阶段“可执行工程与领域内核”已经落地：仓库包含可运行的 Tauri 2 + React +
+TypeScript + Vite 桌面应用骨架、独立 `pfcm-domain` Rust 包、受限 Tauri IPC 边界和自动化
+测试。第一阶段冻结的产品与架构文档仍是后续实现的权威基线。
+
+当前 UI 只用于证明 React 与真实 Rust 命令已经打通，不展示虚构财务数据。SQLite、自动月度
+初始化和完整业务页面属于后续阶段。
 
 ## 已冻结的核心原则
 
@@ -38,7 +42,7 @@ Aplena 不是逐笔记账软件。它维护长期计划，将计划冻结为独�
 - [ADR：月度自动初始化](docs/adr/0003-automatic-month-initialization.md)
 - [ADR：金额、月份与舍入](docs/adr/0004-money-date-and-rounding.md)
 
-## 预定技术栈
+## 技术栈
 
 - Tauri 2、Rust、React、TypeScript、Vite
 - SQLite STRICT、WAL、SQLx、版本化 SQL migrations
@@ -47,6 +51,67 @@ Aplena 不是逐笔记账软件。它维护长期计划，将计划冻结为独�
 
 前端不直接访问数据库。所有权威校验、财务计算和数据写入都通过有限的 Tauri 业务命令
 进入 Rust 应用层。
+
+当前依赖已由 `Cargo.lock` 和 `pnpm-lock.yaml` 锁定。第二阶段只引入运行领域内核和最小
+应用骨架所需的包；数据库、表单、查询、图表和端到端测试依赖将在对应阶段按需加入。
+
+## 工程结构
+
+```text
+crates/pfcm-domain/   与 Tauri、SQLite、React 无关的纯 Rust 领域层
+src-tauri/            Tauri 应用层、IPC DTO、稳定错误结构和桌面入口
+src/                  React 最小应用壳与前端命令适配器
+docs/                 产品、领域、架构、数据库与路线图基线
+```
+
+领域层已实现：
+
+- `YearMonth`、`CurrencyCode`、四位金额、八位汇率和基点储蓄率；
+- 五种固定类别及派生收支方向；
+- `AMORTIZED`（按月均摊）与 `PAYMENT`（支付月确认）；
+- 独立 `MonthlyItem` 快照以及未录入实际值和实际零值的区分；
+- 按月均负担计算的保留预算后承载力、最大承载力、固定承诺占比和稳定收入覆盖倍数；
+- 所有金额与比率通过 IPC 使用十进制字符串传输。
+
+## 本地运行
+
+前置条件：Node.js、pnpm、Rust stable 和 macOS Command Line Tools。安装项目依赖：
+
+```bash
+pnpm install --frozen-lockfile
+```
+
+启动桌面开发模式：
+
+```bash
+pnpm tauri dev
+```
+
+如果 Homebrew `rustup` 未加入全局 `PATH`，无需修改 shell 配置；可以只为当前命令临时提供
+`/opt/homebrew/opt/rustup/bin`。这不会影响已经运行的其他任务。
+
+## 验证命令
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo check --workspace
+pnpm tauri build --no-bundle
+```
+
+最后一条命令只生成未签名的本地可执行文件，不制作或发布安装包。macOS 签名、公证、
+Windows 构建和真实发布仍需在后续发布阶段单独验证。
+
+## 第二阶段边界
+
+本阶段明确没有实现 SQLite、SQLx、migration、Repository、计划 CRUD、月度自动初始化、
+Dashboard 或真实财务数据持久化。上述能力不得在前端临时模拟；下一阶段将先实现事务化
+持久化和幂等快照生成，再由后续 UI 阶段使用。
 
 ## 分支模型
 
