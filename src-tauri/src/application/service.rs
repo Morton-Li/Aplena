@@ -6,8 +6,9 @@ use std::{
 
 use chrono::{Datelike, Local, Utc};
 use pfcm_domain::{
-    Amount, CapacityInput, Category, CurrencyCode, ExchangeRate, PlanItem, RecognitionMode,
-    Settings, YearMonth, calculate_financial_capacity, create_monthly_snapshot, is_recognized_in,
+    ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, CapacityInput,
+    Category, CurrencyCode, ExchangeRate, MonthlyItem, PlanItem, RecognitionMode, Settings,
+    YearMonth, calculate_financial_capacity, create_monthly_snapshot, is_recognized_in,
 };
 use rust_decimal::{Decimal, RoundingStrategy};
 use sqlx::Executor;
@@ -15,19 +16,21 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::infrastructure::{
-    DeletePlanResult, Store, StoredExchangeRate, StoredMonthlyItem, StoredPlanItem, StoredSettings,
+    DeletePlanResult, Store, StoredActualEntry, StoredExchangeRate, StoredMonthlyItem,
+    StoredPlanItem, StoredSettings,
 };
 
 use super::{
     analytics::build_month_analytics,
     data_protection::DataProtectionState,
     dto::{
-        ConfirmActualsDto, ConfirmActualsInputDto, DeletePlanItemDto, ExchangeRateDto,
+        ActualEntryDto, ActualEntryInputDto, ConfirmActualsDto, ConfirmActualsInputDto,
+        ConfirmMonthlyItemInputDto, DeletePlanItemDto, EnsureActualOnlyInputDto, ExchangeRateDto,
         ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
         InitializeMonthInputDto, MonthAnalyticsDto, MonthInitializationStatusDto, MonthPreviewDto,
-        MonthPreviewItemDto, MonthlyActualInputDto, MonthlyItemDto, MonthlyNoteInputDto,
-        PlanItemDto, PlanItemInputDto, PlanMutationDto, RateOverrideDto, SettingsDto,
-        SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
+        MonthPreviewItemDto, MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto,
+        PlanMutationDto, RateOverrideDto, SettingsDto, SettingsInputDto, StartupStatusDto,
+        StopPlanItemRequestDto,
     },
     error::AppError,
 };
@@ -260,7 +263,7 @@ impl FinanceService {
             .get_plan_item(id)
             .await
             .map_err(AppError::from)?;
-        let end_month = parse_month(&input.end_month, "endMonth")?;
+        let end_date = parse_date(&input.end_date, "endDate")?;
         let value = &stored.value;
         let stopped = PlanItem::new(
             value.id(),
@@ -269,8 +272,8 @@ impl FinanceService {
             value.amount(),
             value.currency().clone(),
             value.period_months(),
-            value.start_month(),
-            Some(end_month),
+            value.start_date(),
+            Some(end_date),
             value.recognition_mode(),
             value.note().map(str::to_owned),
         )
@@ -305,21 +308,133 @@ impl FinanceService {
             .map(|items| items.into_iter().map(monthly_item_dto).collect())
     }
 
-    pub async fn update_monthly_actual(
+    pub async fn ensure_actual_only(
         &self,
-        input: MonthlyActualInputDto,
+        input: EnsureActualOnlyInputDto,
     ) -> Result<MonthlyItemDto, AppError> {
         let _operation = self.operation_gate.read().await;
-        let id = parse_uuid(&input.id, "id")?;
-        let actual_amount = input
-            .actual_amount
-            .as_deref()
-            .map(Amount::from_str)
-            .transpose()
-            .map_err(|error| AppError::from_domain(error, Some("actualAmount")))?;
+        let plan_id = parse_uuid(&input.plan_item_id, "planItemId")?;
+        let month = parse_month(&input.month, "month")?;
+        let store = self.current_store().await;
+        if let Some(existing) = store
+            .get_monthly_item_by_source_month(plan_id, month)
+            .await
+            .map_err(AppError::from)?
+        {
+            return Ok(monthly_item_dto(existing));
+        }
+        let plan = store.get_plan_item(plan_id).await.map_err(AppError::from)?;
+        let settings = self.require_settings().await?;
+        let monthly = MonthlyItem::actual_only(
+            Uuid::new_v4(),
+            &plan.value,
+            month,
+            settings.value.base_currency().clone(),
+        );
+        store
+            .insert_monthly_item(&monthly, &timestamp())
+            .await
+            .map_err(AppError::from)
+            .map(monthly_item_dto)
+    }
+
+    pub async fn list_actual_entries(
+        &self,
+        monthly_item_id: String,
+    ) -> Result<Vec<ActualEntryDto>, AppError> {
+        let _operation = self.operation_gate.read().await;
         self.current_store()
             .await
-            .update_monthly_actual(id, actual_amount, &timestamp())
+            .list_actual_entries(parse_uuid(&monthly_item_id, "monthlyItemId")?)
+            .await
+            .map_err(AppError::from)
+            .map(|entries| entries.into_iter().map(actual_entry_dto).collect())
+    }
+
+    pub async fn create_actual_entry(
+        &self,
+        input: ActualEntryInputDto,
+    ) -> Result<ActualEntryDto, AppError> {
+        let _operation = self.operation_gate.read().await;
+        let monthly_item_id = parse_uuid(&input.monthly_item_id, "monthlyItemId")?;
+        let monthly = self
+            .current_store()
+            .await
+            .get_monthly_item(monthly_item_id)
+            .await
+            .map_err(AppError::from)?;
+        if monthly.value.source_plan_item_id().is_none() {
+            return Err(AppError::business(
+                "DELETED_PLAN_CANNOT_ACCEPT_ENTRY",
+                "error.deleted_plan_cannot_accept_entry",
+            ));
+        }
+        let entry = parse_actual_entry(input, Uuid::new_v4(), monthly.value.month())?;
+        self.current_store()
+            .await
+            .insert_actual_entry(&entry, &timestamp())
+            .await
+            .map_err(AppError::from)
+            .map(actual_entry_dto)
+    }
+
+    pub async fn update_actual_entry(
+        &self,
+        input: ActualEntryInputDto,
+    ) -> Result<ActualEntryDto, AppError> {
+        let _operation = self.operation_gate.read().await;
+        let id = input
+            .id
+            .as_deref()
+            .map(|value| parse_uuid(value, "id"))
+            .transpose()?
+            .ok_or_else(|| AppError::validation("ID_REQUIRED", "id", "error.id_required"))?;
+        let monthly_item_id = parse_uuid(&input.monthly_item_id, "monthlyItemId")?;
+        let existing = self
+            .current_store()
+            .await
+            .get_actual_entry(id)
+            .await
+            .map_err(AppError::from)?;
+        if existing.value.monthly_item_id() != monthly_item_id {
+            return Err(AppError::validation(
+                "ACTUAL_ENTRY_REPARENT_FORBIDDEN",
+                "monthlyItemId",
+                "error.actual_entry_reparent_forbidden",
+            ));
+        }
+        let monthly = self
+            .current_store()
+            .await
+            .get_monthly_item(monthly_item_id)
+            .await
+            .map_err(AppError::from)?;
+        let entry = parse_actual_entry(input, id, monthly.value.month())?;
+        self.current_store()
+            .await
+            .update_actual_entry(&entry, &timestamp())
+            .await
+            .map_err(AppError::from)
+            .map(actual_entry_dto)
+    }
+
+    pub async fn delete_actual_entry(&self, id: String) -> Result<(), AppError> {
+        let _operation = self.operation_gate.read().await;
+        self.current_store()
+            .await
+            .delete_actual_entry(parse_uuid(&id, "id")?)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub async fn confirm_monthly_item(
+        &self,
+        input: ConfirmMonthlyItemInputDto,
+    ) -> Result<MonthlyItemDto, AppError> {
+        let _operation = self.operation_gate.read().await;
+        self.current_store()
+            .await
+            .confirm_monthly_item(parse_uuid(&input.id, "id")?, &timestamp())
             .await
             .map_err(AppError::from)
             .map(monthly_item_dto)
@@ -357,7 +472,7 @@ impl FinanceService {
         let updated_count = self
             .current_store()
             .await
-            .confirm_unset_actuals(month, category, &timestamp())
+            .confirm_actuals(month, category, &timestamp())
             .await
             .map_err(AppError::from)?;
         Ok(ConfirmActualsDto { updated_count })
@@ -535,6 +650,11 @@ impl FinanceService {
             .iter()
             .filter_map(|item| item.value.source_plan_item_id())
             .collect::<HashSet<_>>();
+        let actual_only_ids = existing
+            .iter()
+            .filter(|item| item.value.item_source() == pfcm_domain::MonthlyItemSource::ActualOnly)
+            .filter_map(|item| item.value.source_plan_item_id())
+            .collect::<HashSet<_>>();
         let plans = self
             .current_store()
             .await
@@ -548,35 +668,36 @@ impl FinanceService {
 
         for stored in plans {
             let plan = stored.value;
-            let (status, planned_amount) = if existing_ids.contains(&plan.id()) {
-                ("EXISTING", None)
-            } else if !is_recognized_in(&plan, month) {
-                excluded_count += 1;
-                ("EXCLUDED", None)
-            } else {
-                match self
-                    .rate_for(plan.currency(), settings.value.base_currency(), &overrides)
-                    .await?
-                {
-                    Some(rate) => {
-                        let snapshot = create_monthly_snapshot(
-                            Uuid::new_v4(),
-                            &plan,
-                            month,
-                            &rate,
-                            settings.value.base_currency(),
-                        )
-                        .map_err(|error| AppError::from_domain(error, None))?
-                        .expect("recognized plan produces a snapshot");
-                        candidate_count += 1;
-                        ("READY", Some(snapshot.planned_amount().decimal_string()))
+            let (status, planned_amount) =
+                if existing_ids.contains(&plan.id()) && !actual_only_ids.contains(&plan.id()) {
+                    ("EXISTING", None)
+                } else if !is_recognized_in(&plan, month) {
+                    excluded_count += 1;
+                    ("EXCLUDED", None)
+                } else {
+                    match self
+                        .rate_for(plan.currency(), settings.value.base_currency(), &overrides)
+                        .await?
+                    {
+                        Some(rate) => {
+                            let snapshot = create_monthly_snapshot(
+                                Uuid::new_v4(),
+                                &plan,
+                                month,
+                                &rate,
+                                settings.value.base_currency(),
+                            )
+                            .map_err(|error| AppError::from_domain(error, None))?
+                            .expect("recognized plan produces a snapshot");
+                            candidate_count += 1;
+                            ("READY", Some(snapshot.planned_amount().decimal_string()))
+                        }
+                        None => {
+                            missing_currencies.insert(plan.currency().to_string());
+                            ("MISSING_RATE", None)
+                        }
                     }
-                    None => {
-                        missing_currencies.insert(plan.currency().to_string());
-                        ("MISSING_RATE", None)
-                    }
-                }
-            };
+                };
             items.push(MonthPreviewItemDto {
                 source_plan_item_id: plan.id().to_string(),
                 name: plan.name().to_owned(),
@@ -707,13 +828,18 @@ impl FinanceService {
                 .map_err(AppError::from)?
                 .into_iter()
                 .collect::<HashSet<_>>();
+            let actual_only = Store::actual_only_source_ids_on(&mut connection, month)
+                .await
+                .map_err(AppError::from)?
+                .into_iter()
+                .collect::<HashSet<_>>();
             let mut snapshots = Vec::new();
             let mut skipped_existing_count = 0_u64;
             let mut excluded_count = 0_u64;
 
             for stored in plans {
                 let plan = stored.value;
-                if existing.contains(&plan.id()) {
+                if existing.contains(&plan.id()) && !actual_only.contains(&plan.id()) {
                     skipped_existing_count += 1;
                     continue;
                 }
@@ -814,14 +940,34 @@ fn parse_plan_item(input: PlanItemInputDto, id_required: bool) -> Result<PlanIte
         CurrencyCode::new(&input.currency)
             .map_err(|error| AppError::from_domain(error, Some("currency")))?,
         input.period_months,
-        parse_month(&input.start_month, "startMonth")?,
+        parse_date(&input.start_date, "startDate")?,
         input
-            .end_month
+            .end_date
             .as_deref()
-            .map(|month| parse_month(month, "endMonth"))
+            .map(|date| parse_date(date, "endDate"))
             .transpose()?,
         RecognitionMode::from_str(&input.recognition_mode)
             .map_err(|error| AppError::from_domain(error, Some("recognitionMode")))?,
+        input.note,
+    )
+    .map_err(|error| AppError::from_domain(error, None))
+}
+
+fn parse_actual_entry(
+    input: ActualEntryInputDto,
+    id: Uuid,
+    month: YearMonth,
+) -> Result<ActualEntry, AppError> {
+    ActualEntry::new(
+        id,
+        parse_uuid(&input.monthly_item_id, "monthlyItemId")?,
+        month,
+        parse_date(&input.occurred_on, "occurredOn")?,
+        ActualEntryEffect::from_str(&input.effect)
+            .map_err(|error| AppError::from_domain(error, Some("effect")))?,
+        Amount::from_str(&input.amount)
+            .map_err(|error| AppError::from_domain(error, Some("amount")))?,
+        ActualEntryOrigin::User,
         input.note,
     )
     .map_err(|error| AppError::from_domain(error, None))
@@ -844,6 +990,10 @@ fn parse_rate_overrides(
 
 fn parse_month(value: &str, field: &str) -> Result<YearMonth, AppError> {
     YearMonth::from_str(value).map_err(|error| AppError::from_domain(error, Some(field)))
+}
+
+fn parse_date(value: &str, field: &str) -> Result<CalendarDate, AppError> {
+    CalendarDate::from_str(value).map_err(|error| AppError::from_domain(error, Some(field)))
 }
 
 fn parse_uuid(value: &str, field: &str) -> Result<Uuid, AppError> {
@@ -916,8 +1066,8 @@ fn plan_item_dto(stored: StoredPlanItem) -> PlanItemDto {
         planned_amount: value.amount().decimal_string(),
         currency: value.currency().to_string(),
         period_months: value.period_months(),
-        start_month: value.start_month().to_string(),
-        end_month: value.end_month().map(|month| month.to_string()),
+        start_date: value.start_date().to_string(),
+        end_date: value.end_date().map(|date| date.to_string()),
         recognition_mode: value.recognition_mode().code().to_owned(),
         note: value.note().map(str::to_owned),
         created_at: stored.created_at,
@@ -935,7 +1085,7 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
                 .as_decimal()
                 .checked_sub(value.planned_amount().as_decimal())
                 .expect("two valid i64-scaled amounts have a representable decimal difference"),
-            4,
+            2,
         )
     });
     let completion_rate_percent = actual.and_then(|actual| {
@@ -952,23 +1102,19 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
             ))
         }
     });
-    let data_status = match actual {
-        None => "MISSING",
-        Some(actual) if actual == Amount::zero() => "CONFIRMED_ZERO",
-        Some(_) => "RECORDED",
-    };
+    let data_status = value.actual_data_status().code();
     let variance_effect = match actual {
         None => "UNKNOWN",
-        Some(actual) if actual == value.planned_amount() => "ON_PLAN",
+        Some(actual) if actual.as_decimal() == value.planned_amount().as_decimal() => "ON_PLAN",
         Some(actual) if value.flow_type() == pfcm_domain::FlowType::Income => {
-            if actual > value.planned_amount() {
+            if actual.as_decimal() > value.planned_amount().as_decimal() {
                 "FAVORABLE"
             } else {
                 "UNFAVORABLE"
             }
         }
         Some(actual) => {
-            if actual < value.planned_amount() {
+            if actual.as_decimal() < value.planned_amount().as_decimal() {
                 "FAVORABLE"
             } else {
                 "UNFAVORABLE"
@@ -983,13 +1129,32 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
         category: value.category().code().to_owned(),
         flow_type: value.flow_type().code().to_owned(),
         recognition_mode: value.recognition_mode().code().to_owned(),
+        item_source: value.item_source().code().to_owned(),
+        scheduled_date: value.scheduled_date().map(|date| date.to_string()),
         planned_amount: value.planned_amount().decimal_string(),
-        actual_amount: actual.map(Amount::decimal_string),
+        actual_amount: actual.map(pfcm_domain::SignedAmount::decimal_string),
+        actual_entry_count: value.actual_entry_count(),
+        actual_confirmed_at: value.actual_confirmed_at().map(str::to_owned),
         variance_amount,
         completion_rate_percent,
         data_status: data_status.to_owned(),
         variance_effect: variance_effect.to_owned(),
         currency: value.currency().to_string(),
+        note: value.note().map(str::to_owned),
+        created_at: stored.created_at,
+        updated_at: stored.updated_at,
+    }
+}
+
+fn actual_entry_dto(stored: StoredActualEntry) -> ActualEntryDto {
+    let value = stored.value;
+    ActualEntryDto {
+        id: value.id().to_string(),
+        monthly_item_id: value.monthly_item_id().to_string(),
+        occurred_on: value.occurred_on().to_string(),
+        effect: value.effect().code().to_owned(),
+        amount: value.amount().decimal_string(),
+        origin: value.origin().code().to_owned(),
         note: value.note().map(str::to_owned),
         created_at: stored.created_at,
         updated_at: stored.updated_at,

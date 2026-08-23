@@ -8,16 +8,17 @@ use chrono::{Datelike, Local};
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::infrastructure::{
-    StoreError, create_version_one_fixture, open_database,
+    StoreError, create_version_one_fixture, create_version_two_fixture, open_database,
     protection::{
-        self, BACKUP_FORMAT_VERSION, BackupManifest, ProtectionError, extract_and_verify_archive,
+        self, BACKUP_FORMAT, BACKUP_FORMAT_VERSION, BackupManifest, ProtectionError,
+        extract_and_verify_archive,
     },
 };
 
 use super::{
     dto::{
-        ExchangeRateUpsertDto, MonthlyActualInputDto, PlanItemInputDto, RestoreBackupInputDto,
-        SettingsInputDto,
+        ActualEntryInputDto, ConfirmMonthlyItemInputDto, ExchangeRateUpsertDto, PlanItemInputDto,
+        RestoreBackupInputDto, SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -49,9 +50,20 @@ fn plan(name: &str, amount: &str, note: Option<&str>) -> PlanItemInputDto {
         planned_amount: amount.to_owned(),
         currency: "CNY".to_owned(),
         period_months: 1,
-        start_month: current_month(),
-        end_month: None,
+        start_date: format!("{}-01", current_month()),
+        end_date: None,
         recognition_mode: "AMORTIZED".to_owned(),
+        note: note.map(str::to_owned),
+    }
+}
+
+fn entry_input(monthly_item_id: &str, amount: &str, note: Option<&str>) -> ActualEntryInputDto {
+    ActualEntryInputDto {
+        id: None,
+        monthly_item_id: monthly_item_id.to_owned(),
+        occurred_on: format!("{}-01", current_month()),
+        effect: "INCREASE".to_owned(),
+        amount: amount.to_owned(),
         note: note.map(str::to_owned),
     }
 }
@@ -76,9 +88,8 @@ async fn populated_service(root: &Path) -> FinanceService {
     let items = service.list_monthly_items(current_month()).await.unwrap();
     let rent = items.iter().find(|item| item.item_name == "房租").unwrap();
     service
-        .update_monthly_actual(MonthlyActualInputDto {
+        .confirm_monthly_item(ConfirmMonthlyItemInputDto {
             id: rent.id.clone(),
-            actual_amount: Some("0".to_owned()),
         })
         .await
         .unwrap();
@@ -107,7 +118,7 @@ async fn full_backup_round_trip_restores_all_tables_orphans_null_zero_and_analyt
     assert!(
         before_items
             .iter()
-            .any(|item| item.actual_amount.as_deref() == Some("0.0000"))
+            .any(|item| item.actual_amount.as_deref() == Some("0.00"))
     );
 
     let backup = root.path().join("round-trip.aplena");
@@ -117,10 +128,7 @@ async fn full_backup_round_trip_restores_all_tables_orphans_null_zero_and_analyt
         .find(|item| item.item_name == "房租")
         .unwrap();
     service
-        .update_monthly_actual(MonthlyActualInputDto {
-            id: changed_item.id.clone(),
-            actual_amount: Some("9999".to_owned()),
-        })
+        .create_actual_entry(entry_input(&changed_item.id, "9999", None))
         .await
         .unwrap();
     service
@@ -162,6 +170,58 @@ async fn full_backup_round_trip_restores_all_tables_orphans_null_zero_and_analyt
             .unwrap()
             .count(),
         0
+    );
+}
+
+#[tokio::test]
+async fn version_one_backup_is_inspected_forward_migrated_and_restored() {
+    let root = tempfile::tempdir().unwrap();
+    let service = populated_service(root.path()).await;
+    let old_database = root.path().join("version-one.sqlite3");
+    create_version_two_fixture(&old_database).await.unwrap();
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", old_database.display()))
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO exchange_rates VALUES ('CNY', 100000000, 't')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO settings VALUES (1, '2026-01-01', 'CNY', 2000, 't', 't')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let summary = protection::database_summary(&pool).await.unwrap();
+    pool.close().await;
+    let database = fs::read(&old_database).unwrap();
+    let manifest = BackupManifest {
+        backup_format: BACKUP_FORMAT.to_owned(),
+        format_version: 1,
+        app_version: "0.1.0".to_owned(),
+        schema_version: 2,
+        created_at: "2026-01-01T00:00:00Z".to_owned(),
+        database_file: "database.sqlite3".to_owned(),
+        database_size_bytes: u64::try_from(database.len()).unwrap(),
+        database_sha256: protection::sha256_file(&old_database).unwrap(),
+        summary,
+    };
+    let archive = root.path().join("version-one.aplena");
+    write_backup(&archive, &manifest, &database);
+    let inspection = service.inspect_backup_at(archive).await.unwrap();
+    assert!(inspection.migrations_applied);
+    assert_eq!(inspection.schema_version, Some(2));
+    assert_eq!(inspection.summary.as_ref().unwrap().actual_entry_count, 0);
+    let result = service
+        .restore_inspected_backup(RestoreBackupInputDto {
+            token: inspection.token.unwrap(),
+            confirmed: true,
+            confirmation_phrase: "恢复".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.summary.actual_entry_count, 0);
+    assert_eq!(
+        service.get_settings().await.unwrap().unwrap().target_month,
+        "2026-01"
     );
 }
 
@@ -236,6 +296,7 @@ async fn csv_export_is_deterministic_rfc_quoted_formula_safe_and_preserves_null_
         "exchange_rates.csv",
         "plan_items.csv",
         "monthly_items.csv",
+        "actual_entries.csv",
     ] {
         assert_eq!(
             fs::read(first.join(name)).unwrap(),
@@ -250,9 +311,9 @@ async fn csv_export_is_deterministic_rfc_quoted_formula_safe_and_preserves_null_
     assert_eq!(&plan_row[13], "'@危险,备注\n第二行");
     let mut monthly = csv::Reader::from_path(first.join("monthly_items.csv")).unwrap();
     let monthly_row = monthly.records().next().unwrap().unwrap();
-    assert_eq!(&monthly_row[10], "12.5000");
-    assert_eq!(&monthly_row[11], "");
-    assert_eq!(&monthly_row[12], "MISSING");
+    assert_eq!(&monthly_row[12], "12.50");
+    assert_eq!(&monthly_row[13], "");
+    assert_eq!(&monthly_row[16], "MISSING");
 }
 
 #[tokio::test]
@@ -270,10 +331,7 @@ async fn wal_backup_remains_valid_during_concurrent_actual_updates_and_repeated_
     let writer = tokio::spawn(async move {
         for value in 1..=20 {
             writer_service
-                .update_monthly_actual(MonthlyActualInputDto {
-                    id: item.id.clone(),
-                    actual_amount: Some(value.to_string()),
-                })
+                .create_actual_entry(entry_input(&item.id, &value.to_string(), None))
                 .await
                 .unwrap();
         }
@@ -316,10 +374,7 @@ async fn restore_serializes_concurrent_requests_and_consumes_the_token_once() {
     let restore_service = service.clone();
     let update = tokio::spawn(async move {
         update_service
-            .update_monthly_actual(MonthlyActualInputDto {
-                id: item.id,
-                actual_amount: Some("88".to_owned()),
-            })
+            .create_actual_entry(entry_input(&item.id, "88", None))
             .await
     });
     let restore_token = token.clone();

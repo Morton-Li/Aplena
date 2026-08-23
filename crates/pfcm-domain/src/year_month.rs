@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-use crate::DomainError;
+use crate::{CalendarDate, DomainError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct YearMonth {
@@ -29,6 +29,26 @@ impl YearMonth {
 
     pub fn database_anchor(self) -> String {
         format!("{self}-01")
+    }
+
+    pub fn first_date(self) -> CalendarDate {
+        CalendarDate::new(self.year, u32::from(self.month), 1)
+            .expect("valid year-month always has a first day")
+    }
+
+    pub fn last_day(self) -> u32 {
+        match self.month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if self.year % 400 == 0 || (self.year % 4 == 0 && self.year % 100 != 0) => 29,
+            2 => 28,
+            _ => unreachable!("YearMonth invariant guarantees valid month"),
+        }
+    }
+
+    pub fn date_clamped_to_day(self, day: u32) -> CalendarDate {
+        CalendarDate::new(self.year, u32::from(self.month), day.min(self.last_day()))
+            .expect("clamped day is valid")
     }
 
     pub fn from_database_anchor(value: &str) -> Result<Self, DomainError> {

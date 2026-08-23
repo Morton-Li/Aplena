@@ -50,6 +50,7 @@ impl AppError {
                 ("INVALID_CURRENCY_CODE", "error.invalid_currency_code")
             }
             DomainError::InvalidAmount => ("INVALID_AMOUNT", "error.invalid_amount"),
+            DomainError::AmountTooPrecise => ("AMOUNT_TOO_PRECISE", "error.amount_too_precise"),
             DomainError::NegativeAmount => ("NEGATIVE_AMOUNT", "error.negative_amount"),
             DomainError::AmountOutOfRange => ("AMOUNT_OUT_OF_RANGE", "error.amount_out_of_range"),
             DomainError::InvalidExchangeRate => {
@@ -73,6 +74,29 @@ impl AppError {
             }
             DomainError::InvalidPeriod => ("INVALID_PERIOD", "error.invalid_period"),
             DomainError::EndBeforeStart => ("END_BEFORE_START", "error.end_before_start"),
+            DomainError::InvalidDate => ("INVALID_DATE", "error.invalid_date"),
+            DomainError::EndDateBeforeStart => {
+                ("END_DATE_BEFORE_START", "error.end_date_before_start")
+            }
+            DomainError::ZeroActualEntryAmount => {
+                ("ZERO_ACTUAL_ENTRY_AMOUNT", "error.zero_actual_entry_amount")
+            }
+            DomainError::ActualEntryDateOutsideMonth => (
+                "ACTUAL_ENTRY_DATE_OUTSIDE_MONTH",
+                "error.actual_entry_date_outside_month",
+            ),
+            DomainError::InvalidActualEntryEffect => (
+                "INVALID_ACTUAL_ENTRY_EFFECT",
+                "error.invalid_actual_entry_effect",
+            ),
+            DomainError::InvalidActualEntryOrigin => (
+                "INVALID_ACTUAL_ENTRY_ORIGIN",
+                "error.invalid_actual_entry_origin",
+            ),
+            DomainError::InvalidMonthlyItemSource => (
+                "INVALID_MONTHLY_ITEM_SOURCE",
+                "error.invalid_monthly_item_source",
+            ),
             DomainError::CurrencyMismatch => ("CURRENCY_MISMATCH", "error.currency_mismatch"),
             DomainError::BaseCurrencyMismatch => {
                 ("BASE_CURRENCY_MISMATCH", "error.base_currency_mismatch")

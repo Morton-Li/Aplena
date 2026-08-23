@@ -1,9 +1,9 @@
 use std::str::FromStr;
 
 use pfcm_domain::{
-    Amount, CapacityInput, Category, CurrencyCode, ExchangeRate, PlanItem, RecognitionMode,
-    SavingsRate, YearMonth, calculate_financial_capacity, is_effective_in, monthly_equivalent,
-    recognized_amount,
+    Amount, CalendarDate, CapacityInput, Category, CurrencyCode, ExchangeRate, PlanItem,
+    RecognitionMode, SavingsRate, YearMonth, calculate_financial_capacity, is_effective_in,
+    monthly_equivalent, recognized_amount, scheduled_date_for_month,
 };
 use uuid::Uuid;
 
@@ -12,14 +12,15 @@ use tauri_plugin_dialog::DialogExt;
 
 use super::{
     dto::{
-        BackupResultDto, CapacityDto, CapacityRequestDto, ConfirmActualsDto,
-        ConfirmActualsInputDto, CsvExportResultDto, DeletePlanItemDto, DomainContractDto,
-        EnumOptionDto, ExchangeRateDto, ExchangeRateInputDto, ExchangeRateUpsertDto,
-        FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto,
-        MonthAnalyticsDto, MonthInitializationStatusDto, MonthPreviewDto, MonthlyActualInputDto,
-        MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto, PlanMutationDto,
-        PlanPreviewDto, PlanPreviewRequestDto, RestoreBackupInputDto, RestoreInspectionDto,
-        RestoreResultDto, SettingsDto, SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
+        ActualEntryDto, ActualEntryInputDto, BackupResultDto, CapacityDto, CapacityRequestDto,
+        ConfirmActualsDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto, CsvExportResultDto,
+        DeletePlanItemDto, DomainContractDto, EnsureActualOnlyInputDto, EnumOptionDto,
+        ExchangeRateDto, ExchangeRateInputDto, ExchangeRateUpsertDto, FinancialCapacityDto,
+        HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto, MonthAnalyticsDto,
+        MonthInitializationStatusDto, MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto,
+        PlanItemDto, PlanItemInputDto, PlanMutationDto, PlanPreviewDto, PlanPreviewRequestDto,
+        RestoreBackupInputDto, RestoreInspectionDto, RestoreResultDto, SettingsDto,
+        SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
     },
     error::AppError,
     service::FinanceService,
@@ -118,11 +119,51 @@ pub async fn list_monthly_items(
 }
 
 #[tauri::command]
-pub async fn update_monthly_actual(
+pub async fn ensure_actual_only_monthly_item(
     service: State<'_, FinanceService>,
-    input: MonthlyActualInputDto,
+    input: EnsureActualOnlyInputDto,
 ) -> Result<MonthlyItemDto, AppError> {
-    service.update_monthly_actual(input).await
+    service.ensure_actual_only(input).await
+}
+
+#[tauri::command]
+pub async fn list_actual_entries(
+    service: State<'_, FinanceService>,
+    monthly_item_id: String,
+) -> Result<Vec<ActualEntryDto>, AppError> {
+    service.list_actual_entries(monthly_item_id).await
+}
+
+#[tauri::command]
+pub async fn create_actual_entry(
+    service: State<'_, FinanceService>,
+    input: ActualEntryInputDto,
+) -> Result<ActualEntryDto, AppError> {
+    service.create_actual_entry(input).await
+}
+
+#[tauri::command]
+pub async fn update_actual_entry(
+    service: State<'_, FinanceService>,
+    input: ActualEntryInputDto,
+) -> Result<ActualEntryDto, AppError> {
+    service.update_actual_entry(input).await
+}
+
+#[tauri::command]
+pub async fn delete_actual_entry(
+    service: State<'_, FinanceService>,
+    id: String,
+) -> Result<(), AppError> {
+    service.delete_actual_entry(id).await
+}
+
+#[tauri::command]
+pub async fn confirm_monthly_item(
+    service: State<'_, FinanceService>,
+    input: ConfirmMonthlyItemInputDto,
+) -> Result<MonthlyItemDto, AppError> {
+    service.confirm_monthly_item(input).await
 }
 
 #[tauri::command]
@@ -305,7 +346,7 @@ pub fn get_domain_contract() -> DomainContractDto {
             option("AMORTIZED", "按月均摊"),
             option("PAYMENT", "按支付月份确认"),
         ],
-        amount_decimal_places: 4,
+        amount_decimal_places: 2,
         exchange_rate_decimal_places: 8,
     }
 }
@@ -326,6 +367,8 @@ pub fn preview_plan_item(request: PlanPreviewRequestDto) -> Result<PlanPreviewDt
         recognized_in_target_month: recognized.is_some(),
         monthly_equivalent: equivalent.map(Amount::decimal_string),
         recognized_amount: recognized.map(Amount::decimal_string),
+        scheduled_date: scheduled_date_for_month(&plan_item, target_month)
+            .map(|date| date.to_string()),
         base_currency: base_currency.to_string(),
     })
 }
@@ -396,11 +439,11 @@ fn parse_plan_item(input: PlanItemInputDto) -> Result<PlanItem, AppError> {
         .map_err(|error| AppError::from_domain(error, Some("plannedAmount")))?;
     let currency = CurrencyCode::new(&input.currency)
         .map_err(|error| AppError::from_domain(error, Some("currency")))?;
-    let start_month = parse_month(&input.start_month, "startMonth")?;
-    let end_month = input
-        .end_month
+    let start_date = parse_date(&input.start_date, "startDate")?;
+    let end_date = input
+        .end_date
         .as_deref()
-        .map(|month| parse_month(month, "endMonth"))
+        .map(|date| parse_date(date, "endDate"))
         .transpose()?;
     let recognition_mode = parse_recognition_mode(&input.recognition_mode)?;
 
@@ -411,8 +454,8 @@ fn parse_plan_item(input: PlanItemInputDto) -> Result<PlanItem, AppError> {
         amount,
         currency,
         input.period_months,
-        start_month,
-        end_month,
+        start_date,
+        end_date,
         recognition_mode,
         input.note,
     )
@@ -430,6 +473,10 @@ fn parse_exchange_rate(input: ExchangeRateInputDto) -> Result<ExchangeRate, AppE
 
 fn parse_month(value: &str, field: &str) -> Result<YearMonth, AppError> {
     YearMonth::from_str(value).map_err(|error| AppError::from_domain(error, Some(field)))
+}
+
+fn parse_date(value: &str, field: &str) -> Result<CalendarDate, AppError> {
+    CalendarDate::from_str(value).map_err(|error| AppError::from_domain(error, Some(field)))
 }
 
 fn parse_category(value: &str) -> Result<Category, AppError> {
@@ -478,8 +525,8 @@ mod tests {
             planned_amount: amount.to_owned(),
             currency: "CNY".to_owned(),
             period_months,
-            start_month: "2026-01".to_owned(),
-            end_month: None,
+            start_date: "2026-01-01".to_owned(),
+            end_date: None,
             recognition_mode: mode.to_owned(),
             note: None,
         }
@@ -499,7 +546,7 @@ mod tests {
         assert_eq!(contract.categories.len(), 5);
         assert_eq!(contract.recognition_modes.len(), 2);
         assert_eq!(contract.categories[0].code, "FIXED_INCOME");
-        assert_eq!(contract.amount_decimal_places, 4);
+        assert_eq!(contract.amount_decimal_places, 2);
         assert_eq!(contract.exchange_rate_decimal_places, 8);
     }
 
@@ -515,7 +562,7 @@ mod tests {
         assert!(preview.effective);
         assert!(!preview.recognized_in_target_month);
         assert_eq!(preview.recognized_amount, None);
-        assert_eq!(preview.monthly_equivalent.as_deref(), Some("100.0000"));
+        assert_eq!(preview.monthly_equivalent.as_deref(), Some("100.00"));
         assert_eq!(preview.base_currency, "CNY");
     }
 
@@ -544,9 +591,9 @@ mod tests {
         };
 
         let result = calculate_capacity(request).unwrap();
-        assert_eq!(result.stable_income, "30000.0000");
-        assert_eq!(result.fixed_commitments, "3000.0000");
-        assert_eq!(result.maximum_capacity, "21000.0000");
+        assert_eq!(result.stable_income, "30000.00");
+        assert_eq!(result.fixed_commitments, "3000.00");
+        assert_eq!(result.maximum_capacity, "21000.00");
         assert_eq!(result.fixed_commitment_ratio.as_deref(), Some("0.10000000"));
     }
 

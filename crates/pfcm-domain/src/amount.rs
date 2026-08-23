@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use crate::{CurrencyCode, DomainError};
 
-const AMOUNT_SCALE: u32 = 4;
+const AMOUNT_SCALE: u32 = 2;
 const RATE_SCALE: u32 = 8;
 
 fn rounded(mut value: Decimal, scale: u32) -> Result<Decimal, DomainError> {
@@ -56,7 +56,7 @@ impl Amount {
     }
 
     pub fn decimal_string(self) -> String {
-        format!("{:.4}", self.0)
+        format!("{:.2}", self.0)
     }
 }
 
@@ -72,7 +72,55 @@ impl FromStr for Amount {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let parsed =
             Decimal::from_str_exact(value.trim()).map_err(|_| DomainError::InvalidAmount)?;
+        if parsed.scale() > AMOUNT_SCALE {
+            return Err(DomainError::AmountTooPrecise);
+        }
         Self::from_decimal(parsed)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SignedAmount(Decimal);
+
+impl SignedAmount {
+    pub fn zero() -> Self {
+        Self(Decimal::new(0, AMOUNT_SCALE))
+    }
+
+    pub fn from_decimal(value: Decimal) -> Result<Self, DomainError> {
+        let value = rounded(value, AMOUNT_SCALE)?;
+        i64::try_from(value.mantissa()).map_err(|_| DomainError::AmountOutOfRange)?;
+        Ok(Self(value))
+    }
+
+    pub fn from_scaled_i64(value: i64) -> Result<Self, DomainError> {
+        Self::from_decimal(Decimal::new(value, AMOUNT_SCALE))
+    }
+
+    pub const fn as_decimal(self) -> Decimal {
+        self.0
+    }
+
+    pub fn scaled_i64(self) -> i64 {
+        i64::try_from(self.0.mantissa()).expect("SignedAmount invariant guarantees i64 range")
+    }
+
+    pub fn checked_add(self, other: Self) -> Result<Self, DomainError> {
+        Self::from_decimal(
+            self.0
+                .checked_add(other.0)
+                .ok_or(DomainError::ArithmeticOverflow)?,
+        )
+    }
+
+    pub fn decimal_string(self) -> String {
+        format!("{:.2}", self.0)
+    }
+}
+
+impl From<Amount> for SignedAmount {
+    fn from(value: Amount) -> Self {
+        Self(value.as_decimal())
     }
 }
 

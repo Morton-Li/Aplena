@@ -16,7 +16,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 use super::{Store, StoreError};
 
 pub const BACKUP_FORMAT: &str = "APLENA_BACKUP";
-pub const BACKUP_FORMAT_VERSION: u32 = 1;
+pub const BACKUP_FORMAT_VERSION: u32 = 2;
 const MANIFEST_NAME: &str = "manifest.json";
 const DATABASE_NAME: &str = "database.sqlite3";
 const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
@@ -26,6 +26,7 @@ const MAX_COMPRESSION_RATIO: u64 = 1_000;
 const MAX_EXCHANGE_RATE_RECORDS: u64 = 512;
 const MAX_PLAN_ITEM_RECORDS: u64 = 50_000;
 const MAX_MONTHLY_ITEM_RECORDS: u64 = 1_000_000;
+const MAX_ACTUAL_ENTRY_RECORDS: u64 = 10_000_000;
 
 #[derive(Debug, Error)]
 pub enum ProtectionError {
@@ -156,7 +157,18 @@ pub async fn database_summary(pool: &SqlitePool) -> Result<DatabaseSummary, Prot
         ("exchange_rates", "SELECT COUNT(*) FROM exchange_rates"),
         ("plan_items", "SELECT COUNT(*) FROM plan_items"),
         ("monthly_items", "SELECT COUNT(*) FROM monthly_items"),
+        ("actual_entries", "SELECT COUNT(*) FROM actual_entries"),
     ] {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = ?",
+        )
+        .bind(table)
+        .fetch_one(pool)
+        .await
+        .map_err(StoreError::from)?;
+        if exists == 0 {
+            continue;
+        }
         let count: i64 = sqlx::query_scalar(query)
             .fetch_one(pool)
             .await
@@ -205,6 +217,7 @@ pub async fn validate_database(pool: &SqlitePool) -> Result<(), ProtectionError>
     let actual = table_names.into_iter().collect::<BTreeSet<_>>();
     let required = [
         "_sqlx_migrations",
+        "actual_entries",
         "exchange_rates",
         "monthly_items",
         "plan_items",
@@ -243,9 +256,15 @@ pub async fn validate_database(pool: &SqlitePool) -> Result<(), ProtectionError>
         "SELECT \
           (SELECT COUNT(*) FROM settings WHERE id != 1 OR minimum_savings_rate_bp NOT BETWEEN 0 AND 10000) + \
           (SELECT COUNT(*) FROM exchange_rates WHERE length(currency_code) != 3 OR rate_scaled <= 0) + \
-          (SELECT COUNT(*) FROM plan_items WHERE planned_amount_scaled < 0 OR period_months <= 0 OR end_month < start_month) + \
-          (SELECT COUNT(*) FROM monthly_items WHERE planned_amount_scaled < 0 OR actual_amount_scaled < 0 OR \
-            (category IN ('FIXED_INCOME', 'VARIABLE_INCOME')) != (flow_type = 'INCOME'))",
+          (SELECT COUNT(*) FROM plan_items WHERE planned_amount_scaled < 0 OR period_months <= 0 OR end_date < start_date OR date(start_date) != start_date OR (end_date IS NOT NULL AND date(end_date) != end_date)) + \
+          (SELECT COUNT(*) FROM monthly_items WHERE planned_amount_scaled < 0 OR \
+            (category IN ('FIXED_INCOME', 'VARIABLE_INCOME')) != (flow_type = 'INCOME') OR \
+            (item_source = 'ACTUAL_ONLY' AND (planned_amount_scaled != 0 OR scheduled_date IS NOT NULL)) OR \
+            (item_source = 'PLANNED' AND recognition_mode = 'PAYMENT' AND scheduled_date IS NULL) OR \
+            (item_source = 'PLANNED' AND recognition_mode = 'AMORTIZED' AND scheduled_date IS NOT NULL)) + \
+          (SELECT COUNT(*) FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id \
+            WHERE e.amount_scaled <= 0 OR date(e.occurred_on) != e.occurred_on OR \
+              substr(e.occurred_on, 1, 7) != substr(m.month, 1, 7))",
     )
     .fetch_one(pool)
     .await
@@ -264,14 +283,17 @@ pub async fn validate_database(pool: &SqlitePool) -> Result<(), ProtectionError>
     let required_objects: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_schema WHERE name IN (\
           'settings_base_rate_insert', 'settings_base_rate_update', 'settings_base_currency_lock',\
-          'exchange_rate_base_lock', 'monthly_item_source_required', 'monthly_item_currency_matches_settings',\
-          'idx_plan_items_active_months', 'idx_monthly_items_month_category_flow',\
-          'idx_monthly_items_source_plan')",
+          'exchange_rate_base_lock', 'monthly_item_currency_matches_settings',\
+          'actual_entry_month_insert', 'actual_entry_month_update', 'actual_entry_reopens_insert',\
+          'actual_entry_reopens_update', 'actual_entry_reopens_delete',\
+          'idx_plan_items_active_dates', 'idx_monthly_items_month_category_flow',\
+          'idx_monthly_items_source_plan', 'idx_actual_entries_monthly_item',\
+          'idx_actual_entries_occurred_on')",
     )
     .fetch_one(pool)
     .await
     .map_err(StoreError::from)?;
-    if required_objects != 9 {
+    if required_objects != 15 {
         return Err(ProtectionError::InvariantFailed);
     }
     Ok(())
@@ -279,9 +301,10 @@ pub async fn validate_database(pool: &SqlitePool) -> Result<(), ProtectionError>
 
 async fn validate_derived_aggregates(pool: &SqlitePool) -> Result<(), ProtectionError> {
     let rows = sqlx::query(
-        "SELECT month, category, flow_type, SUM(planned_amount_scaled) AS planned_total, \
-                SUM(actual_amount_scaled) AS actual_total \
-         FROM monthly_items GROUP BY month, category, flow_type",
+        "SELECT m.month, m.category, m.flow_type, SUM(m.planned_amount_scaled) AS planned_total, \
+                SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END) AS actual_total \
+         FROM monthly_items m LEFT JOIN actual_entries e ON e.monthly_item_id = m.id \
+         GROUP BY m.month, m.category, m.flow_type",
     )
     .fetch_all(pool)
     .await
@@ -292,11 +315,8 @@ async fn validate_derived_aggregates(pool: &SqlitePool) -> Result<(), Protection
         let flow_type: String = row.try_get("flow_type")?;
         let (expected_flow, _) = flow_for_category(&category)?;
         let planned_total: i64 = row.try_get("planned_total")?;
-        let actual_total: Option<i64> = row.try_get("actual_total")?;
-        if flow_type != expected_flow
-            || planned_total < 0
-            || actual_total.is_some_and(|value| value < 0)
-        {
+        let _actual_total: Option<i64> = row.try_get("actual_total")?;
+        if flow_type != expected_flow || planned_total < 0 {
             return Err(ProtectionError::InvariantFailed);
         }
     }
@@ -304,11 +324,14 @@ async fn validate_derived_aggregates(pool: &SqlitePool) -> Result<(), Protection
 }
 
 fn validate_record_counts(counts: &BTreeMap<String, u64>) -> Result<(), ProtectionError> {
-    let count = |table: &str| counts.get(table).copied().unwrap_or(u64::MAX);
+    // Version 1 manifests legitimately omit actual_entries; absent optional
+    // table counts are treated as zero and full v2 equality is checked later.
+    let count = |table: &str| counts.get(table).copied().unwrap_or(0);
     if count("settings") > 1
         || count("exchange_rates") > MAX_EXCHANGE_RATE_RECORDS
         || count("plan_items") > MAX_PLAN_ITEM_RECORDS
         || count("monthly_items") > MAX_MONTHLY_ITEM_RECORDS
+        || count("actual_entries") > MAX_ACTUAL_ENTRY_RECORDS
     {
         return Err(ProtectionError::SizeLimitExceeded);
     }
@@ -516,7 +539,12 @@ pub async fn verify_manifest_summary(
     }
     validate_database(pool).await?;
     let summary = database_summary(pool).await?;
-    if summary != manifest.summary {
+    let summary_matches = if manifest.format_version == 1 {
+        legacy_summary_matches(&manifest.summary, &summary)
+    } else {
+        summary == manifest.summary
+    };
+    if !summary_matches {
         return Err(ProtectionError::InvariantFailed);
     }
     Ok(summary)
@@ -532,13 +560,22 @@ fn validate_manifest_header(manifest: &BackupManifest) -> Result<(), ProtectionE
     if manifest.format_version > BACKUP_FORMAT_VERSION {
         return Err(ProtectionError::FutureFormat);
     }
-    if manifest.format_version != BACKUP_FORMAT_VERSION {
+    if manifest.format_version == 0 {
         return Err(ProtectionError::InvalidArchive);
     }
     if manifest.schema_version > latest_schema_version() {
         return Err(ProtectionError::FutureSchema);
     }
     Ok(())
+}
+
+fn legacy_summary_matches(legacy: &DatabaseSummary, migrated: &DatabaseSummary) -> bool {
+    legacy.settings == migrated.settings
+        && legacy.first_month == migrated.first_month
+        && legacy.last_month == migrated.last_month
+        && ["settings", "exchange_rates", "plan_items", "monthly_items"]
+            .into_iter()
+            .all(|table| legacy.record_counts.get(table) == migrated.record_counts.get(table))
 }
 
 fn write_archive_atomic(
@@ -615,6 +652,7 @@ pub async fn export_csv_directory(
     write_exchange_rates_csv(store.pool(), &staging.path().join("exchange_rates.csv")).await?;
     write_plan_items_csv(store.pool(), &staging.path().join("plan_items.csv")).await?;
     write_monthly_items_csv(store.pool(), &staging.path().join("monthly_items.csv")).await?;
+    write_actual_entries_csv(store.pool(), &staging.path().join("actual_entries.csv")).await?;
     let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let folder_name = format!(
         "Aplena-CSV-{}-{}",
@@ -630,7 +668,7 @@ pub async fn export_csv_directory(
     Ok(CreatedCsvArtifact {
         folder_name,
         created_at,
-        file_count: 4,
+        file_count: 5,
     })
 }
 
@@ -691,7 +729,7 @@ async fn write_exchange_rates_csv(pool: &SqlitePool, path: &Path) -> Result<(), 
 async fn write_plan_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), ProtectionError> {
     let rows = sqlx::query(
         "SELECT id, name, category, planned_amount_scaled, currency_code, period_months, \
-                recognition_mode, start_month, end_month, note, created_at, updated_at \
+                recognition_mode, start_date, end_date, note, created_at, updated_at \
          FROM plan_items ORDER BY name, id",
     )
     .fetch_all(pool)
@@ -709,8 +747,8 @@ async fn write_plan_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), Prot
         "period_months",
         "recognition_mode_code",
         "recognition_mode_label_zh",
-        "start_month",
-        "end_month",
+        "start_date",
+        "end_date",
         "note",
         "created_at",
         "updated_at",
@@ -726,15 +764,13 @@ async fn write_plan_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), Prot
             category_label(&category)?.to_owned(),
             flow_code.to_owned(),
             flow_label.to_owned(),
-            scaled_decimal(row.try_get("planned_amount_scaled")?, 4)?,
+            scaled_decimal(row.try_get("planned_amount_scaled")?, 2)?,
             row.try_get("currency_code")?,
             row.try_get::<i64, _>("period_months")?.to_string(),
             recognition_mode.clone(),
             recognition_label(&recognition_mode)?.to_owned(),
-            anchor_to_month(row.try_get("start_month")?)?,
-            row.try_get::<Option<String>, _>("end_month")?
-                .map(anchor_to_month)
-                .transpose()?
+            row.try_get("start_date")?,
+            row.try_get::<Option<String>, _>("end_date")?
                 .unwrap_or_default(),
             row.try_get::<Option<String>, _>("note")?
                 .map(csv_text)
@@ -748,10 +784,14 @@ async fn write_plan_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), Prot
 
 async fn write_monthly_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), ProtectionError> {
     let rows = sqlx::query(
-        "SELECT id, source_plan_item_id, snapshot_name, month, category, flow_type, \
-                recognition_mode, planned_amount_scaled, actual_amount_scaled, currency_code, \
-                note, created_at, updated_at \
-         FROM monthly_items ORDER BY month, snapshot_name, id",
+        "SELECT m.id, m.source_plan_item_id, m.snapshot_name, m.month, m.category, m.flow_type, \
+                m.recognition_mode, m.item_source, m.scheduled_date, m.planned_amount_scaled, \
+                CASE WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL \
+                  THEN COALESCE(SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END), 0) \
+                  ELSE NULL END AS derived_actual_amount_scaled, COUNT(e.id) AS actual_entry_count, \
+                m.actual_confirmed_at, m.currency_code, m.note, m.created_at, m.updated_at \
+         FROM monthly_items m LEFT JOIN actual_entries e ON e.monthly_item_id = m.id \
+         GROUP BY m.id ORDER BY m.month, m.snapshot_name, m.id",
     )
     .fetch_all(pool)
     .await?;
@@ -767,8 +807,12 @@ async fn write_monthly_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), P
         "flow_type_label_zh",
         "recognition_mode_code",
         "recognition_mode_label_zh",
+        "item_source_code",
+        "scheduled_date",
         "planned_amount",
-        "actual_amount",
+        "derived_actual_amount",
+        "actual_entry_count",
+        "actual_confirmed_at",
         "actual_status_code",
         "currency_code",
         "note",
@@ -779,11 +823,14 @@ async fn write_monthly_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), P
         let category: String = row.try_get("category")?;
         let flow_type: String = row.try_get("flow_type")?;
         let recognition_mode: String = row.try_get("recognition_mode")?;
-        let actual: Option<i64> = row.try_get("actual_amount_scaled")?;
-        let actual_status = match actual {
-            None => "MISSING",
-            Some(0) => "CONFIRMED_ZERO",
-            Some(_) => "RECORDED",
+        let actual: Option<i64> = row.try_get("derived_actual_amount_scaled")?;
+        let entry_count: i64 = row.try_get("actual_entry_count")?;
+        let confirmed_at: Option<String> = row.try_get("actual_confirmed_at")?;
+        let actual_status = match (entry_count, confirmed_at.is_some()) {
+            (0, false) => "MISSING",
+            (_, false) => "IN_PROGRESS",
+            (0, true) => "CONFIRMED_ZERO",
+            (_, true) => "FINAL",
         };
         writer.write_record([
             csv_text(row.try_get::<String, _>("id")?),
@@ -798,13 +845,56 @@ async fn write_monthly_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), P
             flow_label(&flow_type)?.to_owned(),
             recognition_mode.clone(),
             recognition_label(&recognition_mode)?.to_owned(),
-            scaled_decimal(row.try_get("planned_amount_scaled")?, 4)?,
+            row.try_get("item_source")?,
+            row.try_get::<Option<String>, _>("scheduled_date")?
+                .unwrap_or_default(),
+            scaled_decimal(row.try_get("planned_amount_scaled")?, 2)?,
             actual
-                .map(|value| scaled_decimal(value, 4))
+                .map(|value| scaled_decimal(value, 2))
                 .transpose()?
                 .unwrap_or_default(),
+            entry_count.to_string(),
+            confirmed_at.unwrap_or_default(),
             actual_status.to_owned(),
             row.try_get("currency_code")?,
+            row.try_get::<Option<String>, _>("note")?
+                .map(csv_text)
+                .unwrap_or_default(),
+            row.try_get("created_at")?,
+            row.try_get("updated_at")?,
+        ])?;
+    }
+    finish_csv(writer)
+}
+
+async fn write_actual_entries_csv(pool: &SqlitePool, path: &Path) -> Result<(), ProtectionError> {
+    let rows = sqlx::query(
+        "SELECT id, monthly_item_id, occurred_on, effect, amount_scaled, origin, note, \
+                created_at, updated_at FROM actual_entries \
+         ORDER BY occurred_on, monthly_item_id, created_at, id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut writer = csv_writer(path)?;
+    writer.write_record([
+        "id",
+        "monthly_item_id",
+        "occurred_on",
+        "effect",
+        "amount",
+        "origin",
+        "note",
+        "created_at",
+        "updated_at",
+    ])?;
+    for row in rows {
+        writer.write_record([
+            csv_text(row.try_get("id")?),
+            csv_text(row.try_get("monthly_item_id")?),
+            row.try_get("occurred_on")?,
+            row.try_get("effect")?,
+            scaled_decimal(row.try_get("amount_scaled")?, 2)?,
+            row.try_get("origin")?,
             row.try_get::<Option<String>, _>("note")?
                 .map(csv_text)
                 .unwrap_or_default(),
@@ -842,16 +932,18 @@ fn csv_text(value: String) -> String {
 }
 
 fn scaled_decimal(value: i64, scale: u32) -> Result<String, ProtectionError> {
-    if value < 0 || scale > 18 {
+    if scale > 18 {
         return Err(ProtectionError::InvariantFailed);
     }
-    let factor = 10_i64
+    let factor = 10_u64
         .checked_pow(scale)
         .ok_or(ProtectionError::InvariantFailed)?;
+    let absolute = value.unsigned_abs();
+    let sign = if value < 0 { "-" } else { "" };
     Ok(format!(
-        "{}.{:0width$}",
-        value / factor,
-        value % factor,
+        "{sign}{}.{:0width$}",
+        absolute / factor,
+        absolute % factor,
         width = usize::try_from(scale).map_err(|_| ProtectionError::InvariantFailed)?
     ))
 }

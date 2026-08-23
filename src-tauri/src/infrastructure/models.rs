@@ -1,4 +1,4 @@
-use pfcm_domain::{CurrencyCode, ExchangeRate, MonthlyItem, PlanItem, Settings};
+use pfcm_domain::{ActualEntry, CurrencyCode, ExchangeRate, MonthlyItem, PlanItem, Settings};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +27,13 @@ pub struct StoredPlanItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredMonthlyItem {
     pub value: MonthlyItem,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredActualEntry {
+    pub value: ActualEntry,
     pub created_at: String,
     pub updated_at: String,
 }
