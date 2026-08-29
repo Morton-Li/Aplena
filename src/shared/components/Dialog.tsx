@@ -31,16 +31,19 @@ export function Dialog({
 }: DialogProps) {
   const titleId = useId();
   const surfaceRef = useRef<HTMLElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(
+    typeof document === "undefined" ? null : document.activeElement as HTMLElement | null,
+  );
 
   useEffect(() => {
-    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousFocus = previousFocusRef.current;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const surface = surfaceRef.current;
     if (!surface?.contains(document.activeElement)) {
       const initial = surface?.querySelector<HTMLElement>(
-        `[autofocus], [data-dialog-initial-focus], ${FOCUSABLE}`,
-      );
+        "[autofocus], [data-dialog-initial-focus]",
+      ) ?? surface?.querySelector<HTMLElement>(FOCUSABLE);
       (initial ?? surface)?.focus();
     }
     return () => {

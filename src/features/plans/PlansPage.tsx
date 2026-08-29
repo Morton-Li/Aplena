@@ -308,7 +308,7 @@ function PlanEditor({
       >
         <form className="plan-form" id="plan-editor-form" onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))}>
           <div className="field-grid">
-            <label className="field-span-2">项目名称<input autoFocus {...form.register("name")} />{form.formState.errors.name && <em>{form.formState.errors.name.message}</em>}</label>
+            <label className="field-span-2">项目名称<input autoFocus data-dialog-initial-focus {...form.register("name")} />{form.formState.errors.name && <em>{form.formState.errors.name.message}</em>}</label>
             <label>类别<Controller control={form.control} name="category" render={({ field, fieldState }) => <Select ariaLabel="类别" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={contract.categories.map((option) => ({ value: option.code, label: option.label }))} />} /></label>
             <label>交易类型<input readOnly value={derivedFlow} aria-label="交易类型（自动）" /><small>由“{category?.label}”自动决定</small></label>
             <label>计划金额<input inputMode="decimal" {...form.register("plannedAmount")} />{form.formState.errors.plannedAmount && <em>{form.formState.errors.plannedAmount.message}</em>}</label>

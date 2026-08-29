@@ -328,7 +328,7 @@ function EntryDialog({ month, plans, monthlyItems, fixedItem, existing, onClose,
     {selectedPlan?.end_date && selectedPlan.end_date < `${month}-01` && <div className="notice notice-warning">该长期计划已经结束；本条记录仍可作为迟到退款或冲减归入历史项目。</div>}
     <label>日期<input type="date" min={`${month}-01`} max={`${month}-${new Date(Number(month.slice(0,4)), Number(month.slice(5,7)), 0).getDate()}`} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
     <label>类型<Select ariaLabel="类型" value={effect} onChange={(value) => setEffect(value as "INCREASE" | "DECREASE")} options={[{ value: "INCREASE", label: increaseLabel }, { value: "DECREASE", label: decreaseLabel }]} /></label>
-    <label>金额<input autoFocus inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
+    <label>金额<input autoFocus data-dialog-initial-focus inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
     <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
     {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
   </Dialog>;

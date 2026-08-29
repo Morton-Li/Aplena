@@ -35,6 +35,26 @@ function SelectHarness() {
   </>;
 }
 
+function AutoFocusHarness() {
+  const [open, setOpen] = useState(false);
+  return <>
+    <button type="button" onClick={() => setOpen(true)}>Open autofocus dialog</button>
+    {open && <Dialog title="Autofocus dialog" onClose={() => setOpen(false)}>
+      <input autoFocus aria-label="Autofocus input" />
+    </Dialog>}
+  </>;
+}
+
+function PreferredFocusHarness() {
+  const [open, setOpen] = useState(false);
+  return <>
+    <button type="button" onClick={() => setOpen(true)}>Open preferred focus dialog</button>
+    {open && <Dialog title="Preferred focus dialog" onClose={() => setOpen(false)}>
+      <input data-dialog-initial-focus aria-label="Preferred input" />
+    </Dialog>}
+  </>;
+}
+
 describe("Dialog", () => {
   it("moves focus inside, closes with Escape and restores the opener", async () => {
     const user = userEvent.setup();
@@ -80,5 +100,26 @@ describe("Dialog", () => {
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Select dialog" })).not.toBeInTheDocument();
+  });
+
+  it("restores the opener when a child takes autofocus during mount", async () => {
+    const user = userEvent.setup();
+    render(<AutoFocusHarness />);
+    const opener = screen.getByRole("button", { name: "Open autofocus dialog" });
+
+    await user.click(opener);
+    expect(screen.getByRole("textbox", { name: "Autofocus input" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+
+    expect(opener).toHaveFocus();
+  });
+
+  it("prioritizes an explicitly marked initial field over the earlier close button", async () => {
+    const user = userEvent.setup();
+    render(<PreferredFocusHarness />);
+
+    await user.click(screen.getByRole("button", { name: "Open preferred focus dialog" }));
+
+    expect(screen.getByRole("textbox", { name: "Preferred input" })).toHaveFocus();
   });
 });

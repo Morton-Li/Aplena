@@ -1929,13 +1929,22 @@ textarea {
 
 .metric-pair {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 11px;
+  grid-template-columns: 1fr;
+  gap: 8px;
   margin-top: 17px;
 }
 
 .metric-pair div {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
   min-width: 0;
+}
+
+.metric-pair div + div {
+  padding-top: 8px;
+  border-top: 1px solid rgb(42 67 55 / 8%);
 }
 
 .metric-pair small,
@@ -1951,12 +1960,13 @@ textarea {
 }
 
 .metric-pair strong {
-  margin-top: 5px;
+  min-width: 0;
   font-family: Georgia, serif;
-  font-size: clamp(18px, 1.8vw, 22px);
+  font-size: clamp(17px, 1.35vw, 20px);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .metric-card > p {
@@ -2085,6 +2095,9 @@ textarea {
 }
 
 .variance-value {
+  min-width: 0;
+  max-width: 58%;
+  overflow-wrap: anywhere;
   text-align: right;
 }
 
@@ -2136,8 +2149,9 @@ textarea {
 .capacity-primary strong {
   margin: 8px 0;
   font-family: Georgia, serif;
-  font-size: 26px;
+  font-size: clamp(21px, 2.3vw, 26px);
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .capacity-breakdown {
