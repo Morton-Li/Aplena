@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Component, lazy, Suspense, useState, type ReactNode } from "react";
-import { HashRouter, Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
+import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { HashRouter, Navigate, NavLink, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
 import { SetupPage } from "./features/setup/SetupPage";
 import { getDomainContract } from "./shared/api/domain";
@@ -120,6 +120,7 @@ function AppBootstrap() {
 function AppLayout({ settings }: { settings: Settings }) {
   return (
     <div className="app-shell">
+      <RouteScrollReset />
       <aside className="sidebar" aria-label="主导航">
         <div className="brand-block">
           <div className="brand-mark" aria-hidden="true">
@@ -155,6 +156,14 @@ function AppLayout({ settings }: { settings: Settings }) {
       </main>
     </div>
   );
+}
+
+function RouteScrollReset() {
+  const location = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
+  return null;
 }
 
 function LaunchState({

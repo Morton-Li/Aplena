@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import type { DomainContract } from "../../shared/api/domain";
@@ -23,6 +23,9 @@ import {
   type Settings,
 } from "../../shared/api/finance";
 import { describeError } from "../../shared/formatting/errors";
+import { Dialog } from "../../shared/components/Dialog";
+import { EmptyState } from "../../shared/components/EmptyState";
+import { Select } from "../../shared/components/Select";
 import {
   categoryLabel,
   flowLabel,
@@ -123,12 +126,15 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
         </label>
         <label>
           <span className="sr-only">按类别筛选</span>
-          <select value={category} onChange={(event) => setCategory(event.target.value)}>
-            <option value="ALL">全部类别</option>
-            {contract.categories.map((option) => (
-              <option key={option.code} value={option.code}>{option.label}</option>
-            ))}
-          </select>
+          <Select
+            ariaLabel="按类别筛选"
+            value={category}
+            onChange={setCategory}
+            options={[
+              { value: "ALL", label: "全部类别" },
+              ...contract.categories.map((option) => ({ value: option.code, label: option.label })),
+            ]}
+          />
         </label>
         <span className="result-count">{filtered.length} 项</span>
       </section>
@@ -136,9 +142,9 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
       {plansQuery.isPending && <StatePanel>正在读取长期计划…</StatePanel>}
       {plansQuery.isError && <StatePanel error={plansQuery.error} />}
       {plansQuery.isSuccess && filtered.length === 0 && (
-        <StatePanel>
-          {plansQuery.data.length === 0 ? "还没有长期计划。创建第一项收入或支出计划吧。" : "没有符合筛选条件的计划。"}
-        </StatePanel>
+        plansQuery.data.length === 0
+          ? <EmptyState eyebrow="从第一项计划开始" title="还没有长期收入或支出计划" description="先建立一个可持续维护的计划；Aplena 会从计划生成月度快照，不需要导入交易流水。" action={<button className="button button-primary" type="button" onClick={() => setEditor("new")}>创建第一项计划</button>} />
+          : <EmptyState compact eyebrow="没有匹配项" title="换一个筛选条件试试" description="当前搜索词与类别组合没有匹配任何计划，已有计划没有被删除。" action={<button className="button button-secondary" type="button" onClick={() => { setSearch(""); setCategory("ALL"); }}>清除筛选</button>} />
       )}
       {filtered.length > 0 && (
         <div className="plan-list">
@@ -293,22 +299,20 @@ function PlanEditor({
   const previewIsCurrent = preview?.signature === signature;
 
   return (
-    <div className="modal-backdrop">
-      <section className="side-dialog" role="dialog" aria-modal="true" aria-labelledby="plan-editor-title">
-        <header className="dialog-header">
-          <div>
-            <p className="section-label">{existing ? "编辑长期计划" : "新建长期计划"}</p>
-            <h2 id="plan-editor-title">{existing?.name ?? "新的收入或支出计划"}</h2>
-          </div>
-          <button className="icon-button" type="button" aria-label="关闭" onClick={onClose}>×</button>
-        </header>
-        <form className="plan-form" onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))}>
+      <Dialog
+        eyebrow={existing ? "编辑长期计划" : "新建长期计划"}
+        title={existing?.name ?? "新的收入或支出计划"}
+        onClose={onClose}
+        size="wide"
+        footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-secondary" disabled={previewMutation.isPending} type="button" onClick={form.handleSubmit((value) => previewMutation.mutate(value))}>{previewMutation.isPending ? "计算中…" : "预览并检查"}</button><button className="button button-primary" disabled={!previewIsCurrent || saveMutation.isPending} form="plan-editor-form" type="submit">{saveMutation.isPending ? "保存中…" : "确认保存"}</button></>}
+      >
+        <form className="plan-form" id="plan-editor-form" onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))}>
           <div className="field-grid">
             <label className="field-span-2">项目名称<input autoFocus {...form.register("name")} />{form.formState.errors.name && <em>{form.formState.errors.name.message}</em>}</label>
-            <label>类别<select {...form.register("category")}>{contract.categories.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select></label>
+            <label>类别<Controller control={form.control} name="category" render={({ field, fieldState }) => <Select ariaLabel="类别" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={contract.categories.map((option) => ({ value: option.code, label: option.label }))} />} /></label>
             <label>交易类型<input readOnly value={derivedFlow} aria-label="交易类型（自动）" /><small>由“{category?.label}”自动决定</small></label>
             <label>计划金额<input inputMode="decimal" {...form.register("plannedAmount")} />{form.formState.errors.plannedAmount && <em>{form.formState.errors.plannedAmount.message}</em>}</label>
-            <label>币种<select {...form.register("currency")}>{rates.map((rate) => <option key={rate.currency} value={rate.currency}>{rate.currency}</option>)}</select></label>
+            <label>币种<Controller control={form.control} name="currency" render={({ field, fieldState }) => <Select ariaLabel="币种" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={rates.map((rate) => ({ value: rate.currency, label: rate.currency, description: rate.is_base_currency ? "本位币" : `1 ${rate.currency} = ${rate.rate} ${settings.base_currency}` }))} />} /></label>
             <label>周期（月）<input type="number" min="1" step="1" {...form.register("periodMonths", { valueAsNumber: true })} />{form.formState.errors.periodMonths && <em>{form.formState.errors.periodMonths.message}</em>}</label>
             <label>开始日期<input type="date" {...form.register("startDate")} /></label>
             <label>结束日期（可选）<input type="date" {...form.register("endDate")} />{form.formState.errors.endDate && <em>{form.formState.errors.endDate.message}</em>}</label>
@@ -340,18 +344,8 @@ function PlanEditor({
           {(previewMutation.isError || saveMutation.isError) && (
             <div className="inline-error" role="alert">{describeError(previewMutation.error ?? saveMutation.error)}</div>
           )}
-          <footer className="dialog-actions">
-            <button className="button button-quiet" type="button" onClick={onClose}>取消</button>
-            <button className="button button-secondary" disabled={previewMutation.isPending} type="button" onClick={form.handleSubmit((value) => previewMutation.mutate(value))}>
-              {previewMutation.isPending ? "计算中…" : "预览并检查"}
-            </button>
-            <button className="button button-primary" disabled={!previewIsCurrent || saveMutation.isPending} type="submit">
-              {saveMutation.isPending ? "保存中…" : "确认保存"}
-            </button>
-          </footer>
         </form>
-      </section>
-    </div>
+      </Dialog>
   );
 }
 
@@ -380,14 +374,7 @@ function DeleteDialog({ item, onClose, onDeleted }: { item: PlanItem; onClose: (
 }
 
 function ConfirmDialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div className="modal-backdrop">
-      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-        <header className="dialog-header"><h2 id="confirm-title">{title}</h2><button className="icon-button" type="button" aria-label="关闭" onClick={onClose}>×</button></header>
-        {children}
-      </section>
-    </div>
-  );
+  return <Dialog title={title} onClose={onClose}>{children}</Dialog>;
 }
 
 function StatePanel({ children, error }: { children?: React.ReactNode; error?: unknown }) {

@@ -35,7 +35,15 @@ export function AnalyticsChart({
       return;
     }
     const chart = init(container.current, undefined, { renderer: "canvas" });
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     chart.setOption({
+      animation: !reduceMotion,
+      textStyle: {
+        color: "#526159",
+        fontFamily:
+          'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+        fontSize: 11,
+      },
       ...option,
       aria: {
         enabled: true,

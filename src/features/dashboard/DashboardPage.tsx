@@ -117,7 +117,10 @@ export function DashboardPage() {
           {analytics.important_variances.map((item) => (
             <article key={item.monthly_item_id}>
               <div><strong>{item.name}</strong><small>{categoryLabel(item.category)}</small></div>
-              <div className={"variance-value variance-" + item.variance_effect.toLowerCase()}><strong>{item.variance_amount} {analytics.currency}</strong><small>{varianceCopy(item.variance_effect, item.flow_type)}</small></div>
+              <div className={"variance-value variance-" + item.variance_effect.toLowerCase()}>
+                <strong>{item.variance_amount === null ? "尚不可比较" : `${item.variance_amount} ${analytics.currency}`}</strong>
+                <small>{varianceCopy(item.variance_effect, item.flow_type)}</small>
+              </div>
             </article>
           ))}
         </section>

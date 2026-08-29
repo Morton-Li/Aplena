@@ -12,6 +12,7 @@ import {
   type ProjectBreakdown,
 } from "../../shared/api/finance";
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
+import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
 import { categoryLabel, flowLabel } from "../../shared/formatting/labels";
 import { CapacityPanel } from "./CapacityPanel";
@@ -108,8 +109,9 @@ function StructureSection({
           <p className="section-label">Category Structure</p>
           <h2>分类结构</h2>
         </div>
-        <div className="segmented-control" aria-label="结构方向">
+        <div className="segmented-control" aria-label="结构方向" role="group">
           <button
+            aria-pressed={flow === "INCOME"}
             className={flow === "INCOME" ? "segment-active" : ""}
             onClick={() => setFlow("INCOME")}
             type="button"
@@ -117,6 +119,7 @@ function StructureSection({
             收入结构
           </button>
           <button
+            aria-pressed={flow === "EXPENSE"}
             className={flow === "EXPENSE" ? "segment-active" : ""}
             onClick={() => setFlow("EXPENSE")}
             type="button"
@@ -179,17 +182,27 @@ function ProjectRanking({ analytics }: { analytics: MonthAnalytics }) {
         <div className="ranking-controls">
           <label>
             方向
-            <select value={flow} onChange={(event) => setFlow(event.target.value as FlowFilter)}>
-              <option value="EXPENSE">支出项目</option>
-              <option value="INCOME">收入项目</option>
-            </select>
+            <Select
+              ariaLabel="方向"
+              value={flow}
+              onChange={(value) => setFlow(value as FlowFilter)}
+              options={[
+                { value: "EXPENSE", label: "支出项目" },
+                { value: "INCOME", label: "收入项目" },
+              ]}
+            />
           </label>
           <label>
             排名依据
-            <select value={mode} onChange={(event) => setMode(event.target.value as RankingMode)}>
-              <option value="PLANNED">计划金额</option>
-              <option value="ACTUAL">实际金额</option>
-            </select>
+            <Select
+              ariaLabel="排名依据"
+              value={mode}
+              onChange={(value) => setMode(value as RankingMode)}
+              options={[
+                { value: "PLANNED", label: "计划金额" },
+                { value: "ACTUAL", label: "实际金额" },
+              ]}
+            />
           </label>
         </div>
       </header>
@@ -316,7 +329,7 @@ function CategoryHistoryTable({
 function categoryStructureOption(categories: CategoryBreakdown[]) {
   return {
     tooltip: { trigger: "axis" },
-    legend: { data: ["计划占比", "实际占比"] },
+    legend: { top: 0, data: ["计划占比", "实际占比"], textStyle: chartLegendText },
     grid: { left: 48, right: 18, top: 50, bottom: 70 },
     xAxis: {
       type: "category",
@@ -348,9 +361,14 @@ function categoryHistoryOption(history: MonthAnalytics[], flow: FlowFilter) {
   const colors = ["#426c58", "#88a392", "#c49a5d"];
   return {
     tooltip: { trigger: "axis" },
-    legend: { type: "scroll", data: categories.map(categoryLabel) },
+    legend: { type: "scroll", top: 0, left: 0, right: 0, data: categories.map(categoryLabel), textStyle: chartLegendText },
     grid: { left: 55, right: 18, top: 62, bottom: 40 },
-    xAxis: { type: "category", data: history.map((month) => month.month) },
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: history.map((month) => month.month),
+      axisLabel: compactMonthLabels(history.length),
+    },
     yAxis: { type: "value" },
     series: categories.map((category, index) => ({
       name: categoryLabel(category),
@@ -362,6 +380,16 @@ function categoryHistoryOption(history: MonthAnalytics[], flow: FlowFilter) {
       itemStyle: { color: colors[index] },
       lineStyle: { color: colors[index] },
     })),
+  };
+}
+
+const chartLegendText = { color: "#596961", fontSize: 11 };
+
+function compactMonthLabels(count: number) {
+  return {
+    hideOverlap: true,
+    interval: count > 6 ? 1 : 0,
+    formatter: (value: string) => value.slice(2),
   };
 }
 

@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 
 import {
@@ -20,6 +20,7 @@ import {
   type Settings,
 } from "../../shared/api/finance";
 import { describeError } from "../../shared/formatting/errors";
+import { Select } from "../../shared/components/Select";
 
 const settingsSchema = z.object({
   baseCurrency: z.string().length(3),
@@ -220,6 +221,7 @@ function DataSummaryView({ summary }: { summary: DataSummary }) {
       <div><span>汇率</span><strong>{summary.exchange_rate_count}</strong></div>
       <div><span>长期计划</span><strong>{summary.plan_item_count}</strong></div>
       <div><span>月度快照</span><strong>{summary.monthly_item_count}</strong></div>
+      <div><span>实际条目</span><strong>{summary.actual_entry_count}</strong></div>
       <div><span>月份范围</span><strong>{summary.first_month && summary.last_month ? `${summary.first_month} — ${summary.last_month}` : "暂无月度快照"}</strong></div>
       <div><span>目标月份 / 本位币</span><strong>{summary.settings ? `${summary.settings.target_month} / ${summary.settings.base_currency}` : "尚未设置"}</strong></div>
     </div>
@@ -232,6 +234,7 @@ function DataSummaryComparison({ current, backup }: { current: DataSummary; back
     countComparisonRow("汇率", current.exchange_rate_count, backup.exchange_rate_count),
     countComparisonRow("长期计划", current.plan_item_count, backup.plan_item_count),
     countComparisonRow("月度快照", current.monthly_item_count, backup.monthly_item_count),
+    countComparisonRow("实际条目", current.actual_entry_count, backup.actual_entry_count),
     comparisonRow("月份范围", monthRange(current), monthRange(backup)),
   ];
   return (
@@ -316,7 +319,7 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
   return (
     <form className="settings-card" onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
       <div><p className="section-label">全局设置</p><h2>计划基准</h2></div>
-      <label>本位币<select {...form.register("baseCurrency")}>{currencies.map((currency) => <option key={currency}>{currency}</option>)}</select></label>
+      <label>本位币<Controller control={form.control} name="baseCurrency" render={({ field, fieldState }) => <Select ariaLabel="本位币" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={currencies.map((currency) => ({ value: currency, label: currency }))} />} /></label>
       <div className="notice notice-warning">一旦存在任何月度快照，本位币会被锁定，避免历史趋势混入不同币种。已有数据时修改会由 Rust 拒绝。</div>
       <label>目标月份<input type="month" {...form.register("targetMonth")} /></label>
       <label>目标储蓄率<span className="input-with-suffix"><input type="number" min="0" max="100" step="0.01" {...form.register("savingsRatePercent", { valueAsNumber: true })} /><span>%</span></span></label>

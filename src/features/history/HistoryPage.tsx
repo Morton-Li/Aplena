@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import {
   getHistoryAnalytics,
@@ -7,6 +8,8 @@ import {
   type MonthAnalytics,
 } from "../../shared/api/finance";
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
+import { EmptyState } from "../../shared/components/EmptyState";
+import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
 import { categoryLabel, flowLabel, recognitionLabel } from "../../shared/formatting/labels";
 
@@ -25,7 +28,7 @@ export function HistoryPage() {
 
   if (historyQuery.isPending) return <section className="state-card">正在重算历史序列…</section>;
   if (historyQuery.isError) return <section className="state-card"><span role="alert">{describeError(historyQuery.error)}</span></section>;
-  if (months.length === 0) return <section className="state-card">还没有已生成的月份。历史页不会因为浏览而创建数据。</section>;
+  if (months.length === 0) return <EmptyState eyebrow="历史保持只读" title="还没有可比较的月份" description="生成首个月度快照后，趋势和历史明细会自动出现在这里；单纯浏览历史不会创建数据。" action={<Link className="button button-primary" to="/monthly">查看月度计划</Link>} />;
 
   return (
     <>
@@ -35,7 +38,7 @@ export function HistoryPage() {
           <h1>计划与结果如何随时间变化？</h1>
           <p>未完整月份只显示“当前已录”，不会被标记为最终实际结果。</p>
         </div>
-        <label className="month-picker">查看月份<select value={selectedMonth} onChange={(event) => setSelectedState(event.target.value)}>{months.map((month) => <option key={month.month}>{month.month}</option>)}</select></label>
+        <label className="month-picker">查看月份<Select ariaLabel="查看月份" value={selectedMonth} onChange={setSelectedState} options={months.map((month) => ({ value: month.month, label: month.month, description: statusLabel(month.actual_status) }))} /></label>
       </header>
 
       <div className="trend-grid">
@@ -101,9 +104,14 @@ function trendOption(months: MonthAnalytics[]) {
   ] as const;
   return {
     tooltip: { trigger: "axis" },
-    legend: { type: "scroll", data: series.map(([name]) => name) },
+    legend: { type: "scroll", top: 0, left: 0, right: 0, data: series.map(([name]) => name), textStyle: chartLegendText },
     grid: { left: 58, right: 20, top: 70, bottom: 40 },
-    xAxis: { type: "category", data: months.map((month) => month.month) },
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: months.map((month) => month.month),
+      axisLabel: compactMonthLabels(months.length),
+    },
     yAxis: { type: "value" },
     series: series.map(([name, metric, field, color, type]) => ({
       name,
@@ -120,14 +128,29 @@ function trendOption(months: MonthAnalytics[]) {
 function savingsTrendOption(months: MonthAnalytics[]) {
   return {
     tooltip: { trigger: "axis" },
-    legend: { data: ["计划储蓄率", "实际储蓄率"] },
+    legend: { top: 0, data: ["计划储蓄率", "实际储蓄率"], textStyle: chartLegendText },
     grid: { left: 52, right: 20, top: 55, bottom: 40 },
-    xAxis: { type: "category", data: months.map((month) => month.month) },
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: months.map((month) => month.month),
+      axisLabel: compactMonthLabels(months.length),
+    },
     yAxis: { type: "value", axisLabel: { formatter: "{value}%" } },
     series: [
       { name: "计划储蓄率", type: "line", data: months.map((month) => month.planned_savings_rate_percent), itemStyle: { color: "#8ca795" } },
       { name: "实际储蓄率", type: "line", data: months.map((month) => month.actual_savings_rate_percent), itemStyle: { color: "#c79c58" }, connectNulls: false },
     ],
+  };
+}
+
+const chartLegendText = { color: "#596961", fontSize: 11 };
+
+function compactMonthLabels(count: number) {
+  return {
+    hideOverlap: true,
+    interval: count > 6 ? 1 : 0,
+    formatter: (value: string) => value.slice(2),
   };
 }
 

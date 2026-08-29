@@ -633,7 +633,8 @@ describe("planning workflows", () => {
     await user.click(screen.getByRole("button", { name: "添加实际条目" }));
     await user.clear(screen.getByLabelText("金额"));
     await user.type(screen.getByLabelText("金额"), "427.25");
-    await user.selectOptions(screen.getByLabelText("类型"), "DECREASE");
+    await user.click(screen.getByLabelText("类型"));
+    await user.click(screen.getByRole("option", { name: "退款" }));
     await user.click(screen.getByRole("button", { name: "保存条目" }));
     expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
       input: expect.objectContaining({ amount: "427.25", effect: "DECREASE" }),
@@ -648,7 +649,8 @@ describe("planning workflows", () => {
 
     await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
     await user.type(screen.getByLabelText("金额"), "25.00");
-    await user.selectOptions(screen.getByLabelText("类型"), "DECREASE");
+    await user.click(screen.getByLabelText("类型"));
+    await user.click(screen.getByRole("option", { name: "退款" }));
     await user.click(screen.getByRole("button", { name: "保存条目" }));
 
     await waitFor(() => {
@@ -754,6 +756,7 @@ describe("planning workflows", () => {
     await user.click(screen.getByRole("button", { name: "选择并检查备份" }));
     expect(await screen.findByRole("heading", { name: "恢复前只读检查已通过" })).toBeInTheDocument();
     const comparison = screen.getByRole("table", { name: "恢复数据差异" });
+    expect(within(comparison).getByRole("row", { name: "实际条目 1 4 +3" })).toBeInTheDocument();
     expect(within(comparison).getByText("2026-07 — 2026-08")).toBeInTheDocument();
     expect(within(comparison).getByText("+2")).toBeInTheDocument();
     const restore = screen.getByRole("button", { name: "确认恢复此备份" });
@@ -809,6 +812,22 @@ describe("dashboard and capacity analytics", () => {
     expect(within(comparisonTable).getByText("8427.00")).toBeInTheDocument();
     expect(screen.getByText("超支")).toBeInTheDocument();
     expect(screen.getByText("13000.00 CNY")).toBeInTheDocument();
+  });
+
+  it("does not present an unknown variance as a currency-only amount", async () => {
+    installHarness({
+      analytics: monthAnalytics({
+        important_variances: [{
+          ...monthAnalytics().projects[1],
+          variance_amount: null,
+          variance_effect: "UNKNOWN",
+        }],
+      }),
+    });
+    render(<App />);
+
+    expect(await screen.findByText("尚不可比较")).toBeInTheDocument();
+    expect(screen.getByText("尚未录入")).toBeInTheDocument();
   });
 
   it("shows N/A for empty actuals and zero-denominator rates", async () => {
@@ -881,7 +900,8 @@ describe("dashboard and capacity analytics", () => {
     expect(await screen.findByRole("heading", { name: "钱的结构与长期负担健康吗？" })).toBeInTheDocument();
     expect(screen.getAllByText("固定承诺支出").length).toBeGreaterThan(0);
     expect(screen.getByText("房租")).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText("排名依据"), "ACTUAL");
+    await user.click(screen.getByLabelText("排名依据"));
+    await user.click(screen.getByRole("option", { name: "实际金额" }));
     expect(screen.queryByText("房租")).not.toBeInTheDocument();
     const rankingTable = screen.getByRole("table", { name: "项目排名图对应数值" });
     expect(within(rankingTable).getByText("电费")).toBeInTheDocument();

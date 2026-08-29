@@ -1,9 +1,10 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 
 import { queryKeys, saveSettings } from "../../shared/api/finance";
+import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
 
 const schema = z.object({
@@ -63,13 +64,24 @@ export function SetupPage() {
         </div>
         <label>
           本位币
-          <select {...form.register("baseCurrency")}>
-            {["CNY", "USD", "EUR", "HKD", "JPY", "GBP"].map((currency) => (
-              <option key={currency} value={currency}>
-                {currency}
-              </option>
-            ))}
-          </select>
+          <Controller
+            control={form.control}
+            name="baseCurrency"
+            render={({ field, fieldState }) => (
+              <Select
+                ariaLabel="本位币"
+                invalid={fieldState.invalid}
+                onBlur={field.onBlur}
+                onChange={field.onChange}
+                options={["CNY", "USD", "EUR", "HKD", "JPY", "GBP"].map((currency) => ({
+                  value: currency,
+                  label: currency,
+                }))}
+                ref={field.ref}
+                value={field.value}
+              />
+            )}
+          />
           <small>创建后汇率固定为 1；产生月度数据后不能再更换。</small>
         </label>
         <label>
