@@ -9,8 +9,8 @@ use crate::infrastructure::{create_version_two_fixture, open_database, open_memo
 use super::{
     dto::{
         ActualEntryInputDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto,
-        EnsureActualOnlyInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto, PlanItemInputDto,
-        RateOverrideDto, SettingsInputDto,
+        EnsureActualOnlyInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto,
+        ManualMonthlyItemInputDto, PlanItemInputDto, RateOverrideDto, SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -297,6 +297,33 @@ async fn startup_automatically_initializes_only_the_current_natural_month() {
 }
 
 #[tokio::test]
+async fn startup_creates_default_cny_settings_idempotently() {
+    let service = FinanceService::new(open_memory_database().await.unwrap()).unwrap();
+
+    service.initialize_on_startup().await;
+    service.initialize_on_startup().await;
+
+    let settings = service.get_settings().await.unwrap().unwrap();
+    assert_eq!(settings.target_month, current_month().to_string());
+    assert_eq!(settings.base_currency, "CNY");
+    assert_eq!(settings.minimum_savings_rate_basis_points, 2_000);
+    assert!(service.startup_status().await.error.is_none());
+
+    let store = service.test_store().await;
+    let settings_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    let base_rate: i64 =
+        sqlx::query_scalar("SELECT rate_scaled FROM exchange_rates WHERE currency_code = 'CNY'")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(settings_count, 1);
+    assert_eq!(base_rate, 100_000_000);
+}
+
+#[tokio::test]
 async fn plan_names_are_normalized_unique_and_currency_is_validated() {
     let service = test_service().await;
     let current = current_month();
@@ -494,6 +521,50 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
         .await
         .unwrap_err();
     assert_eq!(error.error_code, "DELETED_PLAN_CANNOT_ACCEPT_ENTRY");
+}
+
+#[tokio::test]
+async fn manual_monthly_item_accepts_actual_entries_without_a_plan() {
+    let service = test_service().await;
+    let current = current_month();
+    let item = service
+        .create_manual_monthly_item(ManualMonthlyItemInputDto {
+            name: "  本月房租  ".to_owned(),
+            month: current.to_string(),
+            category: "ESSENTIAL_EXPENSE".to_owned(),
+            note: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(item.source_plan_item_id, None);
+    assert_eq!(item.item_name, "本月房租");
+    assert_eq!(item.item_source, "ACTUAL_ONLY");
+    assert_eq!(item.item_origin, "MANUAL");
+    assert_eq!(item.variance_effect, "UNKNOWN");
+
+    service
+        .create_actual_entry(ActualEntryInputDto {
+            id: None,
+            monthly_item_id: item.id.clone(),
+            occurred_on: format!("{current}-02"),
+            effect: "INCREASE".to_owned(),
+            amount: "3200.00".to_owned(),
+            note: Some("月租".to_owned()),
+        })
+        .await
+        .unwrap();
+
+    let refreshed = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|candidate| candidate.id == item.id)
+        .unwrap();
+    assert_eq!(refreshed.actual_amount.as_deref(), Some("3200.00"));
+    assert_eq!(refreshed.variance_amount, None);
+    assert_eq!(refreshed.variance_effect, "UNKNOWN");
 }
 
 #[tokio::test]

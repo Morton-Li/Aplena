@@ -3,14 +3,14 @@ mod infrastructure;
 
 use application::{
     FinanceService, calculate_capacity, confirm_monthly_actuals, confirm_monthly_item,
-    create_actual_entry, create_backup, create_plan_item, delete_actual_entry,
-    delete_exchange_rate, delete_plan_item, ensure_actual_only_monthly_item, export_csv,
-    get_domain_contract, get_financial_capacity, get_history_analytics, get_month_analytics,
-    get_month_initialization_status, get_settings, get_startup_status, initialize_month,
-    inspect_backup, list_actual_entries, list_exchange_rates, list_existing_months,
-    list_monthly_items, list_plan_items, preview_month, preview_plan_item, restore_backup,
-    save_settings, stop_plan_item, update_actual_entry, update_monthly_note, update_plan_item,
-    upsert_exchange_rate,
+    create_actual_entry, create_backup, create_manual_monthly_item, create_plan_item,
+    delete_actual_entry, delete_exchange_rate, delete_plan_item, ensure_actual_only_monthly_item,
+    ensure_default_settings, export_csv, get_domain_contract, get_financial_capacity,
+    get_history_analytics, get_month_analytics, get_month_initialization_status, get_settings,
+    get_startup_status, initialize_month, inspect_backup, list_actual_entries, list_exchange_rates,
+    list_existing_months, list_monthly_items, list_plan_items, preview_month, preview_plan_item,
+    restore_backup, save_settings, stop_plan_item, update_actual_entry, update_monthly_note,
+    update_plan_item, upsert_exchange_rate,
 };
 use infrastructure::open_database;
 use std::path::{Path, PathBuf};
@@ -73,6 +73,7 @@ pub fn run() {
             calculate_capacity,
             get_startup_status,
             get_settings,
+            ensure_default_settings,
             save_settings,
             list_exchange_rates,
             upsert_exchange_rate,
@@ -84,6 +85,7 @@ pub fn run() {
             delete_plan_item,
             list_monthly_items,
             ensure_actual_only_monthly_item,
+            create_manual_monthly_item,
             list_actual_entries,
             create_actual_entry,
             update_actual_entry,
@@ -103,6 +105,8 @@ pub fn run() {
             restore_backup,
             export_csv
         ])
+        // Keep the compiled application context colocated with the startup pipeline so release
+        // builds always embed the matching hashed frontend assets.
         .run(tauri::generate_context!())
         .expect("failed to run Aplena");
 }

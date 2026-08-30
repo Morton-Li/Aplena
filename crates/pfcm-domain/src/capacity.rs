@@ -19,6 +19,7 @@ pub struct FinancialCapacity {
     essential_expenses: Amount,
     fixed_commitments: Amount,
     discretionary_budget: Amount,
+    minimum_savings_amount: Amount,
     preserved_capacity: Amount,
     maximum_capacity: Amount,
     fixed_commitment_ratio: Option<Ratio>,
@@ -48,6 +49,10 @@ impl FinancialCapacity {
 
     pub const fn discretionary_budget(&self) -> Amount {
         self.discretionary_budget
+    }
+
+    pub const fn minimum_savings_amount(&self) -> Amount {
+        self.minimum_savings_amount
     }
 
     pub const fn preserved_capacity(&self) -> Amount {
@@ -104,9 +109,13 @@ pub fn calculate_financial_capacity(
         }
     }
 
+    let minimum_savings_amount = stable_income
+        .as_decimal()
+        .checked_mul(target_savings_rate.factor())
+        .ok_or(DomainError::ArithmeticOverflow)?;
     let retained_income = stable_income
         .as_decimal()
-        .checked_mul(Decimal::ONE - target_savings_rate.factor())
+        .checked_sub(minimum_savings_amount)
         .ok_or(DomainError::ArithmeticOverflow)?;
     let preserved_capacity = non_negative_difference(
         retained_income,
@@ -138,6 +147,7 @@ pub fn calculate_financial_capacity(
         essential_expenses,
         fixed_commitments,
         discretionary_budget,
+        minimum_savings_amount: Amount::from_decimal(minimum_savings_amount)?,
         preserved_capacity,
         maximum_capacity,
         fixed_commitment_ratio,

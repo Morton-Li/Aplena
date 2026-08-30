@@ -74,6 +74,7 @@ RATE_SCALE   = 100_000_000
 | `flow_type` | TEXT | 否 | 与类别一致 |
 | `recognition_mode` | TEXT | 否 | 冻结模式 |
 | `item_source` | TEXT | 否 | `PLANNED` / `ACTUAL_ONLY` |
+| `item_origin` | TEXT | 否 | `PLAN_LINKED` / `MANUAL` |
 | `scheduled_date` | TEXT | 是 | 同月日级支付日期 |
 | `planned_amount_scaled` | INTEGER | 否 | 非负本位币分 |
 | `actual_confirmed_at` | TEXT | 是 | 最终核对标记 |
@@ -87,11 +88,12 @@ RATE_SCALE   = 100_000_000
 UNIQUE(source_plan_item_id, month)
 
 ACTUAL_ONLY => planned_amount_scaled = 0 AND scheduled_date IS NULL
+MANUAL => source_plan_item_id IS NULL AND item_source = ACTUAL_ONLY
 PLANNED + AMORTIZED => scheduled_date IS NULL
 PLANNED + PAYMENT => scheduled_date IS NOT NULL
 ```
 
-类别与方向也有 CHECK。插入触发器要求月度币种等于设置中的本位币。
+类别与方向也有 CHECK。插入触发器要求月度币种等于设置中的本位币，并防止手动项目伪装成计划快照。
 
 索引：月份、月份+类别+方向、来源计划。
 
@@ -153,7 +155,8 @@ END AS derived_actual_amount_scaled
 
 - `0001_initial.sql`：最初四表模型；
 - `0002_data_protection.sql`：数据保护约束和索引；
-- `0003_actual_entries_daily_dates_cents.sql`：当前五表模型。
+- `0003_actual_entries_daily_dates_cents.sql`：五表、日级日期、分精度与实际条目模型；
+- `0004_manual_monthly_items.sql`：增加月度项目创建来源和手动项目约束。
 
 已发布迁移不可编辑，只能追加。
 

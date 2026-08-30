@@ -67,6 +67,9 @@ impl AppError {
             DomainError::EmptyPlanItemName => {
                 ("EMPTY_PLAN_ITEM_NAME", "error.empty_plan_item_name")
             }
+            DomainError::EmptyMonthlyItemName => {
+                ("EMPTY_MONTHLY_ITEM_NAME", "error.empty_monthly_item_name")
+            }
             DomainError::InvalidCategory => ("INVALID_CATEGORY", "error.invalid_category"),
             DomainError::InvalidFlowType => ("INVALID_FLOW_TYPE", "error.invalid_flow_type"),
             DomainError::InvalidRecognitionMode => {
@@ -96,6 +99,10 @@ impl AppError {
             DomainError::InvalidMonthlyItemSource => (
                 "INVALID_MONTHLY_ITEM_SOURCE",
                 "error.invalid_monthly_item_source",
+            ),
+            DomainError::InvalidMonthlyItemOrigin => (
+                "INVALID_MONTHLY_ITEM_ORIGIN",
+                "error.invalid_monthly_item_origin",
             ),
             DomainError::CurrencyMismatch => ("CURRENCY_MISMATCH", "error.currency_mismatch"),
             DomainError::BaseCurrencyMismatch => {

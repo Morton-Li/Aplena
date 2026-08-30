@@ -43,6 +43,7 @@ ID 签名/公证和真实 Windows 安装仍是公开发布门禁，不能由本�
 - [ADR：本地优先的 Tauri + SQLite](docs/adr/0001-local-first-tauri-sqlite.md)
 - [ADR：双计入模式](docs/adr/0002-recognition-modes.md)
 - [ADR：月度自动初始化](docs/adr/0003-automatic-month-initialization.md)
+- [ADR：长期计划可选与手动月度项目](docs/adr/0008-optional-long-term-planning.md)
 - [ADR：金额、日期与舍入](docs/adr/0004-money-date-and-rounding.md)
 - [ADR：版本化备份、安全恢复与迁移保护](docs/adr/0005-versioned-backup-restore-and-migration-protection.md)
 - [ADR：数据库静态加密发布门禁](docs/adr/0006-database-encryption-release-gate.md)
@@ -87,6 +88,7 @@ docs/                 产品、领域、架构、数据库与路线图基线
 - 汇率与计划事实在月度快照创建时冻结，后续修改或删除来源不污染历史；
 - 条目新增/编辑/删除自动重新打开确认，支持项目和整月最终确认；确认不会复制计划金额；
 - 非支付月可为现有计划创建计划金额为零的 `ACTUAL_ONLY` 项，后续应计时原地提升并保留条目；
+- 无需长期计划即可创建分类明确的本月项目并记录实际；长期计划仅用于周期基准、偏差和承载能力增强；
 - 动态 Dashboard、历史时间序列、分类结构、项目排名和重要偏差；
 - 以稳定收入和长期月均负担计算的保留预算后承载力与最大承载力，`PAYMENT` 项目在
   非支付月份仍计入长期负担。
@@ -95,7 +97,7 @@ docs/                 产品、领域、架构、数据库与路线图基线
 - 五表备份与 CSV，其中月度 CSV 明确标注实际净额为派生值；兼容检查并恢复旧版四表备份，
   保留确认状态、稳定枚举代码和中文标签，并防止电子表格公式注入。
 
-主要页面：`总览`、`月度计划`、`长期计划`、`历史`、`分析`、`设置`。图表均有 ARIA
+主要页面：`总览`、`月度执行`、`长期规划（可选）`、`历史`、`分析`、`设置`。图表均有 ARIA
 描述和对应数值表；不完整月份明确显示“当前已录”，零分母显示 `N/A`。
 
 ## 本地运行

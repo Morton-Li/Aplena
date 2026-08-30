@@ -64,6 +64,7 @@ export interface MonthlyItem {
   flow_type: string;
   recognition_mode: string;
   item_source: "PLANNED" | "ACTUAL_ONLY";
+  item_origin: "PLAN_LINKED" | "MANUAL";
   scheduled_date: string | null;
   planned_amount: string;
   actual_amount: string | null;
@@ -165,6 +166,7 @@ export interface AmountComparison {
   planned: string;
   actual_to_date: string | null;
   variance: string | null;
+  completion_percent: string | null;
   variance_effect: "UNKNOWN" | "ON_PLAN" | "FAVORABLE" | "UNFAVORABLE";
 }
 
@@ -198,6 +200,7 @@ export interface MonthAnalytics {
   currency: string;
   actual_status: "EMPTY" | "PARTIAL" | "COMPLETE";
   total_item_count: number;
+  planned_item_count: number;
   recorded_item_count: number;
   completeness_percent: string | null;
   income: AmountComparison;
@@ -227,6 +230,7 @@ export interface FinancialCapacity {
   essential_expenses: string;
   fixed_commitments: string;
   discretionary_budget: string;
+  minimum_savings_amount: string;
   preserved_capacity: string;
   maximum_capacity: string;
   fixed_commitment_ratio_percent: string | null;
@@ -299,6 +303,10 @@ export const queryKeys = {
 
 export function getSettings(invokeCommand: Invoke = invoke): Promise<Settings | null> {
   return invokeCommand<Settings | null>("get_settings");
+}
+
+export function ensureDefaultSettings(invokeCommand: Invoke = invoke): Promise<Settings> {
+  return invokeCommand<Settings>("ensure_default_settings");
 }
 
 export function saveSettings(
@@ -438,6 +446,13 @@ export function ensureActualOnlyMonthlyItem(
   invokeCommand: Invoke = invoke,
 ): Promise<MonthlyItem> {
   return invokeCommand<MonthlyItem>("ensure_actual_only_monthly_item", { input });
+}
+
+export function createManualMonthlyItem(
+  input: { name: string; month: string; category: string; note?: string },
+  invokeCommand: Invoke = invoke,
+): Promise<MonthlyItem> {
+  return invokeCommand<MonthlyItem>("create_manual_monthly_item", { input });
 }
 
 export function listActualEntries(

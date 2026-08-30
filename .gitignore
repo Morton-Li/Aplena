@@ -5,6 +5,7 @@ target/
 .cargo-home/
 src-tauri/gen/schemas/
 coverage/
+output/playwright/
 .DS_Store
 *.log
 .env

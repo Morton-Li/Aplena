@@ -1,10 +1,10 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
-import type { DomainContract } from "../../shared/api/domain";
+import { getDomainContract, type DomainContract } from "../../shared/api/domain";
 import {
   createPlanItem,
   deletePlanItem,
@@ -23,6 +23,10 @@ import {
   type Settings,
 } from "../../shared/api/finance";
 import { describeError } from "../../shared/formatting/errors";
+import { formatMoney } from "../../shared/formatting/finance";
+import { Dialog } from "../../shared/components/Dialog";
+import { EmptyState } from "../../shared/components/EmptyState";
+import { Select } from "../../shared/components/Select";
 import {
   categoryLabel,
   flowLabel,
@@ -56,8 +60,17 @@ const planSchema = z
 
 type PlanValues = z.infer<typeof planSchema>;
 
-export function PlansPage({ contract }: { contract: DomainContract }) {
+export function RecurringRulesPanel({
+  currentMonth,
+  open,
+  onOpenChange,
+}: {
+  currentMonth: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const queryClient = useQueryClient();
+  const contractQuery = useQuery({ queryKey: queryKeys.domain, queryFn: () => getDomainContract() });
   const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
   const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
@@ -97,23 +110,27 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
   };
 
   return (
-    <>
-      <header className="page-header">
+    <details className="recurring-rules-panel" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
+      <summary>
         <div>
-          <p className="eyebrow">长期财务计划</p>
-          <h1>维护未来，而不是补录流水。</h1>
-          <p>这里的修改只影响尚未生成的月份；已有月度快照保持原样。</p>
+          <p className="eyebrow">可选增强</p>
+          <h2>周期规则</h2>
+          <p>需要时自动生成后续月份的计划基准；不会影响本月实际录入。</p>
         </div>
-        <button className="button button-primary" type="button" onClick={() => setEditor("new")}>
-          新建计划
-        </button>
-      </header>
+        <span className="recurring-rules-summary">{plansQuery.data?.length ?? 0} 项规则</span>
+      </summary>
+
+      <div className="recurring-rules-body">
+        <header className="recurring-rules-heading">
+          <div><p className="section-label">Recurring Rules</p><h3>自动月度基准</h3></div>
+          <button className="button button-primary" type="button" onClick={() => setEditor("new")}>新建周期规则</button>
+        </header>
 
       {feedback && <div className="success-banner" role="status">{feedback}</div>}
 
-      <section className="toolbar" aria-label="计划筛选">
+      <section className="toolbar" aria-label="周期规则筛选">
         <label className="search-field">
-          <span className="sr-only">搜索长期计划</span>
+          <span className="sr-only">搜索周期规则</span>
           <input
             type="search"
             placeholder="搜索名称或备注"
@@ -123,22 +140,25 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
         </label>
         <label>
           <span className="sr-only">按类别筛选</span>
-          <select value={category} onChange={(event) => setCategory(event.target.value)}>
-            <option value="ALL">全部类别</option>
-            {contract.categories.map((option) => (
-              <option key={option.code} value={option.code}>{option.label}</option>
-            ))}
-          </select>
+          <Select
+            ariaLabel="按类别筛选"
+            value={category}
+            onChange={setCategory}
+            options={[
+              { value: "ALL", label: "全部类别" },
+              ...(contractQuery.data?.categories ?? []).map((option) => ({ value: option.code, label: option.label })),
+            ]}
+          />
         </label>
         <span className="result-count">{filtered.length} 项</span>
       </section>
 
-      {plansQuery.isPending && <StatePanel>正在读取长期计划…</StatePanel>}
-      {plansQuery.isError && <StatePanel error={plansQuery.error} />}
+      {(plansQuery.isPending || contractQuery.isPending) && <StatePanel>正在读取周期规则…</StatePanel>}
+      {(plansQuery.isError || contractQuery.isError) && <StatePanel error={plansQuery.error ?? contractQuery.error} />}
       {plansQuery.isSuccess && filtered.length === 0 && (
-        <StatePanel>
-          {plansQuery.data.length === 0 ? "还没有长期计划。创建第一项收入或支出计划吧。" : "没有符合筛选条件的计划。"}
-        </StatePanel>
+        plansQuery.data.length === 0
+          ? <EmptyState eyebrow="按需启用" title="暂未配置周期规则" description="这不会影响本月实际录入和历史报表。只有需要自动生成后续月份计划基准时才需要配置。" action={<button className="button button-secondary" type="button" onClick={() => setEditor("new")}>创建周期规则</button>} />
+          : <EmptyState compact eyebrow="没有匹配项" title="换一个筛选条件试试" description="当前搜索词与类别组合没有匹配任何规则，已有规则没有被删除。" action={<button className="button button-secondary" type="button" onClick={() => { setSearch(""); setCategory("ALL"); }}>清除筛选</button>} />
       )}
       {filtered.length > 0 && (
         <div className="plan-list">
@@ -158,7 +178,7 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
                 {item.note && <small>{item.note}</small>}
               </div>
               <dl className="plan-facts">
-                <div><dt>原币金额</dt><dd>{item.planned_amount} {item.currency}</dd></div>
+                <div><dt>原币金额</dt><dd>{formatMoney(item.planned_amount, item.currency)}</dd></div>
                 <div><dt>周期</dt><dd>{item.period_months} 个月</dd></div>
                 <div><dt>历史快照</dt><dd>{item.history_month_count} 个月</dd></div>
               </dl>
@@ -172,9 +192,10 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
         </div>
       )}
 
-      {editor && settingsQuery.data && ratesQuery.data && (
+      {editor && contractQuery.data && settingsQuery.data && ratesQuery.data && (
         <PlanEditor
-          contract={contract}
+          contract={contractQuery.data}
+          currentMonth={currentMonth}
           existing={editor === "new" ? null : editor}
           rates={ratesQuery.data}
           settings={settingsQuery.data}
@@ -192,7 +213,7 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
           onClose={() => setStopping(null)}
           onStopped={async () => {
             setStopping(null);
-            setFeedback("计划已停止，历史月度快照未作修改。");
+            setFeedback("周期规则已停止，历史月度快照未作修改。");
             await refreshPlans();
           }}
         />
@@ -203,17 +224,19 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
           onClose={() => setDeleting(null)}
           onDeleted={async () => {
             setDeleting(null);
-            setFeedback("长期计划已删除，关联历史快照已保留。");
+            setFeedback("周期规则已删除，关联历史快照已保留。");
             await refreshPlans();
           }}
         />
       )}
-    </>
+      </div>
+    </details>
   );
 }
 
 function PlanEditor({
   contract,
+  currentMonth,
   existing,
   rates,
   settings,
@@ -221,6 +244,7 @@ function PlanEditor({
   onSaved,
 }: {
   contract: DomainContract;
+  currentMonth: string;
   existing: PlanItem | null;
   rates: ExchangeRate[];
   settings: Settings;
@@ -245,7 +269,7 @@ function PlanEditor({
         plannedAmount: "",
         currency: settings.base_currency,
         periodMonths: 1,
-        startDate: settings.target_month + "-01",
+        startDate: currentMonth + "-01",
         endDate: "",
         recognitionMode: "AMORTIZED",
         note: "",
@@ -269,7 +293,7 @@ function PlanEditor({
   });
   const previewMutation = useMutation({
     mutationFn: (value: PlanValues) =>
-      previewPlanItem(contract, settings, rates, settings.target_month, toInput(value)),
+      previewPlanItem(contract, settings, rates, currentMonth, toInput(value)),
     onSuccess: (data) => setPreview({ signature, data }),
   });
   const saveMutation = useMutation<PlanMutationResult | PlanItem, Error, PlanValues>({
@@ -281,7 +305,7 @@ function PlanEditor({
         ? `并已为当前月新增 ${initialization.created_count} 个快照。`
         : "当前月快照未被覆盖。";
       await onSaved(
-        `计划已保存，${detail}`,
+        `周期规则已保存，${detail}`,
         initialization?.created_count ? initialization.month : undefined,
       );
     },
@@ -293,22 +317,20 @@ function PlanEditor({
   const previewIsCurrent = preview?.signature === signature;
 
   return (
-    <div className="modal-backdrop">
-      <section className="side-dialog" role="dialog" aria-modal="true" aria-labelledby="plan-editor-title">
-        <header className="dialog-header">
-          <div>
-            <p className="section-label">{existing ? "编辑长期计划" : "新建长期计划"}</p>
-            <h2 id="plan-editor-title">{existing?.name ?? "新的收入或支出计划"}</h2>
-          </div>
-          <button className="icon-button" type="button" aria-label="关闭" onClick={onClose}>×</button>
-        </header>
-        <form className="plan-form" onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))}>
+      <Dialog
+        eyebrow={existing ? "编辑周期规则" : "新建周期规则"}
+        title={existing?.name ?? "新的周期性收入或支出"}
+        onClose={onClose}
+        size="wide"
+        footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-secondary" disabled={previewMutation.isPending} type="button" onClick={form.handleSubmit((value) => previewMutation.mutate(value))}>{previewMutation.isPending ? "计算中…" : "预览并检查"}</button><button className="button button-primary" disabled={!previewIsCurrent || saveMutation.isPending} form="plan-editor-form" type="submit">{saveMutation.isPending ? "保存中…" : "确认保存"}</button></>}
+      >
+        <form className="plan-form" id="plan-editor-form" onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))}>
           <div className="field-grid">
-            <label className="field-span-2">项目名称<input autoFocus {...form.register("name")} />{form.formState.errors.name && <em>{form.formState.errors.name.message}</em>}</label>
-            <label>类别<select {...form.register("category")}>{contract.categories.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select></label>
+            <label className="field-span-2">项目名称<input autoFocus data-dialog-initial-focus {...form.register("name")} />{form.formState.errors.name && <em>{form.formState.errors.name.message}</em>}</label>
+            <label>类别<Controller control={form.control} name="category" render={({ field, fieldState }) => <Select ariaLabel="类别" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={contract.categories.map((option) => ({ value: option.code, label: option.label }))} />} /></label>
             <label>交易类型<input readOnly value={derivedFlow} aria-label="交易类型（自动）" /><small>由“{category?.label}”自动决定</small></label>
             <label>计划金额<input inputMode="decimal" {...form.register("plannedAmount")} />{form.formState.errors.plannedAmount && <em>{form.formState.errors.plannedAmount.message}</em>}</label>
-            <label>币种<select {...form.register("currency")}>{rates.map((rate) => <option key={rate.currency} value={rate.currency}>{rate.currency}</option>)}</select></label>
+            <label>币种<Controller control={form.control} name="currency" render={({ field, fieldState }) => <Select ariaLabel="币种" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={rates.map((rate) => ({ value: rate.currency, label: rate.currency, description: rate.is_base_currency ? "本位币" : `1 ${rate.currency} = ${rate.rate} ${settings.base_currency}` }))} />} /></label>
             <label>周期（月）<input type="number" min="1" step="1" {...form.register("periodMonths", { valueAsNumber: true })} />{form.formState.errors.periodMonths && <em>{form.formState.errors.periodMonths.message}</em>}</label>
             <label>开始日期<input type="date" {...form.register("startDate")} /></label>
             <label>结束日期（可选）<input type="date" {...form.register("endDate")} />{form.formState.errors.endDate && <em>{form.formState.errors.endDate.message}</em>}</label>
@@ -329,29 +351,19 @@ function PlanEditor({
 
           {previewIsCurrent && preview && (
             <div className="preview-card" aria-live="polite">
-              <div><span>目标月份</span><strong>{settings.target_month}</strong></div>
+              <div><span>预览月份</span><strong>{currentMonth}</strong></div>
               <div><span>生效状态</span><strong>{preview.data.effective ? "有效" : "未生效"}</strong></div>
               <div><span>生成月度项目</span><strong>{preview.data.recognized_in_target_month ? "会" : "不会"}</strong></div>
-              <div><span>月度等价金额</span><strong>{preview.data.monthly_equivalent ?? "N/A"} {preview.data.base_currency}</strong></div>
-              <div><span>当月确认金额</span><strong>{preview.data.recognized_amount ?? "N/A"} {preview.data.base_currency}</strong></div>
-              <div><span>计划支付日</span><strong>{preview.data.scheduled_date ?? "N/A"}</strong></div>
+              <div><span>月度等价金额</span><strong>{formatMoney(preview.data.monthly_equivalent, preview.data.base_currency)}</strong></div>
+              <div><span>当月确认金额</span><strong>{formatMoney(preview.data.recognized_amount, preview.data.base_currency)}</strong></div>
+              <div><span>计划支付日</span><strong>{preview.data.scheduled_date ?? "—"}</strong></div>
             </div>
           )}
           {(previewMutation.isError || saveMutation.isError) && (
             <div className="inline-error" role="alert">{describeError(previewMutation.error ?? saveMutation.error)}</div>
           )}
-          <footer className="dialog-actions">
-            <button className="button button-quiet" type="button" onClick={onClose}>取消</button>
-            <button className="button button-secondary" disabled={previewMutation.isPending} type="button" onClick={form.handleSubmit((value) => previewMutation.mutate(value))}>
-              {previewMutation.isPending ? "计算中…" : "预览并检查"}
-            </button>
-            <button className="button button-primary" disabled={!previewIsCurrent || saveMutation.isPending} type="submit">
-              {saveMutation.isPending ? "保存中…" : "确认保存"}
-            </button>
-          </footer>
         </form>
-      </section>
-    </div>
+      </Dialog>
   );
 }
 
@@ -359,8 +371,8 @@ function StopDialog({ item, onClose, onStopped }: { item: PlanItem; onClose: () 
   const [endDate, setEndDate] = useState(item.end_date ?? item.start_date);
   const mutation = useMutation({ mutationFn: () => stopPlanItem({ id: item.id, endDate }), onSuccess: onStopped });
   return (
-    <ConfirmDialog title={`停止“${item.name}”`} onClose={onClose}>
-      <p>停止只会设置结束日期，不会改动已经生成的月度快照。</p>
+    <ConfirmDialog title={`停止规则“${item.name}”`} onClose={onClose}>
+      <p>停止只会设置规则结束日期，不会改动已经生成的月度快照。</p>
       <label>最后有效日期<input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
       {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
       <button className="button button-primary" disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>确认停止</button>
@@ -372,22 +384,15 @@ function DeleteDialog({ item, onClose, onDeleted }: { item: PlanItem; onClose: (
   const mutation = useMutation({ mutationFn: () => deletePlanItem(item.id), onSuccess: onDeleted });
   return (
     <ConfirmDialog title={`删除“${item.name}”`} onClose={onClose}>
-      <p>这项计划关联 <strong>{item.history_month_count}</strong> 个月度快照。删除长期计划后，这些历史事实仍会保留。</p>
+      <p>这项规则关联 <strong>{item.history_month_count}</strong> 个月度快照。删除规则后，这些历史事实仍会保留。</p>
       {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
-      <button className="button button-danger" disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>确认删除长期计划</button>
+      <button className="button button-danger" disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>确认删除周期规则</button>
     </ConfirmDialog>
   );
 }
 
 function ConfirmDialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div className="modal-backdrop">
-      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-        <header className="dialog-header"><h2 id="confirm-title">{title}</h2><button className="icon-button" type="button" aria-label="关闭" onClick={onClose}>×</button></header>
-        {children}
-      </section>
-    </div>
-  );
+  return <Dialog title={title} onClose={onClose}>{children}</Dialog>;
 }
 
 function StatePanel({ children, error }: { children?: React.ReactNode; error?: unknown }) {

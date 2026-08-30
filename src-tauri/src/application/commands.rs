@@ -16,11 +16,12 @@ use super::{
         ConfirmActualsDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto, CsvExportResultDto,
         DeletePlanItemDto, DomainContractDto, EnsureActualOnlyInputDto, EnumOptionDto,
         ExchangeRateDto, ExchangeRateInputDto, ExchangeRateUpsertDto, FinancialCapacityDto,
-        HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto, MonthAnalyticsDto,
-        MonthInitializationStatusDto, MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto,
-        PlanItemDto, PlanItemInputDto, PlanMutationDto, PlanPreviewDto, PlanPreviewRequestDto,
-        RestoreBackupInputDto, RestoreInspectionDto, RestoreResultDto, SettingsDto,
-        SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
+        HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto,
+        ManualMonthlyItemInputDto, MonthAnalyticsDto, MonthInitializationStatusDto,
+        MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto,
+        PlanMutationDto, PlanPreviewDto, PlanPreviewRequestDto, RestoreBackupInputDto,
+        RestoreInspectionDto, RestoreResultDto, SettingsDto, SettingsInputDto, StartupStatusDto,
+        StopPlanItemRequestDto,
     },
     error::AppError,
     service::FinanceService,
@@ -38,6 +39,13 @@ pub async fn get_settings(
     service: State<'_, FinanceService>,
 ) -> Result<Option<SettingsDto>, AppError> {
     service.get_settings().await
+}
+
+#[tauri::command]
+pub async fn ensure_default_settings(
+    service: State<'_, FinanceService>,
+) -> Result<SettingsDto, AppError> {
+    service.ensure_default_settings().await
 }
 
 #[tauri::command]
@@ -124,6 +132,14 @@ pub async fn ensure_actual_only_monthly_item(
     input: EnsureActualOnlyInputDto,
 ) -> Result<MonthlyItemDto, AppError> {
     service.ensure_actual_only(input).await
+}
+
+#[tauri::command]
+pub async fn create_manual_monthly_item(
+    service: State<'_, FinanceService>,
+    input: ManualMonthlyItemInputDto,
+) -> Result<MonthlyItemDto, AppError> {
+    service.create_manual_monthly_item(input).await
 }
 
 #[tauri::command]

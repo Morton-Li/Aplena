@@ -279,6 +279,7 @@ fn monthly_with_state(entry_count: u64, confirmed: bool, actual: Option<&str>) -
         FlowType::Expense,
         RecognitionMode::Amortized,
         MonthlyItemSource::Planned,
+        pfcm_domain::MonthlyItemOrigin::PlanLinked,
         None,
         amount("10"),
         actual.map(|value| SignedAmount::from_decimal(value.parse().unwrap()).unwrap()),
@@ -307,6 +308,26 @@ fn actual_completeness_distinguishes_missing_progress_zero_and_final() {
         monthly_with_state(2, true, Some("4")).actual_data_status(),
         ActualDataStatus::Final
     );
+}
+
+#[test]
+fn manual_monthly_item_is_independent_from_a_plan_and_normalizes_its_name() {
+    let item = MonthlyItem::manual(
+        Uuid::new_v4(),
+        "  本月房租  ",
+        month("2026-06"),
+        Category::EssentialExpense,
+        currency("CNY"),
+        Some("  手动录入  ".to_owned()),
+    )
+    .unwrap();
+
+    assert_eq!(item.source_plan_item_id(), None);
+    assert_eq!(item.item_name(), "本月房租");
+    assert_eq!(item.item_source(), MonthlyItemSource::ActualOnly);
+    assert_eq!(item.item_origin(), pfcm_domain::MonthlyItemOrigin::Manual);
+    assert_eq!(item.planned_amount(), Amount::zero());
+    assert_eq!(item.note(), Some("手动录入"));
 }
 
 #[test]
