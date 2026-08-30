@@ -1,157 +1,493 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 
-import { CapacityPanel } from "../analytics/CapacityPanel";
 import {
-  getFinancialCapacity,
+  getHistoryAnalytics,
   getMonthAnalytics,
-  getSettings,
+  getStartupStatus,
   queryKeys,
   type AmountComparison,
+  type CategoryBreakdown,
+  type MonthAnalytics,
+  type ProjectBreakdown,
 } from "../../shared/api/finance";
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
+import { EmptyState } from "../../shared/components/EmptyState";
 import { describeError } from "../../shared/formatting/errors";
+import {
+  compactMoney,
+  currencyName,
+  decimalValue,
+  formatMoney,
+  formatPercentagePoints,
+  formatPercent,
+  monthLabel,
+} from "../../shared/formatting/finance";
 import { categoryLabel } from "../../shared/formatting/labels";
 
+const chartText = { color: "#64748b", fontSize: 11 };
+const axisLine = { lineStyle: { color: "#d8dee8" } };
+const splitLine = { lineStyle: { color: "#e8edf3" } };
+
 export function DashboardPage() {
-  const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
-  const month = settingsQuery.data?.target_month ?? "";
+  const startupQuery = useQuery({ queryKey: queryKeys.startup, queryFn: () => getStartupStatus() });
+  const month = startupQuery.data?.current_month ?? "";
   const analyticsQuery = useQuery({
     queryKey: queryKeys.monthAnalytics(month),
     queryFn: () => getMonthAnalytics(month),
     enabled: Boolean(month),
   });
-  const capacityQuery = useQuery({
-    queryKey: queryKeys.capacity(month),
-    queryFn: () => getFinancialCapacity(month),
-    enabled: Boolean(month),
+  const historyQuery = useQuery({
+    queryKey: queryKeys.historyAnalytics,
+    queryFn: () => getHistoryAnalytics(),
   });
-  const comparisonOption = useMemo(() => {
-    const data = analyticsQuery.data;
-    return {
-      tooltip: { trigger: "axis" },
-      legend: { data: ["计划", "当前实际"] },
-      grid: { left: 54, right: 18, top: 42, bottom: 35 },
-      xAxis: { type: "category", data: ["总收入", "总支出", "净结余"] },
-      yAxis: { type: "value" },
-      series: [
-        {
-          name: "计划",
-          type: "bar",
-          data: data ? [data.income.planned, data.expense.planned, data.net_balance.planned] : [],
-          itemStyle: { color: "#8ca795" },
-        },
-        {
-          name: "当前实际",
-          type: "bar",
-          data: data
-            ? [
-                data.income.actual_to_date,
-                data.expense.actual_to_date,
-                data.net_balance.actual_to_date,
-              ]
-            : [],
-          itemStyle: { color: "#c79c58" },
-        },
-      ],
-    };
-  }, [analyticsQuery.data]);
+  if (
+    startupQuery.isPending ||
+    analyticsQuery.isPending ||
+    historyQuery.isPending
+  ) {
+    return <DashboardLoading />;
+  }
+  if (
+    startupQuery.isError ||
+    analyticsQuery.isError ||
+    historyQuery.isError
+  ) {
+    return (
+      <section className="state-card state-card-error">
+        <span role="alert">
+          {describeError(
+            startupQuery.error ??
+              analyticsQuery.error ??
+              historyQuery.error,
+          )}
+        </span>
+      </section>
+    );
+  }
+  if (!startupQuery.data || !analyticsQuery.data) {
+    return <section className="state-card">当前月份的财务数据尚未完成初始化。</section>;
+  }
 
-  if (settingsQuery.isPending || analyticsQuery.isPending || capacityQuery.isPending) {
-    return <section className="state-card">正在实时汇总目标月份…</section>;
-  }
-  if (settingsQuery.isError || analyticsQuery.isError || capacityQuery.isError) {
-    return <section className="state-card"><span role="alert">{describeError(settingsQuery.error ?? analyticsQuery.error ?? capacityQuery.error)}</span></section>;
-  }
-  if (!analyticsQuery.data || !capacityQuery.data) {
-    return <section className="state-card">尚未完成首次设置。</section>;
-  }
   const analytics = analyticsQuery.data;
-  const actualQualifier = analytics.actual_status === "COMPLETE" ? "最终实际" : analytics.actual_status === "PARTIAL" ? "当前已录" : "暂无实际";
+  const actualQualifier = actualStatusLabel(analytics.actual_status);
+  const hasPlanBaseline = analytics.planned_item_count > 0;
 
   return (
-    <>
-      <header className="page-header dashboard-header">
-        <div>
-          <p className="eyebrow">Dashboard · {analytics.month}</p>
-          <h1>本月计划执行到哪里了？</h1>
-          <p>所有数字直接来自月度快照；实际未完整时明确标记为“当前已录”。</p>
-        </div>
-        <div className={"completeness-card status-" + analytics.actual_status.toLowerCase()}>
-          <span>实际数据完整度</span>
-          <strong>{analytics.completeness_percent ? analytics.completeness_percent + "%" : "N/A"}</strong>
-          <small>{analytics.recorded_item_count} / {analytics.total_item_count} 项 · {actualQualifier}</small>
-        </div>
-      </header>
-
-      <section className="metric-grid" aria-label="目标月份总览">
-        <MetricCard title="总收入" comparison={analytics.income} currency={analytics.currency} actualQualifier={actualQualifier} kind="income" isComplete={analytics.actual_status === "COMPLETE"} />
-        <MetricCard title="总支出" comparison={analytics.expense} currency={analytics.currency} actualQualifier={actualQualifier} kind="expense" isComplete={analytics.actual_status === "COMPLETE"} />
-        <MetricCard title="净结余" comparison={analytics.net_balance} currency={analytics.currency} actualQualifier={actualQualifier} kind="balance" isComplete={analytics.actual_status === "COMPLETE"} />
-        <article className="metric-card">
-          <span className="section-label">储蓄率</span>
-          <div className="metric-pair"><div><small>计划</small><strong>{analytics.planned_savings_rate_percent ? analytics.planned_savings_rate_percent + "%" : "N/A"}</strong></div><div><small>{actualQualifier}</small><strong>{analytics.actual_savings_rate_percent ? analytics.actual_savings_rate_percent + "%" : "N/A"}</strong></div></div>
-          <p>{analytics.savings_rate_percentage_point_variance ? "相差 " + analytics.savings_rate_percentage_point_variance + " 个百分点" : "收入为 0 或实际尚不可计算"}</p>
-          <div className="submetrics"><span>计划目标完成率 <b>{analytics.savings_rate_target_completion_percent ? analytics.savings_rate_target_completion_percent + "%" : "N/A"}</b></span><span>相对偏离 <b>{analytics.savings_rate_relative_deviation_percent ? analytics.savings_rate_relative_deviation_percent + "%" : "N/A"}</b></span></div>
-        </article>
-      </section>
-
-      <div className="dashboard-grid">
-        <section className="analysis-card">
-          <header><div><p className="section-label">Plan vs Actual</p><h2>收支与结余对照</h2></div><span>{actualQualifier}</span></header>
-          <AnalyticsChart option={comparisonOption} label={analytics.month + " 计划与当前实际的收入、支出和净结余柱状图"} />
-          <table className="data-table">
-            <caption className="sr-only">图表对应数值</caption>
-            <thead><tr><th>指标</th><th>计划</th><th>{actualQualifier}</th></tr></thead>
-            <tbody>
-              {[["总收入", analytics.income], ["总支出", analytics.expense], ["净结余", analytics.net_balance]].map(([label, comparison]) => {
-                const value = comparison as AmountComparison;
-                return <tr key={label as string}><th>{label as string}</th><td>{value.planned}</td><td>{value.actual_to_date ?? "N/A"}</td></tr>;
-              })}
-            </tbody>
-          </table>
-        </section>
-        <section className="analysis-card variance-list">
-          <header><div><p className="section-label">重要偏差</p><h2>先看最值得处理的项目</h2></div></header>
-          {analytics.important_variances.length === 0 && <p className="empty-copy">尚无已录入偏差。</p>}
-          {analytics.important_variances.map((item) => (
-            <article key={item.monthly_item_id}>
-              <div><strong>{item.name}</strong><small>{categoryLabel(item.category)}</small></div>
-              <div className={"variance-value variance-" + item.variance_effect.toLowerCase()}><strong>{item.variance_amount} {analytics.currency}</strong><small>{varianceCopy(item.variance_effect, item.flow_type)}</small></div>
-            </article>
-          ))}
-        </section>
-      </div>
-      <CapacityPanel capacity={capacityQuery.data} />
-    </>
+    <div className="dashboard-page">
+      <DashboardHeader analytics={analytics} hasPlanBaseline={hasPlanBaseline} />
+      {analytics.total_item_count === 0 ? (
+        <EmptyDashboard month={analytics.month} currency={analytics.currency} />
+      ) : (
+        <>
+          <KpiGrid analytics={analytics} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} />
+          <DashboardCharts
+            analytics={analytics}
+            history={historyQuery.data?.months ?? []}
+            hasPlanBaseline={hasPlanBaseline}
+          />
+          <ExecutionReport analytics={analytics} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} />
+          <VarianceReport analytics={analytics} />
+        </>
+      )}
+    </div>
   );
 }
 
-function MetricCard({ title, comparison, currency, actualQualifier, kind, isComplete }: { title: string; comparison: AmountComparison; currency: string; actualQualifier: string; kind: "income" | "expense" | "balance"; isComplete: boolean }) {
-  const flowType = kind === "income" ? "INCOME" : kind === "expense" ? "EXPENSE" : "BALANCE";
-  const comparisonCopy = isComplete
-    ? varianceCopy(comparison.variance_effect, flowType)
-    : partialVarianceCopy(comparison.variance_effect, flowType);
+function DashboardHeader({ analytics, hasPlanBaseline }: { analytics: MonthAnalytics; hasPlanBaseline: boolean }) {
   return (
-    <article className="metric-card">
-      <span className="section-label">{title}</span>
-      <div className="metric-pair"><div><small>计划</small><strong>{comparison.planned}</strong></div><div><small>{actualQualifier}</small><strong>{comparison.actual_to_date ?? "N/A"}</strong></div></div>
-      <p>{comparison.variance ? comparisonCopy + " · " + comparison.variance + " " + currency : "实际尚不可比较"}</p>
+    <header className="page-header compact-header dashboard-header">
+      <div>
+        <p className="eyebrow">财务总览</p>
+        <h1>{monthLabel(analytics.month)}</h1>
+        <p>{currencyName(analytics.currency)} · {hasPlanBaseline ? "本月冻结计划与实际数据汇总" : "本月实际收支与财务报表汇总"}</p>
+      </div>
+    </header>
+  );
+}
+
+function EmptyDashboard({ month, currency }: { month: string; currency: string }) {
+  return (
+    <div className="dashboard-empty-workspace">
+      <section className="empty-ledger-header" aria-label="当前财务上下文">
+        <div><span>期间</span><strong>{monthLabel(month)}</strong></div>
+        <div><span>本位币</span><strong>{currencyName(currency)}</strong></div>
+        <div><span>报表状态</span><strong>等待本月数据</strong></div>
+      </section>
+      <EmptyState
+        eyebrow="财务报表尚未建立"
+        title="从本月第一项收入或支出开始"
+        description="直接录入本月实际后，收入、支出、净结余、分类结构与趋势图会自动生成。周期规则仅在需要自动生成后续月份基准时使用。"
+        action={
+          <div className="empty-actions">
+            <Link className="button button-primary" to="/monthly">录入本月实际</Link>
+            <Link className="button button-secondary" to="/goals">设置下月目标（可选）</Link>
+          </div>
+        }
+      />
+    </div>
+  );
+}
+
+function KpiGrid({
+  analytics,
+  actualQualifier,
+  hasPlanBaseline,
+}: {
+  analytics: MonthAnalytics;
+  actualQualifier: string;
+  hasPlanBaseline: boolean;
+}) {
+  return (
+    <section className="kpi-grid" aria-label="核心财务指标">
+      <KpiCard
+        className="kpi-card-primary"
+        label="本月净结余"
+        value={formatMoney(analytics.net_balance.actual_to_date, analytics.currency)}
+        supporting={hasPlanBaseline ? `计划 ${formatMoney(analytics.net_balance.planned, analytics.currency)}` : "未启用计划基准"}
+        detail={hasPlanBaseline ? comparisonDetail(analytics.net_balance, analytics.currency, actualQualifier) : `${actualQualifier}实际净额`}
+        effect={hasPlanBaseline ? analytics.net_balance.variance_effect : "UNKNOWN"}
+      />
+      <KpiCard
+        label="总收入"
+        value={formatMoney(analytics.income.actual_to_date, analytics.currency)}
+        supporting={hasPlanBaseline ? `计划 ${formatMoney(analytics.income.planned, analytics.currency)}` : "按实际条目汇总"}
+        detail={hasPlanBaseline ? completionDetail(analytics.income, actualQualifier) : `${actualQualifier}实际收入`}
+        effect={hasPlanBaseline ? analytics.income.variance_effect : "UNKNOWN"}
+      />
+      <KpiCard
+        label="总支出"
+        value={formatMoney(analytics.expense.actual_to_date, analytics.currency)}
+        supporting={hasPlanBaseline ? `计划 ${formatMoney(analytics.expense.planned, analytics.currency)}` : "按实际条目汇总"}
+        detail={hasPlanBaseline ? comparisonDetail(analytics.expense, analytics.currency, actualQualifier) : `${actualQualifier}实际支出`}
+        effect={hasPlanBaseline ? analytics.expense.variance_effect : "UNKNOWN"}
+      />
+      <KpiCard
+        label="储蓄率"
+        value={formatPercent(analytics.actual_savings_rate_percent)}
+        supporting={hasPlanBaseline ? `计划 ${formatPercent(analytics.planned_savings_rate_percent)}` : "按本月实际计算"}
+        detail={
+          !hasPlanBaseline
+            ? analytics.actual_savings_rate_percent ? "基于当前实际收入与净结余" : `${actualQualifier}尚不可计算`
+            : analytics.savings_rate_plan_completion_percent
+            ? `计划完成 ${analytics.savings_rate_plan_completion_percent}%`
+            : `${actualQualifier}尚不可计算`
+        }
+      />
+    </section>
+  );
+}
+
+function KpiCard({
+  label,
+  value,
+  supporting,
+  detail,
+  effect = "UNKNOWN",
+  className = "",
+}: {
+  label: string;
+  value: string;
+  supporting: string;
+  detail: string;
+  effect?: AmountComparison["variance_effect"];
+  className?: string;
+}) {
+  return (
+    <article className={`kpi-card ${className} effect-${effect.toLowerCase()}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{supporting}</small>
+      <p>{detail}</p>
     </article>
   );
 }
 
-function partialVarianceCopy(effect: string, flowType: string) {
-  if (effect === "ON_PLAN") return "当前已录与计划一致";
-  if (effect === "UNKNOWN") return "尚未录入";
-  const actualIsHigher = flowType === "EXPENSE" ? effect === "UNFAVORABLE" : effect === "FAVORABLE";
-  return actualIsHigher ? "当前已录高于计划" : "当前已录低于计划";
+function DashboardCharts({
+  analytics,
+  history,
+  hasPlanBaseline,
+}: {
+  analytics: MonthAnalytics;
+  history: MonthAnalytics[];
+  hasPlanBaseline: boolean;
+}) {
+  const recentHistory = useMemo(() => history.slice(-8), [history]);
+  const trendOption = useMemo(
+    () => financialTrendOption(recentHistory, analytics.currency),
+    [analytics.currency, recentHistory],
+  );
+  const savingsOption = useMemo(() => savingsTrendOption(recentHistory), [recentHistory]);
+  const comparisonOption = useMemo(() => planActualOption(analytics, hasPlanBaseline), [analytics, hasPlanBaseline]);
+  const expenses = useMemo(
+    () =>
+      analytics.categories.filter(
+        (category) =>
+          category.flow_type === "EXPENSE" &&
+          ((decimalValue(category.planned_amount) ?? 0) !== 0 || category.actual_to_date !== null),
+      ),
+    [analytics.categories],
+  );
+  const expenseOption = useMemo(
+    () => expenseStructureOption(expenses, analytics.currency, hasPlanBaseline),
+    [analytics.currency, expenses, hasPlanBaseline],
+  );
+
+  return (
+    <section className="dashboard-chart-section" aria-label="财务图表">
+      <div className="dashboard-chart-grid dashboard-chart-grid-primary">
+        <ReportCard eyebrow="历史趋势" title="收入、支出与净结余">
+          {hasActualHistory(recentHistory) ? (
+            <>
+              <AnalyticsChart option={trendOption} label="近八个月实际收入、支出与净结余趋势图" height={244} />
+              <TrendDataTable months={recentHistory} currency={analytics.currency} />
+            </>
+          ) : (
+            <ChartEmpty message="至少录入一个月份的实际数据后显示趋势图。" />
+          )}
+        </ReportCard>
+        <ReportCard eyebrow="本月执行" title={hasPlanBaseline ? "计划与实际" : "实际收支概览"}>
+          <AnalyticsChart option={comparisonOption} label={`${analytics.month}收入、支出与净结余${hasPlanBaseline ? "计划实际分组" : "实际"}柱状图`} height={244} />
+          <p className="chart-note">{hasPlanBaseline ? "灰蓝代表计划，蓝色代表当前实际；缺失实际不会按 0 绘制。" : "当前仅展示实际数据；配置周期规则后可增加计划对比。"}</p>
+        </ReportCard>
+      </div>
+      <div className="dashboard-chart-grid">
+        <ReportCard eyebrow="支出结构" title="分类金额与占比">
+          {expenses.length > 0 ? (
+            <>
+              <AnalyticsChart option={expenseOption} label={`${analytics.month}支出分类${hasPlanBaseline ? "计划与实际" : "实际"}横向条形图`} height={Math.max(220, expenses.length * 44)} />
+              <CategoryDataTable categories={expenses} currency={analytics.currency} hasPlanBaseline={hasPlanBaseline} />
+            </>
+          ) : (
+            <ChartEmpty message="当前月份没有可绘制的支出分类。" />
+          )}
+        </ReportCard>
+        <ReportCard eyebrow="储蓄表现" title="计划与实际储蓄率趋势">
+          {hasSavingsHistory(recentHistory) ? (
+            <>
+              <AnalyticsChart option={savingsOption} label="近八个月计划储蓄率与实际储蓄率趋势图" height={244} />
+              <SavingsTrendDataTable months={recentHistory} />
+            </>
+          ) : (
+            <ChartEmpty message="至少形成一个月份的实际储蓄率后显示趋势图。" />
+          )}
+        </ReportCard>
+      </div>
+    </section>
+  );
 }
 
-function varianceCopy(effect: string, flowType: string) {
-  if (effect === "ON_PLAN") return "与计划一致";
-  if (effect === "UNKNOWN") return "尚未录入";
-  if (flowType === "INCOME") return effect === "FAVORABLE" ? "多收入" : "少收入";
-  if (flowType === "EXPENSE") return effect === "FAVORABLE" ? "节省" : "超支";
-  return effect === "FAVORABLE" ? "结余改善" : "结余下降";
+function ReportCard({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
+  return (
+    <section className="report-card">
+      <header><div><p className="section-label">{eyebrow}</p><h2>{title}</h2></div></header>
+      {children}
+    </section>
+  );
+}
+
+function ExecutionReport({ analytics, actualQualifier, hasPlanBaseline }: { analytics: MonthAnalytics; actualQualifier: string; hasPlanBaseline: boolean }) {
+  const rows: Array<[string, AmountComparison]> = [
+    ["总收入", analytics.income],
+    ["总支出", analytics.expense],
+    ["净结余", analytics.net_balance],
+  ];
+  return (
+    <section className="report-card dashboard-table-card">
+      <header>
+        <div><p className="section-label">月度报表</p><h2>{hasPlanBaseline ? "本月计划执行表" : "本月实际收支表"}</h2></div>
+        <span className="report-context">{actualQualifier}</span>
+      </header>
+      <div className="table-scroll">
+        <table className="data-table financial-table">
+          <caption className="sr-only">本月计划执行表</caption>
+          <thead><tr><th>指标</th><th>计划</th><th>实际</th><th>差额</th><th>完成率</th><th>状态</th></tr></thead>
+          <tbody>
+            {rows.map(([label, comparison]) => (
+              <tr key={label}>
+                <th>{label}</th>
+                <td>{hasPlanBaseline ? formatMoney(comparison.planned, analytics.currency) : "—"}</td>
+                <td>{formatMoney(comparison.actual_to_date, analytics.currency)}</td>
+                <td>{hasPlanBaseline ? formatMoney(comparison.variance, analytics.currency) : "—"}</td>
+                <td>{hasPlanBaseline ? formatPercent(comparison.completion_percent) : "—"}</td>
+                <td>{hasPlanBaseline ? <VarianceBadge comparison={comparison} /> : <span className="status-badge status-neutral">仅实际</span>}</td>
+              </tr>
+            ))}
+            <tr>
+              <th>储蓄率</th>
+              <td>{hasPlanBaseline ? formatPercent(analytics.planned_savings_rate_percent) : "—"}</td>
+              <td>{formatPercent(analytics.actual_savings_rate_percent)}</td>
+              <td>{formatPercentagePoints(analytics.savings_rate_percentage_point_variance)}</td>
+              <td>{formatPercent(analytics.savings_rate_plan_completion_percent)}</td>
+              <td><span className="status-badge status-neutral">对比本月计划</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function VarianceReport({ analytics }: { analytics: MonthAnalytics }) {
+  return (
+    <section className="report-card dashboard-table-card">
+      <header>
+        <div><p className="section-label">关注事项</p><h2>重要偏差与待处理项目</h2></div>
+        <Link className="text-link" to="/monthly">进入月度执行</Link>
+      </header>
+      {analytics.important_variances.length === 0 ? (
+        <p className="report-empty">当前没有需要重点处理的已录入偏差。</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table financial-table">
+            <caption className="sr-only">重要偏差与待处理项目</caption>
+            <thead><tr><th>项目</th><th>分类</th><th>计划</th><th>实际</th><th>差额</th><th>状态</th></tr></thead>
+            <tbody>{analytics.important_variances.map((item) => <VarianceRow currency={analytics.currency} item={item} key={item.monthly_item_id} />)}</tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function VarianceRow({ item, currency }: { item: ProjectBreakdown; currency: string }) {
+  return <tr><th>{item.name}</th><td>{categoryLabel(item.category)}</td><td>{formatMoney(item.planned_amount, currency)}</td><td>{formatMoney(item.actual_amount, currency)}</td><td>{formatMoney(item.variance_amount, currency)}</td><td><VarianceBadge comparison={item} /></td></tr>;
+}
+
+function VarianceBadge({ comparison }: { comparison: Pick<AmountComparison, "variance_effect"> }) {
+  const labels = { FAVORABLE: "有利", UNFAVORABLE: "需关注", ON_PLAN: "符合计划", UNKNOWN: "待录入" } as const;
+  return <span className={`status-badge status-${comparison.variance_effect.toLowerCase()}`}>{labels[comparison.variance_effect]}</span>;
+}
+
+function TrendDataTable({ months, currency }: { months: MonthAnalytics[]; currency: string }) {
+  return (
+    <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><thead><tr><th>月份</th><th>收入</th><th>支出</th><th>净结余</th></tr></thead><tbody>{months.map((month) => <tr key={month.month}><th><Link className="table-link" to={`/history/${month.month}`}>{month.month}</Link></th><td>{formatMoney(month.income.actual_to_date, currency)}</td><td>{formatMoney(month.expense.actual_to_date, currency)}</td><td>{formatMoney(month.net_balance.actual_to_date, currency)}</td></tr>)}</tbody></table></div></details>
+  );
+}
+
+function SavingsTrendDataTable({ months }: { months: MonthAnalytics[] }) {
+  return (
+    <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><caption className="sr-only">储蓄率趋势精确数据</caption><thead><tr><th>月份</th><th>计划储蓄率</th><th>实际储蓄率</th></tr></thead><tbody>{months.map((month) => <tr key={month.month}><th><Link className="table-link" to={`/history/${month.month}`}>{month.month}</Link></th><td>{month.planned_item_count > 0 ? formatPercent(month.planned_savings_rate_percent) : "—"}</td><td>{formatPercent(month.actual_savings_rate_percent)}</td></tr>)}</tbody></table></div></details>
+  );
+}
+
+function CategoryDataTable({ categories, currency, hasPlanBaseline }: { categories: CategoryBreakdown[]; currency: string; hasPlanBaseline: boolean }) {
+  return (
+    <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><thead><tr><th>分类</th><th>计划</th><th>实际</th><th>实际占比</th></tr></thead><tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, currency) : "—"}</td><td>{formatMoney(item.actual_to_date, currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody></table></div></details>
+  );
+}
+
+function ChartEmpty({ message }: { message: string }) {
+  return <div className="chart-empty"><span aria-hidden="true" /><p>{message}</p></div>;
+}
+
+function DashboardLoading() {
+  return <><header className="page-header compact-header"><div><p className="eyebrow">财务总览</p><h1>正在汇总本月报表</h1></div></header><section className="dashboard-loading" aria-label="正在加载财务总览"><div className="workspace-skeleton workspace-skeleton-wide" /><div className="workspace-skeleton-grid"><div className="workspace-skeleton" /><div className="workspace-skeleton" /><div className="workspace-skeleton" /></div></section></>;
+}
+
+function financialTrendOption(months: MonthAnalytics[], currency: string) {
+  const visible = months.slice(-8);
+  return {
+    tooltip: { trigger: "axis", valueFormatter: (value: number | string) => formatMoney(String(value), currency) },
+    legend: { top: 0, left: 0, data: ["收入", "支出", "净结余"], textStyle: chartText },
+    grid: { left: 72, right: 18, top: 48, bottom: 36 },
+    xAxis: { type: "category", boundaryGap: false, data: visible.map((month) => month.month.slice(2)), axisLabel: chartText, axisLine },
+    yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => compactMoney(value, currency) }, splitLine },
+    series: [
+      { name: "收入", type: "line", data: visible.map((month) => decimalValue(month.income.actual_to_date)), symbolSize: 6, itemStyle: { color: "#2563eb" }, lineStyle: { width: 2, color: "#2563eb" }, connectNulls: false },
+      { name: "支出", type: "line", data: visible.map((month) => decimalValue(month.expense.actual_to_date)), symbolSize: 6, itemStyle: { color: "#64748b" }, lineStyle: { width: 2, color: "#64748b" }, connectNulls: false },
+      { name: "净结余", type: "line", data: visible.map((month) => decimalValue(month.net_balance.actual_to_date)), symbolSize: 6, itemStyle: { color: "#4f46e5" }, lineStyle: { width: 2, color: "#4f46e5" }, connectNulls: false },
+    ],
+  };
+}
+
+function savingsTrendOption(months: MonthAnalytics[]) {
+  const visible = months.slice(-8);
+  return {
+    tooltip: { trigger: "axis", valueFormatter: (value: number | string) => `${value}%` },
+    legend: { top: 0, left: 0, data: ["计划储蓄率", "实际储蓄率"], textStyle: chartText },
+    grid: { left: 52, right: 18, top: 48, bottom: 36 },
+    xAxis: { type: "category", boundaryGap: false, data: visible.map((month) => month.month.slice(2)), axisLabel: chartText, axisLine },
+    yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => `${value}%` }, splitLine },
+    series: [
+      {
+        name: "计划储蓄率",
+        type: "line",
+        data: visible.map((month) => month.planned_item_count > 0 ? decimalValue(month.planned_savings_rate_percent) : null),
+        symbolSize: 6,
+        itemStyle: { color: "#94a3b8" },
+        lineStyle: { width: 2, color: "#94a3b8", type: "dashed" },
+        connectNulls: false,
+      },
+      {
+        name: "实际储蓄率",
+        type: "line",
+        data: visible.map((month) => decimalValue(month.actual_savings_rate_percent)),
+        symbolSize: 6,
+        itemStyle: { color: "#2563eb" },
+        lineStyle: { width: 2, color: "#2563eb" },
+        connectNulls: false,
+      },
+    ],
+  };
+}
+
+function planActualOption(analytics: MonthAnalytics, hasPlanBaseline: boolean) {
+  const actualSeries = { name: "实际", type: "bar", barMaxWidth: 34, data: [analytics.income.actual_to_date, analytics.expense.actual_to_date, analytics.net_balance.actual_to_date].map(decimalValue), itemStyle: { color: "#2563eb", borderRadius: [3, 3, 0, 0] } };
+  return {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: number | string) => formatMoney(String(value), analytics.currency) },
+    legend: { top: 0, data: hasPlanBaseline ? ["计划", "实际"] : ["实际"], textStyle: chartText },
+    grid: { left: 70, right: 16, top: 48, bottom: 36 },
+    xAxis: { type: "category", data: ["收入", "支出", "净结余"], axisLabel: chartText, axisLine },
+    yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => compactMoney(value, analytics.currency) }, splitLine },
+    series: hasPlanBaseline ? [
+      { name: "计划", type: "bar", barMaxWidth: 34, data: [analytics.income.planned, analytics.expense.planned, analytics.net_balance.planned].map(decimalValue), itemStyle: { color: "#94a3b8", borderRadius: [3, 3, 0, 0] } },
+      actualSeries,
+    ] : [actualSeries],
+  };
+}
+
+function expenseStructureOption(categories: CategoryBreakdown[], currency: string, hasPlanBaseline: boolean) {
+  const actualSeries = { name: "实际", type: "bar", barMaxWidth: 18, data: categories.map((item) => decimalValue(item.actual_to_date)), itemStyle: { color: "#2563eb", borderRadius: [0, 3, 3, 0] } };
+  return {
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: number | string) => formatMoney(String(value), currency) },
+    legend: { top: 0, data: hasPlanBaseline ? ["计划", "实际"] : ["实际"], textStyle: chartText },
+    grid: { left: 92, right: 28, top: 48, bottom: 24 },
+    xAxis: {
+      type: "value",
+      splitNumber: 4,
+      axisLabel: {
+        ...chartText,
+        hideOverlap: true,
+        formatter: (value: number) => compactMoney(value, currency),
+      },
+      splitLine,
+    },
+    yAxis: { type: "category", data: categories.map((item) => categoryLabel(item.category)), axisLabel: chartText, axisLine },
+    series: hasPlanBaseline ? [
+      { name: "计划", type: "bar", barMaxWidth: 18, data: categories.map((item) => decimalValue(item.planned_amount)), itemStyle: { color: "#94a3b8", borderRadius: [0, 3, 3, 0] } },
+      actualSeries,
+    ] : [actualSeries],
+  };
+}
+
+function hasActualHistory(months: MonthAnalytics[]) {
+  return months.some((month) => month.income.actual_to_date !== null || month.expense.actual_to_date !== null || month.net_balance.actual_to_date !== null);
+}
+
+function hasSavingsHistory(months: MonthAnalytics[]) {
+  return months.some((month) => month.actual_savings_rate_percent !== null);
+}
+
+function comparisonDetail(comparison: AmountComparison, currency: string, actualQualifier: string) {
+  return comparison.variance === null ? `${actualQualifier}尚不可比较` : `差额 ${formatMoney(comparison.variance, currency)}`;
+}
+
+function completionDetail(comparison: AmountComparison, actualQualifier: string) {
+  return comparison.completion_percent ? `计划完成 ${comparison.completion_percent}%` : `${actualQualifier}尚不可计算`;
+}
+
+function actualStatusLabel(status: MonthAnalytics["actual_status"]) {
+  return status === "COMPLETE" ? "最终实际" : status === "PARTIAL" ? "当前已录" : "尚未录入";
 }

@@ -6,12 +6,13 @@ import { App, ApplicationErrorBoundary } from "./App";
 import type { Invoke } from "./shared/api/domain";
 import type {
   InitializeMonthResult,
+  ExchangeRate,
   FinancialCapacity,
   MonthAnalytics,
   MonthPreview,
   MonthlyItem,
+  NextMonthGoal,
   PlanItem,
-  RestoreInspection,
   Settings,
 } from "./shared/api/finance";
 
@@ -63,8 +64,13 @@ const contract = {
 };
 
 const settings: Settings = {
-  target_month: "2026-08",
   base_currency: "CNY",
+  created_at: "2026-08-01T00:00:00Z",
+  updated_at: "2026-08-01T00:00:00Z",
+};
+
+const nextMonthGoal: NextMonthGoal = {
+  target_month: "2026-09",
   minimum_savings_rate_basis_points: 2000,
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-01T00:00:00Z",
@@ -75,6 +81,19 @@ const baseRate = {
   base_currency: "CNY",
   rate: "1.00000000",
   is_base_currency: true,
+  source: "BASE_CURRENCY" as const,
+  observed_on: "2026-08-01",
+  plan_reference_count: 0,
+  updated_at: "2026-08-01T00:00:00Z",
+};
+
+const cachedUsdRate: ExchangeRate = {
+  currency: "USD",
+  base_currency: "CNY",
+  rate: "7.10000000",
+  is_base_currency: false,
+  source: "MANUAL",
+  observed_on: "2026-08-01",
   plan_reference_count: 0,
   updated_at: "2026-08-01T00:00:00Z",
 };
@@ -106,6 +125,7 @@ function monthlyItem(overrides: Partial<MonthlyItem> = {}): MonthlyItem {
     flow_type: "EXPENSE",
     recognition_mode: "AMORTIZED",
     item_source: "PLANNED",
+    item_origin: "PLAN_LINKED",
     scheduled_date: null,
     planned_amount: "300.00",
     actual_amount: null,
@@ -129,32 +149,34 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
     currency: "CNY",
     actual_status: "PARTIAL",
     total_item_count: 3,
+    planned_item_count: 3,
     recorded_item_count: 2,
     completeness_percent: "66.67",
     income: {
       planned: "30000.00",
       actual_to_date: "28700.00",
       variance: "-1300.00",
+      completion_percent: "95.67",
       variance_effect: "UNFAVORABLE",
     },
     expense: {
       planned: "9300.00",
       actual_to_date: "8427.00",
       variance: "-873.00",
+      completion_percent: "90.61",
       variance_effect: "FAVORABLE",
     },
     net_balance: {
       planned: "20700.00",
       actual_to_date: "20273.00",
       variance: "-427.00",
+      completion_percent: "97.94",
       variance_effect: "UNFAVORABLE",
     },
     planned_savings_rate_percent: "69.00",
     actual_savings_rate_percent: "70.64",
     savings_rate_percentage_point_variance: "1.64",
-    savings_rate_target_completion_percent: "102.38",
-    savings_rate_relative_deviation_percent: "2.38",
-    minimum_savings_rate_percent: "20.00",
+    savings_rate_plan_completion_percent: "102.38",
     categories: [
       {
         category: "FIXED_INCOME",
@@ -267,7 +289,7 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
 }
 
 const capacity: FinancialCapacity = {
-  target_month: "2026-08",
+  target_month: "2026-09",
   base_currency: "CNY",
   minimum_savings_rate_percent: "20.00",
   stable_income: "30000.00",
@@ -275,6 +297,7 @@ const capacity: FinancialCapacity = {
   essential_expenses: "6000.00",
   fixed_commitments: "3000.00",
   discretionary_budget: "2000.00",
+  minimum_savings_amount: "6000.00",
   preserved_capacity: "13000.00",
   maximum_capacity: "15000.00",
   fixed_commitment_ratio_percent: "10.00",
@@ -283,6 +306,7 @@ const capacity: FinancialCapacity = {
 
 interface HarnessOptions {
   settings?: Settings | null;
+  rates?: ExchangeRate[];
   plans?: PlanItem[];
   monthly?: Record<string, MonthlyItem[]>;
   startupCreated?: number;
@@ -291,11 +315,13 @@ interface HarnessOptions {
   analytics?: MonthAnalytics;
   history?: MonthAnalytics[];
   capacity?: FinancialCapacity;
-  restoreInspection?: RestoreInspection;
+  goal?: NextMonthGoal;
 }
 
 function installHarness(options: HarnessOptions = {}) {
   let storedSettings = options.settings === undefined ? settings : options.settings;
+  let storedGoal = options.goal ?? nextMonthGoal;
+  let storedRates = [...(options.rates ?? [baseRate])];
   const plans = [...(options.plans ?? [])];
   const monthly = { ...(options.monthly ?? {}) };
   const initialized = new Set<string>();
@@ -308,20 +334,31 @@ function installHarness(options: HarnessOptions = {}) {
         return contract as T;
       case "get_settings":
         return storedSettings as T;
+      case "ensure_default_settings": {
+        if (!storedSettings) {
+          storedSettings = {
+            base_currency: "CNY",
+            created_at: "2026-08-01T00:00:00Z",
+            updated_at: "2026-08-01T00:00:00Z",
+          };
+        }
+        return storedSettings as T;
+      }
       case "save_settings": {
-        const input = args?.input as {
-          targetMonth: string;
-          baseCurrency: string;
-          minimumSavingsRateBasisPoints: number;
-        };
+        const input = args?.input as { baseCurrency: string };
         storedSettings = {
-          target_month: input.targetMonth,
           base_currency: input.baseCurrency,
-          minimum_savings_rate_basis_points: input.minimumSavingsRateBasisPoints,
           created_at: "2026-08-01T00:00:00Z",
           updated_at: "2026-08-01T00:00:00Z",
         };
         return storedSettings as T;
+      }
+      case "get_next_month_goal":
+        return storedGoal as T;
+      case "save_next_month_goal": {
+        const input = args?.input as { minimumSavingsRateBasisPoints: number };
+        storedGoal = { ...storedGoal, minimum_savings_rate_basis_points: input.minimumSavingsRateBasisPoints };
+        return storedGoal as T;
       }
       case "get_startup_status":
         return {
@@ -336,7 +373,29 @@ function installHarness(options: HarnessOptions = {}) {
           error: null,
         } as T;
       case "list_exchange_rates":
-        return [baseRate] as T;
+        return storedRates as T;
+      case "import_reference_rates": {
+        const input = args?.input as { observations: { currency: string; euroRate: string; observedOn: string }[]; currencies: string[] };
+        const baseCurrency = storedSettings?.base_currency ?? "CNY";
+        const baseObservation = input.observations.find((observation) => observation.currency === baseCurrency);
+        for (const currency of input.currencies) {
+          const observation = input.observations.find((candidate) => candidate.currency === currency);
+          if (!baseObservation || !observation) continue;
+          const rate = (Number(baseObservation.euroRate) / Number(observation.euroRate)).toFixed(8);
+          storedRates = storedRates.filter((candidate) => candidate.currency !== currency);
+          storedRates.push({
+            currency,
+            base_currency: baseCurrency,
+            rate,
+            is_base_currency: false,
+            source: "ECB_REFERENCE",
+            observed_on: observation.observedOn,
+            plan_reference_count: 0,
+            updated_at: "2026-08-28T00:00:00Z",
+          });
+        }
+        return storedRates as T;
+      }
       case "list_existing_months":
         return Object.keys(monthly) as T;
       case "list_plan_items":
@@ -380,16 +439,7 @@ function installHarness(options: HarnessOptions = {}) {
           recognition_mode: input.recognitionMode,
         };
         plans.push(created);
-        return {
-          plan_item: created,
-          current_month_initialization: {
-            month: "2026-08",
-            created_count: 1,
-            skipped_existing_count: 0,
-            excluded_count: 0,
-            warnings: [],
-          },
-        } as T;
+        return created as T;
       }
       case "update_plan_item":
         return examplePlan as T;
@@ -429,10 +479,20 @@ function installHarness(options: HarnessOptions = {}) {
         return [] as T;
       case "ensure_actual_only_monthly_item":
         return monthlyItem({ item_source: "ACTUAL_ONLY", planned_amount: "0.00" }) as T;
+      case "create_manual_monthly_item":
+        return monthlyItem({
+          source_plan_item_id: null,
+          item_name: (args?.input as { name: string }).name,
+          category: (args?.input as { category: string }).category,
+          flow_type: ["FIXED_INCOME", "VARIABLE_INCOME"].includes((args?.input as { category: string }).category) ? "INCOME" : "EXPENSE",
+          item_source: "ACTUAL_ONLY",
+          item_origin: "MANUAL",
+          planned_amount: "0.00",
+        }) as T;
       case "create_actual_entry":
       case "update_actual_entry": {
-        const input = args?.input as { id?: string; monthlyItemId: string; occurredOn: string; effect: string; amount: string; note?: string };
-        return { id: input.id ?? "00000000-0000-0000-0000-000000000501", monthly_item_id: input.monthlyItemId, occurred_on: input.occurredOn, effect: input.effect, amount: input.amount, origin: "USER", note: input.note ?? null, created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z" } as T;
+        const input = args?.input as { id?: string; monthlyItemId: string; occurredOn: string; effect: string; amount: string; currency: string; exchangeRate: string; exchangeRateSource: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL"; exchangeRateObservedOn: string; note?: string };
+        return { id: input.id ?? "00000000-0000-0000-0000-000000000501", monthly_item_id: input.monthlyItemId, occurred_on: input.occurredOn, effect: input.effect, amount: input.amount, source_amount: input.amount, source_currency: input.currency, exchange_rate: input.exchangeRate, exchange_rate_source: input.exchangeRateSource, exchange_rate_observed_on: input.exchangeRateObservedOn, origin: "USER", note: input.note ?? null, created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z" } as T;
       }
       case "delete_actual_entry":
         return undefined as T;
@@ -446,74 +506,6 @@ function installHarness(options: HarnessOptions = {}) {
         return undefined as T;
       case "stop_plan_item":
         return examplePlan as T;
-      case "create_backup":
-        return {
-          status: "CREATED",
-          file_name: "Aplena-test.aplena",
-          created_at: "2026-08-23T00:00:00Z",
-          summary: null,
-        } as T;
-      case "export_csv":
-        return {
-          status: "CREATED",
-          folder_name: "Aplena-CSV-test",
-          created_at: "2026-08-23T00:00:00Z",
-          file_count: 5,
-        } as T;
-      case "inspect_backup":
-        return (options.restoreInspection ?? {
-          status: "READY",
-          token: "restore-token",
-          file_name: "Aplena-test.aplena",
-          backup_created_at: "2026-08-22T00:00:00Z",
-          backup_app_version: "0.1.0",
-          schema_version: 3,
-          migrations_applied: false,
-          summary: {
-            settings: {
-              target_month: "2026-08",
-              base_currency: "CNY",
-              minimum_savings_rate_basis_points: 2000,
-            },
-            settings_count: 1,
-            exchange_rate_count: 1,
-            plan_item_count: 2,
-            monthly_item_count: 3,
-            actual_entry_count: 4,
-            first_month: "2026-07",
-            last_month: "2026-08",
-          },
-          current_summary: {
-            settings: {
-              target_month: "2026-08",
-              base_currency: "CNY",
-              minimum_savings_rate_basis_points: 2000,
-            },
-            settings_count: 1,
-            exchange_rate_count: 1,
-            plan_item_count: 1,
-            monthly_item_count: 1,
-            actual_entry_count: 1,
-            first_month: "2026-08",
-            last_month: "2026-08",
-          },
-        }) as T;
-      case "restore_backup":
-        return {
-          restored: true,
-          recovery_point_name: "before-restore-test.aplena",
-          restored_at: "2026-08-23T00:00:00Z",
-          summary: {
-            settings: null,
-            settings_count: 1,
-            exchange_rate_count: 1,
-            plan_item_count: 2,
-            monthly_item_count: 3,
-            actual_entry_count: 4,
-            first_month: "2026-07",
-            last_month: "2026-08",
-          },
-        } as T;
       default:
         throw new Error("Unhandled command in test: " + command);
     }
@@ -523,46 +515,117 @@ function installHarness(options: HarnessOptions = {}) {
 
 describe("planning workflows", () => {
   beforeEach(() => {
+    vi.unstubAllGlobals();
     invokeMock.mockReset();
     window.location.hash = "";
   });
 
-  it("completes first setup entirely by keyboard and creates the base currency", async () => {
+  it("creates the default CNY baseline and opens the dashboard without a setup screen", async () => {
     installHarness({ settings: null });
-    const user = userEvent.setup();
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "建立你的财务基准" })).toBeInTheDocument();
-    await user.tab();
-    expect(screen.getByRole("combobox", { name: /本位币/ })).toHaveFocus();
-    await user.tab();
-    await user.tab();
-    await user.tab();
-    expect(screen.getByRole("button", { name: "完成设置并进入 Aplena" })).toHaveFocus();
-    await user.keyboard("{Enter}");
+    await screen.findByRole("heading", { name: "2026 年 8 月" });
+    const navigation = screen.getByRole("navigation");
+    expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "总览",
+      "月度执行",
+      "历史报表",
+      "配置预算",
+      "设置",
+    ]);
+    expect(screen.queryByRole("link", { name: /长期规划/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "财务分析" })).not.toBeInTheDocument();
+    expect(screen.queryByText("建立你的财务基准")).not.toBeInTheDocument();
+    expect(screen.queryByText("实际数据完成度")).not.toBeInTheDocument();
+    expect(document.querySelector("[data-tauri-drag-region]")).toHaveClass("window-drag-region");
+    expect(invokeMock).toHaveBeenCalledWith("ensure_default_settings");
+  });
 
-    expect(await screen.findByRole("link", { name: "长期计划" })).toBeInTheDocument();
-    expect(invokeMock).toHaveBeenCalledWith("save_settings", {
-      input: expect.objectContaining({
-        baseCurrency: "CNY",
-        minimumSavingsRateBasisPoints: 2000,
-      }),
+  it("keeps settings limited to financial configuration", async () => {
+    installHarness();
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "系统设置" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "本位币" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "当前汇率" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更新官方汇率" })).toBeInTheDocument();
+    expect(screen.getByText(/欧洲央行每日参考汇率通常在工作日更新/)).toBeInTheDocument();
+    expect(screen.queryByText(/尚无月度快照时可以直接切换/)).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".base-currency-setting")).toHaveLength(1);
+    expect(document.querySelectorAll(".settings-card")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.queryByLabelText("下月目标储蓄率")).not.toBeInTheDocument();
+  });
+
+  it("updates saved and rule currencies from the latest ECB observation date", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE",
+      "EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2026-08-28,1.1643",
+      "EXR.D.CNY.EUR.SP00.A,D,CNY,EUR,SP00,A,2026-08-28,7.8251",
+      "EXR.D.EUR.EUR.SP00.A,D,EUR,EUR,SP00,A,2026-08-28,1",
+    ].join("\n"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    installHarness({
+      rates: [baseRate, cachedUsdRate],
+      plans: [{ ...examplePlan, currency: "EUR" }],
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "更新官方汇率" }));
+    expect(await screen.findByText("欧洲央行每日参考汇率已更新，既有费用的汇率快照未作修改。")).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("import_reference_rates", {
+      input: expect.objectContaining({ currencies: ["USD", "EUR"] }),
+    });
+  });
+
+  it("keeps the goal isolated to the next natural month and saves its policy", async () => {
+    installHarness({ plans: [examplePlan] });
+    const user = userEvent.setup();
+    window.location.hash = "#/goals";
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "配置预算" });
+    await screen.findByText("2026-09", { selector: ".goal-month-badge strong" });
+    expect(screen.getByRole("heading", { name: "配置预算" }).parentElement).toHaveTextContent("2026 年 9 月");
+    expect(screen.queryByLabelText("目标适用范围")).not.toBeInTheDocument();
+    expect(screen.queryByText("当前月")).not.toBeInTheDocument();
+    expect(screen.queryByText("历史月")).not.toBeInTheDocument();
+    expect(screen.queryByText("生效范围")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "自动月度基准" })).not.toBeInTheDocument();
+    const rulesTable = screen.getByRole("table", { name: "周期规则" });
+    const ruleRow = within(rulesTable).getByRole("row", { name: /年度保险/ });
+    expect(ruleRow).toHaveTextContent("¥ 1,200.00");
+    expect(ruleRow).toHaveTextContent("12 个月");
+    expect(ruleRow).toHaveTextContent("按支付月份确认");
+    expect(ruleRow).toHaveTextContent("2026-08-31");
+    expect(ruleRow).toHaveTextContent("长期有效");
+    expect(screen.getByRole("img", { name: "2026-09稳定收入分配与剩余承载力瀑布图" })).toBeInTheDocument();
+    const input = screen.getByLabelText("下月目标储蓄率");
+    await user.clear(input);
+    await user.type(input, "25");
+    await user.click(screen.getByRole("button", { name: "保存下月目标" }));
+    await screen.findByText("下月目标已保存，本月与历史数据未作修改。");
+    expect(invokeMock).toHaveBeenCalledWith("save_next_month_goal", {
+      input: { minimumSavingsRateBasisPoints: 2500 },
     });
   });
 
   it("previews and creates an AMORTIZED plan without frontend financial arithmetic", async () => {
     installHarness();
     const user = userEvent.setup();
+    window.location.hash = "#/goals";
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "长期计划" }));
-    await user.click(await screen.findByRole("button", { name: "新建计划" }));
+    await user.click(await screen.findByRole("button", { name: "新建周期规则" }));
     await user.type(screen.getByLabelText("项目名称"), "云服务器");
     await user.type(screen.getByLabelText("计划金额"), "1200");
     await user.click(screen.getByRole("button", { name: "预览并检查" }));
 
-    expect((await screen.findAllByText("100.00 CNY")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("¥ 100.00")).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "确认保存" }));
-    expect(await screen.findByText(/计划已保存/)).toBeInTheDocument();
+    expect(await screen.findByText(/周期规则已保存/)).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith(
       "create_plan_item",
       expect.objectContaining({
@@ -574,9 +637,9 @@ describe("planning workflows", () => {
   it("explains PAYMENT mode and displays a payment-month preview before save", async () => {
     installHarness();
     const user = userEvent.setup();
+    window.location.hash = "#/goals";
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "长期计划" }));
-    await user.click(await screen.findByRole("button", { name: "新建计划" }));
+    await user.click(await screen.findByRole("button", { name: "新建周期规则" }));
     await user.type(screen.getByLabelText("项目名称"), "年度保险");
     await user.type(screen.getByLabelText("计划金额"), "1200");
     await user.click(screen.getByRole("radio", { name: /按支付月份确认/ }));
@@ -587,6 +650,8 @@ describe("planning workflows", () => {
   });
 
   it("shows actual completeness states and records expense/refund entries without editing totals", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
     installHarness({
       plans: [examplePlan],
       startupCreated: 2,
@@ -622,22 +687,93 @@ describe("planning workflows", () => {
     render(<App />);
 
     expect(await screen.findByText(/当前月已自动检查：新增 2 项/)).toBeInTheDocument();
-    expect(screen.getByText("尚无条目")).toBeInTheDocument();
-    expect(screen.getAllByText("0.00").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("300.00 CNY").length).toBeGreaterThan(0);
-    await user.click(screen.getAllByRole("button", { name: "确认项目已完成" })[0]);
+    await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
+    expect(await screen.findByRole("dialog", { name: "电费" })).toBeInTheDocument();
+    expect(await screen.findByText("还没有实际条目")).toBeInTheDocument();
+    expect(screen.getAllByText("¥ 0.00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("¥ 300.00").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "确认项目已完成" }));
     expect(invokeMock).toHaveBeenCalledWith("confirm_monthly_item", {
       input: expect.objectContaining({ id: expect.any(String) }),
     });
+    await user.click(screen.getByRole("button", { name: "关闭项目详情" }));
 
     await user.click(screen.getByRole("button", { name: "添加实际条目" }));
-    await user.clear(screen.getByLabelText("金额"));
-    await user.type(screen.getByLabelText("金额"), "427.25");
-    await user.selectOptions(screen.getByLabelText("类型"), "DECREASE");
+    await user.click(screen.getByRole("button", { name: /关联周期规则/ }));
+    await user.clear(screen.getByLabelText("原币金额"));
+    await user.type(screen.getByLabelText("原币金额"), "427.25");
+    await user.click(screen.getByLabelText("类型"));
+    await user.click(screen.getByRole("option", { name: "退款" }));
     await user.click(screen.getByRole("button", { name: "保存条目" }));
     expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
       input: expect.objectContaining({ amount: "427.25", effect: "DECREASE" }),
     });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the official reference rate before saving a new foreign-currency entry", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response([
+      "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE",
+      "EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2026-08-28,1.1643",
+      "EXR.D.CNY.EUR.SP00.A,D,CNY,EUR,SP00,A,2026-08-28,7.8251",
+    ].join("\n"), { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+    installHarness({
+      rates: [baseRate, cachedUsdRate],
+      monthly: { "2026-08": [monthlyItem()] },
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
+    await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
+    await user.click(screen.getByLabelText("实际条目币种"));
+    await user.click(screen.getByRole("option", { name: /USD/ }));
+    expect(await screen.findByText(/欧洲央行每日参考汇率 · 2026-08-28 · 保存后固定/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("原币金额"), { target: { value: "100.00" } });
+    await user.click(screen.getByRole("button", { name: "保存条目" }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({
+        amount: "100.00",
+        currency: "USD",
+        exchangeRate: "6.72086232",
+        exchangeRateSource: "ECB_REFERENCE",
+        exchangeRateObservedOn: "2026-08-28",
+      }),
+    }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the dated cached rate as a visible fallback when ECB is unavailable", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+    installHarness({
+      rates: [baseRate, cachedUsdRate],
+      monthly: { "2026-08": [monthlyItem()] },
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
+    await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
+    await user.click(screen.getByLabelText("实际条目币种"));
+    await user.click(screen.getByRole("option", { name: /USD/ }));
+    expect(await screen.findByText(/备用手动汇率 · 2026-08-01 · 保存后固定/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("原币金额"), { target: { value: "25.00" } });
+    await user.click(screen.getByRole("button", { name: "保存条目" }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({
+        amount: "25.00",
+        currency: "USD",
+        exchangeRate: "7.10000000",
+        exchangeRateSource: "MANUAL",
+        exchangeRateObservedOn: "2026-08-01",
+      }),
+    }));
   });
 
   it("creates an actual-only monthly item before recording an entry outside the plan schedule", async () => {
@@ -647,8 +783,10 @@ describe("planning workflows", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
-    await user.type(screen.getByLabelText("金额"), "25.00");
-    await user.selectOptions(screen.getByLabelText("类型"), "DECREASE");
+    await user.click(screen.getByRole("button", { name: /关联周期规则/ }));
+    await user.type(screen.getByLabelText("原币金额"), "25.00");
+    await user.click(screen.getByLabelText("类型"));
+    await user.click(screen.getByRole("option", { name: "退款" }));
     await user.click(screen.getByRole("button", { name: "保存条目" }));
 
     await waitFor(() => {
@@ -666,47 +804,64 @@ describe("planning workflows", () => {
     });
   });
 
-  it("browses future and historical months without writes, then explicitly initializes", async () => {
-    installHarness();
+  it("records a manual monthly item without requiring a long-term plan", async () => {
+    installHarness({ plans: [], monthly: { "2026-08": [] } });
     const user = userEvent.setup();
     window.location.hash = "#/monthly";
     render(<App />);
-    const picker = await screen.findByLabelText("查看月份");
 
-    fireEvent.change(picker, { target: { value: "2026-09" } });
-    expect(await screen.findByText("未来月份预览")).toBeInTheDocument();
-    expect(invokeMock.mock.calls.some(([command]) => command === "initialize_month")).toBe(false);
-    await user.click(screen.getByRole("button", { name: "确认并初始化未来月份" }));
-    await user.click(screen.getByLabelText(/我理解这会创建/));
-    await user.click(screen.getByRole("button", { name: "确认创建月度快照" }));
-    expect(invokeMock).toHaveBeenCalledWith(
-      "initialize_month",
-      expect.objectContaining({ input: expect.objectContaining({ month: "2026-09", confirmed: true }) }),
-    );
+    await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
+    await user.type(screen.getByLabelText("项目名称"), "本月房租");
+    await user.type(screen.getByLabelText("原币金额"), "3200.00");
+    await user.click(screen.getByRole("button", { name: "保存条目" }));
 
-    fireEvent.change(picker, { target: { value: "2026-01" } });
-    expect(await screen.findByText("历史月份查看")).toBeInTheDocument();
-    const historyPreviewCalls = invokeMock.mock.calls.filter(
-      ([command, args]) =>
-        command === "preview_month" &&
-        (args as { input: { month: string } }).input.month === "2026-01",
-    );
-    expect(historyPreviewCalls.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("create_manual_monthly_item", {
+        input: {
+          name: "本月房租",
+          month: "2026-08",
+          category: "ESSENTIAL_EXPENSE",
+        },
+      });
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({ amount: "3200.00", effect: "INCREASE" }),
+    });
+    expect(invokeMock.mock.calls.some(([command]) => command === "ensure_actual_only_monthly_item")).toBe(false);
   });
 
-  it("requires a temporary rate when a historical snapshot has a missing currency", async () => {
-    installHarness({ missingCurrency: "USD" });
-    const user = userEvent.setup();
+  it("keeps monthly execution fixed to the current natural month", async () => {
+    installHarness({
+      settings,
+      monthly: { "2026-08": [monthlyItem()] },
+    });
     window.location.hash = "#/monthly";
     render(<App />);
-    fireEvent.change(await screen.findByLabelText("查看月份"), { target: { value: "2025-12" } });
-    expect(await screen.findByText("缺少汇率：USD")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "补录这个历史月份" }));
-    const confirm = screen.getByRole("button", { name: "确认创建月度快照" });
-    await user.click(screen.getByLabelText(/我理解这会创建/));
-    expect(confirm).toBeDisabled();
-    await user.type(screen.getByLabelText("USD 临时汇率（必填）"), "7.1");
-    expect(confirm).toBeEnabled();
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("查看月份")).not.toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("list_monthly_items", { month: "2026-08" });
+    expect(invokeMock.mock.calls.some(([command, args]) => command === "list_monthly_items" && (args as { month?: string })?.month === "2026-01")).toBe(false);
+  });
+
+  it("redirects the legacy plans route into the next-month goals page", async () => {
+    installHarness();
+    window.location.hash = "#/plans";
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "配置预算" })).toBeInTheDocument();
+    expect(await screen.findByText("2026-09", { selector: ".goal-month-badge strong" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "周期规则" })).toBeInTheDocument();
+  });
+
+  it("redirects the legacy analysis route to the current month report", async () => {
+    installHarness();
+    window.location.hash = "#/analysis";
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "月度执行结果" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "相邻月份" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "财务分析" })).not.toBeInTheDocument();
   });
 
   it("batch confirmation marks completion without synthesizing actual entries", async () => {
@@ -715,17 +870,84 @@ describe("planning workflows", () => {
     window.location.hash = "#/monthly";
     render(<App />);
     expect(await screen.findByText("确认只标记条目已核对，不会补写计划金额或创建虚假实际。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "确认所选范围已完成" }));
+    await user.click(screen.getByRole("button", { name: "确认整月待处理 1 项" }));
     expect(await screen.findByText("已将 1 项标记为最终确认。")).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("confirm_monthly_actuals", {
       input: { month: "2026-08", category: null },
     });
   });
 
+  it("searches and filters monthly projects, then opens an accessible lazy detail drawer", async () => {
+    installHarness({
+      monthly: {
+        "2026-08": [
+          monthlyItem(),
+          monthlyItem({
+            id: "00000000-0000-0000-0000-000000000202",
+            item_name: "餐饮",
+            note: "工作餐",
+            actual_amount: "240.00",
+            actual_entry_count: 2,
+            variance_amount: "-60.00",
+            completion_rate_percent: "80.00",
+            data_status: "IN_PROGRESS",
+            variance_effect: "FAVORABLE",
+          }),
+          monthlyItem({
+            id: "00000000-0000-0000-0000-000000000203",
+            item_name: "房租",
+            actual_amount: "300.00",
+            actual_entry_count: 1,
+            variance_amount: "0.00",
+            completion_rate_percent: "100.00",
+            data_status: "FINAL",
+            variance_effect: "ON_PLAN",
+          }),
+        ],
+      },
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    const search = await screen.findByLabelText("搜索项目、分类或备注");
+    await user.type(search, "工作餐");
+    expect(screen.getByRole("button", { name: "查看 餐饮 详情" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看 电费 详情" })).not.toBeInTheDocument();
+
+    await user.clear(search);
+    await user.click(screen.getByRole("tab", { name: /^已确认/ }));
+    expect(screen.getByRole("button", { name: "查看 房租 详情" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看 电费 详情" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /^全部/ }));
+    await user.click(screen.getByRole("button", { name: "查看 电费 详情" }));
+    const drawer = await screen.findByRole("dialog", { name: "电费" });
+    expect(invokeMock).toHaveBeenCalledWith("list_actual_entries", {
+      monthlyItemId: "00000000-0000-0000-0000-000000000201",
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "关闭项目详情" })).toHaveFocus());
+    await user.keyboard("{Escape}");
+    expect(drawer).not.toBeInTheDocument();
+    expect(search).toHaveValue("");
+  });
+
+  it("keeps vertical table scrolling chained to the page at both boundaries", async () => {
+    installHarness({ monthly: { "2026-08": [monthlyItem()] } });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "月度执行" }));
+
+    const tableFrame = (await screen.findByRole("table", { name: "本月项目、计划金额、实际金额、偏差、完成率和实际条目数量" })).parentElement;
+    expect(tableFrame).toHaveStyle({ overflow: "auto" });
+    expect(tableFrame).toHaveStyle({ overscrollBehaviorY: "auto" });
+    expect(tableFrame).toHaveStyle({ overscrollBehaviorX: "contain" });
+  });
+
   it("displays stable Rust structured errors instead of raw transport details", async () => {
     installHarness({
       rejectCommand: {
-        command: "get_settings",
+        command: "ensure_default_settings",
         error: {
           error_code: "BASE_CURRENCY_LOCKED",
           message_key: "error.base_currency_locked",
@@ -733,57 +955,9 @@ describe("planning workflows", () => {
       },
     });
     render(<App />);
-    expect(await screen.findByText("已有月度数据，本位币已锁定。")).toBeInTheDocument();
+    expect((await screen.findAllByText("已有月度数据，本位币已锁定。")).length).toBeGreaterThan(0);
   });
 
-  it("keeps backup paths in Rust and requires two explicit restore confirmations", async () => {
-    installHarness();
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(await screen.findByRole("link", { name: "设置" }));
-    await screen.findByRole("heading", { name: "备份、恢复与可读导出" });
-
-    await user.click(screen.getByRole("button", { name: "创建完整备份" }));
-    expect(await screen.findByText(/已创建 Aplena-test\.aplena/)).toBeInTheDocument();
-    expect(invokeMock).toHaveBeenCalledWith("create_backup");
-
-    await user.click(screen.getByRole("button", { name: "导出五表 CSV" }));
-    expect(await screen.findByText(/Aplena-CSV-test 中导出 5 个 CSV/)).toBeInTheDocument();
-    expect(invokeMock).toHaveBeenCalledWith("export_csv");
-
-    await user.click(screen.getByRole("button", { name: "选择并检查备份" }));
-    expect(await screen.findByRole("heading", { name: "恢复前只读检查已通过" })).toBeInTheDocument();
-    const comparison = screen.getByRole("table", { name: "恢复数据差异" });
-    expect(within(comparison).getByText("2026-07 — 2026-08")).toBeInTheDocument();
-    expect(within(comparison).getByText("+2")).toBeInTheDocument();
-    const restore = screen.getByRole("button", { name: "确认恢复此备份" });
-    expect(restore).toBeDisabled();
-    await user.click(screen.getByLabelText(/我已核对月份/));
-    await user.type(screen.getByLabelText("输入“恢复”进行第二次确认"), "恢复");
-    expect(restore).toBeEnabled();
-    await user.click(restore);
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("restore_backup", {
-        input: { token: "restore-token", confirmed: true, confirmationPhrase: "恢复" },
-      }),
-    );
-    expect(await screen.findByText(/替换前恢复点为 before-restore-test\.aplena/)).toBeInTheDocument();
-  });
-
-  it("renders a safe structured backup validation error", async () => {
-    installHarness({
-      rejectCommand: {
-        command: "inspect_backup",
-        error: { error_code: "BACKUP_CHECKSUM_MISMATCH", message_key: "error.backup_checksum_mismatch" },
-      },
-    });
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(await screen.findByRole("link", { name: "设置" }));
-    await screen.findByRole("heading", { name: "备份、恢复与可读导出" });
-    await user.click(screen.getByRole("button", { name: "选择并检查备份" }));
-    expect(await screen.findByText(/备份内容与校验清单不一致/)).toBeInTheDocument();
-  });
 });
 
 describe("dashboard and capacity analytics", () => {
@@ -792,36 +966,54 @@ describe("dashboard and capacity analytics", () => {
     window.location.hash = "";
   });
 
-  it("labels partial actuals and keeps chart values available in a table", async () => {
-    installHarness();
+  it("keeps partial actual chart values available without a dashboard completeness metric", async () => {
+    installHarness({ plans: [examplePlan] });
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "本月计划执行到哪里了？" })).toBeInTheDocument();
-    expect(screen.getByText("66.67%")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    expect(screen.queryByText("66.67%")).not.toBeInTheDocument();
     expect(screen.getAllByText("当前已录").length).toBeGreaterThan(0);
     expect(
       screen.getByRole("img", {
-        name: "2026-08 计划与当前实际的收入、支出和净结余柱状图",
+        name: "2026-08收入、支出与净结余计划实际分组柱状图",
       }),
     ).toBeInTheDocument();
-    const comparisonTable = screen.getByRole("table", { name: "图表对应数值" });
-    expect(within(comparisonTable).getByText("28700.00")).toBeInTheDocument();
-    expect(within(comparisonTable).getByText("8427.00")).toBeInTheDocument();
-    expect(screen.getByText("超支")).toBeInTheDocument();
-    expect(screen.getByText("13000.00 CNY")).toBeInTheDocument();
+    const comparisonTable = screen.getByRole("table", { name: "本月计划执行表" });
+    expect(within(comparisonTable).getByText("¥ 28,700.00")).toBeInTheDocument();
+    expect(within(comparisonTable).getByText("¥ 8,427.00")).toBeInTheDocument();
+    expect(screen.getAllByText("需关注").length).toBeGreaterThan(0);
+    expect(screen.queryByText("¥ 13,000.00")).not.toBeInTheDocument();
   });
 
-  it("shows N/A for empty actuals and zero-denominator rates", async () => {
+  it("does not present an unknown variance as a currency-only amount", async () => {
+    installHarness({
+      analytics: monthAnalytics({
+        important_variances: [{
+          ...monthAnalytics().projects[1],
+          variance_amount: null,
+          variance_effect: "UNKNOWN",
+        }],
+      }),
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("table", { name: "重要偏差与待处理项目" })).toBeInTheDocument();
+    expect(screen.getByText("待录入")).toBeInTheDocument();
+  });
+
+  it("uses a truthful empty report state instead of zero cards and N/A charts", async () => {
     const emptyComparison = {
       planned: "0.00",
       actual_to_date: null,
       variance: null,
+      completion_percent: null,
       variance_effect: "UNKNOWN" as const,
     };
     installHarness({
       analytics: monthAnalytics({
         actual_status: "EMPTY",
         total_item_count: 0,
+        planned_item_count: 0,
         recorded_item_count: 0,
         completeness_percent: null,
         income: emptyComparison,
@@ -830,8 +1022,7 @@ describe("dashboard and capacity analytics", () => {
         planned_savings_rate_percent: null,
         actual_savings_rate_percent: null,
         savings_rate_percentage_point_variance: null,
-        savings_rate_target_completion_percent: null,
-        savings_rate_relative_deviation_percent: null,
+        savings_rate_plan_completion_percent: null,
         important_variances: [],
       }),
       capacity: {
@@ -843,12 +1034,12 @@ describe("dashboard and capacity analytics", () => {
     });
     render(<App />);
 
-    expect((await screen.findAllByText("暂无实际")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("N/A").length).toBeGreaterThan(3);
-    expect(screen.getByText("N/A（稳定收入为 0）")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "从本月第一项收入或支出开始" })).toBeInTheDocument();
+    expect(screen.queryByText("N/A")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
-  it("renders historical trends with numerical tables and explicit actual status", async () => {
+  it("moves savings history to the dashboard and removes duplicate charts from history", async () => {
     installHarness({
       history: [
         monthAnalytics({
@@ -862,48 +1053,105 @@ describe("dashboard and capacity analytics", () => {
     });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "历史" }));
 
-    expect(await screen.findByRole("heading", { name: "计划与结果如何随时间变化？" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: /各月计划与实际收入/ })).toBeInTheDocument();
-    const trendTable = screen.getByRole("table", { name: "财务趋势图对应数值" });
-    expect(within(trendTable).getByText("2026-07")).toBeInTheDocument();
-    expect(within(trendTable).getAllByText("最终实际").length).toBeGreaterThan(0);
-    expect(within(trendTable).getAllByText("当前已录").length).toBeGreaterThan(0);
+    const savingsHeading = await screen.findByRole("heading", { name: "计划与实际储蓄率趋势" });
+    const savingsCard = savingsHeading.closest("section");
+    expect(savingsCard).not.toBeNull();
+    expect(within(savingsCard!).getByRole("img", { name: "近八个月计划储蓄率与实际储蓄率趋势图" })).toBeInTheDocument();
+    await user.click(within(savingsCard!).getByText("查看精确数据"));
+    const savingsTable = within(savingsCard!).getByRole("table", { name: "储蓄率趋势精确数据" });
+    expect(within(savingsTable).getByText("2026-07")).toBeInTheDocument();
+
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+
+    expect(await screen.findByRole("heading", { name: "历史报表" })).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "财务趋势图对应数值" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "储蓄率趋势对应数值" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "收入、支出与净结余" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "储蓄率" })).not.toBeInTheDocument();
+  });
+
+  it("groups monthly reports by year with newest periods expanded first", async () => {
+    installHarness({
+      history: [
+        monthAnalytics({ month: "2025-12", actual_status: "COMPLETE", recorded_item_count: 3, completeness_percent: "100.00" }),
+        monthAnalytics({ month: "2026-07", actual_status: "COMPLETE", recorded_item_count: 3, completeness_percent: "100.00" }),
+        monthAnalytics({ month: "2026-08" }),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+
+    const latestYear = await screen.findByRole("button", { name: "收起 2026 年报表" });
+    const olderYear = screen.getByRole("button", { name: "展开 2025 年报表" });
+    expect(latestYear).toHaveAttribute("aria-expanded", "true");
+    expect(olderYear).toHaveAttribute("aria-expanded", "false");
+
+    const latestTable = screen.getByRole("table", { name: "2026 年月度详细报告" });
+    const latestHeaders = within(latestTable).getAllByRole("columnheader");
+    expect(latestHeaders.slice(2, 6).every((header) => header.classList.contains("numeric-column"))).toBe(true);
+    expect(latestYear.querySelector(".history-year-chevron")).toBeEmptyDOMElement();
+    const latestMonthLinks = within(latestTable).getAllByRole("link").filter((link) => link.classList.contains("history-month-link"));
+    expect(latestMonthLinks.map((link) => link.textContent)).toEqual(["2026 年 8 月", "2026 年 7 月"]);
+    expect(screen.queryByRole("table", { name: "2025 年月度详细报告" })).not.toBeInTheDocument();
+
+    olderYear.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("table", { name: "2025 年月度详细报告" })).toBeInTheDocument();
+    expect(olderYear).toHaveTextContent("1 个月");
+
+    latestYear.focus();
+    await user.keyboard(" ");
+    expect(screen.queryByRole("table", { name: "2026 年月度详细报告" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the history empty state truthful", async () => {
+    installHarness({ history: [] });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+
+    expect(await screen.findByRole("heading", { name: "还没有可查看的月份" })).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
   it("uses backend ranks and excludes missing actuals from the actual ranking", async () => {
-    installHarness();
+    installHarness({ plans: [examplePlan] });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "分析" }));
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+    await user.click(await screen.findByText("2026 年 8 月"));
 
-    expect(await screen.findByRole("heading", { name: "钱的结构与长期负担健康吗？" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "月度执行结果" })).toBeInTheDocument();
     expect(screen.getAllByText("固定承诺支出").length).toBeGreaterThan(0);
     expect(screen.getByText("房租")).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText("排名依据"), "ACTUAL");
+    await user.click(screen.getByLabelText("排名依据"));
+    await user.click(screen.getByRole("option", { name: "实际金额" }));
     expect(screen.queryByText("房租")).not.toBeInTheDocument();
-    const rankingTable = screen.getByRole("table", { name: "项目排名图对应数值" });
+    const rankingTable = screen.getByRole("table", { name: "项目排名图对应数据" });
     expect(within(rankingTable).getByText("电费")).toBeInTheDocument();
-    expect(within(rankingTable).getByText("427.00")).toBeInTheDocument();
-    expect(screen.getByText(/PAYMENT 项目在非支付月份仍计入/)).toBeInTheDocument();
+    expect(within(rankingTable).getByText("¥ 427.00")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
   });
 
   it("invalidates month analytics after an actual entry is added", async () => {
     installHarness({ monthly: { "2026-08": [monthlyItem()] } });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByRole("heading", { name: "本月计划执行到哪里了？" });
+    await screen.findByRole("heading", { name: "2026 年 8 月" });
     const analyticsCallCount = () =>
       invokeMock.mock.calls.filter(([command]) => command === "get_month_analytics").length;
     expect(analyticsCallCount()).toBe(1);
 
-    await user.click(screen.getByRole("link", { name: "月度计划" }));
+    await user.click(screen.getByRole("link", { name: "月度执行" }));
+    await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
     await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
-    await user.type(screen.getByLabelText("金额"), "427");
+    await user.type(screen.getByLabelText("原币金额"), "427");
     await user.click(screen.getByRole("button", { name: "保存条目" }));
     await user.click(screen.getByRole("link", { name: "总览" }));
-    await screen.findByRole("heading", { name: "本月计划执行到哪里了？" });
+    await screen.findByRole("heading", { name: "2026 年 8 月" });
     await waitFor(() => expect(analyticsCallCount()).toBe(2));
   });
 });

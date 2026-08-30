@@ -3,5 +3,9 @@
   "identifier": "main",
   "description": "Aplena 主窗口的最小本地能力。",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:webview:allow-set-webview-zoom"
+  ]
 }

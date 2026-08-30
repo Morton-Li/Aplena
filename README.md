@@ -3,16 +3,16 @@
 Aplena 是一款本地优先的个人财务规划桌面软件。PFCM（Personal Financial
 Capacity Model）是它的内部领域模型与计算引擎。
 
-Aplena 不是传统流水账。它维护长期计划，将计划冻结为独立月度快照，并允许用户在计划
-项目下逐笔添加实际支出、退款、收入或冲减；项目实际净额由这些条目实时汇总。
+Aplena 不是传统流水账。它按月聚合实际财务结果，将可选周期规则冻结为独立月度快照，
+并允许用户逐笔添加实际支出、退款、收入或冲减；项目实际净额由这些条目实时汇总。
 
 > 计划决定结构，条目说明结果；不引入账户、商户、复式记账或银行流水同步。
 
 ## 当前阶段
 
-当前本地候选闭环已经落地：除计划、月度执行、Dashboard、历史、分析和财务承载能力
-外，Aplena 现在还提供项目实际条目、WAL 一致完整备份、安全恢复、迁移前恢复点和五表 CSV 导出。生产
-CSP、文件选择边界、归档防护和失败回滚均由 Rust 控制，前端没有任意文件系统能力。
+当前本地候选闭环已经落地：Aplena 已提供月度执行、项目实际条目、Dashboard、历史报表、
+仅面向下一个自然月的目标、可选周期规则和财务承载能力。生产 CSP、数据库权限与数据写入边界均由 Rust 控制，前端没有
+任意文件系统能力。
 
 当前只定位为无 Developer ID 签名（构建产物仅为 ad-hoc/linker-signed）、未加密的本地 macOS 候选版。SQLCipher 跨平台验证、macOS Developer
 ID 签名/公证和真实 Windows 安装仍是公开发布门禁，不能由本地构建或模拟测试替代。
@@ -25,6 +25,7 @@ ID 签名/公证和真实 Windows 安装仍是公开发布门禁，不能由本�
   `ActualEntry` 是隶属于月度项目的实际结果条目。
 - 月度项目可选择“月度均摊”或“按支付月计入”。
 - 新自然月由系统自动初始化；历史补录和未来初始化必须显式触发。
+- `NextMonthGoal` 只指向系统计算出的下一个自然月，不进入当前月或历史月分析。
 - 实际净额只由 `INCREASE - DECREASE` 条目派生；月度项目另有明确确认时间。
 - 无条目未确认、已有条目未确认、无条目已确认零、已有条目最终确认是四种不同状态。
 - Dashboard、Monthly Report、趋势和结构分析均为实时派生数据，不重复持久化。
@@ -43,8 +44,9 @@ ID 签名/公证和真实 Windows 安装仍是公开发布门禁，不能由本�
 - [ADR：本地优先的 Tauri + SQLite](docs/adr/0001-local-first-tauri-sqlite.md)
 - [ADR：双计入模式](docs/adr/0002-recognition-modes.md)
 - [ADR：月度自动初始化](docs/adr/0003-automatic-month-initialization.md)
+- [ADR：长期计划可选与手动月度项目](docs/adr/0008-optional-long-term-planning.md)
+- [ADR：下月目标与报表隔离](docs/adr/0009-next-month-goal-isolation.md)
 - [ADR：金额、日期与舍入](docs/adr/0004-money-date-and-rounding.md)
-- [ADR：版本化备份、安全恢复与迁移保护](docs/adr/0005-versioned-backup-restore-and-migration-protection.md)
 - [ADR：数据库静态加密发布门禁](docs/adr/0006-database-encryption-release-gate.md)
 - [ADR：项目实际条目与确认状态](docs/adr/0007-actual-entries-and-completeness.md)
 
@@ -81,21 +83,20 @@ docs/                 产品、领域、架构、数据库与路线图基线
 
 应用层已实现：
 
-- 仅含 `settings`、`exchange_rates`、`plan_items`、`monthly_items`、`actual_entries` 五张业务表的 SQLite
+- 仅含 `settings`、`next_month_goal`、`exchange_rates`、`plan_items`、`monthly_items`、`actual_entries` 六张业务表的 SQLite
   STRICT schema，启用外键、WAL、约束、索引和版本化迁移；
-- 启动和新建计划后幂等补齐当前自然月，历史/未来月份只在用户确认后创建；
+- 启动时幂等补齐当前自然月；新增或修改周期规则不会回填本月，历史/未来月份只在用户确认后创建；
 - 汇率与计划事实在月度快照创建时冻结，后续修改或删除来源不污染历史；
 - 条目新增/编辑/删除自动重新打开确认，支持项目和整月最终确认；确认不会复制计划金额；
 - 非支付月可为现有计划创建计划金额为零的 `ACTUAL_ONLY` 项，后续应计时原地提升并保留条目；
+- 无需周期规则即可创建分类明确的本月项目并记录实际；周期规则仅用于月度基准、偏差和下月承载能力增强；
 - 动态 Dashboard、历史时间序列、分类结构、项目排名和重要偏差；
 - 以稳定收入和长期月均负担计算的保留预算后承载力与最大承载力，`PAYMENT` 项目在
-  非支付月份仍计入长期负担。
-- `.aplena` 完整备份清单、SHA-256、临时迁移与完整性检查、替换前恢复点、原子替换及
-  失败回滚；迁移只在一致恢复点成功后执行；
-- 五表备份与 CSV，其中月度 CSV 明确标注实际净额为派生值；兼容检查并恢复旧版四表备份，
-  保留确认状态、稳定枚举代码和中文标签，并防止电子表格公式注入。
+  非支付月份仍计入长期负担；
+- 追加式数据库迁移、未来 schema 拒绝、外键约束和事务回滚，保留确认状态与历史快照语义。
 
-主要页面：`总览`、`月度计划`、`长期计划`、`历史`、`分析`、`设置`。图表均有 ARIA
+主要页面：`总览`、`月度执行`、`历史报表`、`配置预算`、`设置`。“配置预算”页集中管理下月储蓄率、
+承载力和可选周期规则；图表均有 ARIA
 描述和对应数值表；不完整月份明确显示“当前已录”，零分母显示 `N/A`。
 
 ## 本地运行
@@ -147,7 +148,7 @@ pnpm tauri build --bundles app
 
 - 单用户、单账本、本地优先；不提供账户、云同步、遥测或后台网络服务。
 - 只记录隶属计划项目的实际条目；不提供通用流水账、账户、商户、复式记账或公式输入。
-- Scenario 模式和数据库静态加密尚未实现；备份与 CSV 也明确未加密。
+- Scenario 模式和数据库静态加密尚未实现。
 - `bundle.active` 仍为 `false`，只在本地门禁显式请求 macOS `app` bundle；当前构建不能
   视为已签名、公证、Windows 验证或公开发布产品。
 

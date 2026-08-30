@@ -3,15 +3,25 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsInputDto {
-    pub target_month: String,
     pub base_currency: String,
-    pub minimum_savings_rate_basis_points: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SettingsDto {
-    pub target_month: String,
     pub base_currency: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NextMonthGoalInputDto {
+    pub minimum_savings_rate_basis_points: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NextMonthGoalDto {
+    pub target_month: String,
     pub minimum_savings_rate_basis_points: u16,
     pub created_at: String,
     pub updated_at: String,
@@ -30,8 +40,25 @@ pub struct ExchangeRateDto {
     pub base_currency: String,
     pub rate: String,
     pub is_base_currency: bool,
+    pub source: String,
+    pub observed_on: Option<String>,
     pub plan_reference_count: i64,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceRateObservationDto {
+    pub currency: String,
+    pub euro_rate: String,
+    pub observed_on: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceRateImportDto {
+    pub observations: Vec<ReferenceRateObservationDto>,
+    pub currencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -62,6 +89,7 @@ pub struct MonthlyItemDto {
     pub flow_type: String,
     pub recognition_mode: String,
     pub item_source: String,
+    pub item_origin: String,
     pub scheduled_date: Option<String>,
     pub planned_amount: String,
     pub actual_amount: Option<String>,
@@ -98,6 +126,10 @@ pub struct ActualEntryInputDto {
     pub occurred_on: String,
     pub effect: String,
     pub amount: String,
+    pub currency: String,
+    pub exchange_rate: String,
+    pub exchange_rate_source: String,
+    pub exchange_rate_observed_on: String,
     pub note: Option<String>,
 }
 
@@ -108,6 +140,11 @@ pub struct ActualEntryDto {
     pub occurred_on: String,
     pub effect: String,
     pub amount: String,
+    pub source_amount: String,
+    pub source_currency: String,
+    pub exchange_rate: String,
+    pub exchange_rate_source: String,
+    pub exchange_rate_observed_on: String,
     pub origin: String,
     pub note: Option<String>,
     pub created_at: String,
@@ -119,6 +156,15 @@ pub struct ActualEntryDto {
 pub struct EnsureActualOnlyInputDto {
     pub plan_item_id: String,
     pub month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualMonthlyItemInputDto {
+    pub name: String,
+    pub month: String,
+    pub category: String,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -204,12 +250,6 @@ pub struct InitializeMonthDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlanMutationDto {
-    pub plan_item: PlanItemDto,
-    pub current_month_initialization: Option<InitializeMonthDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StartupStatusDto {
     pub current_month: String,
     pub initialization: Option<InitializeMonthDto>,
@@ -221,6 +261,7 @@ pub struct AmountComparisonDto {
     pub planned: String,
     pub actual_to_date: Option<String>,
     pub variance: Option<String>,
+    pub completion_percent: Option<String>,
     pub variance_effect: String,
 }
 
@@ -257,6 +298,7 @@ pub struct MonthAnalyticsDto {
     pub currency: String,
     pub actual_status: String,
     pub total_item_count: u64,
+    pub planned_item_count: u64,
     pub recorded_item_count: u64,
     pub completeness_percent: Option<String>,
     pub income: AmountComparisonDto,
@@ -265,9 +307,7 @@ pub struct MonthAnalyticsDto {
     pub planned_savings_rate_percent: Option<String>,
     pub actual_savings_rate_percent: Option<String>,
     pub savings_rate_percentage_point_variance: Option<String>,
-    pub savings_rate_target_completion_percent: Option<String>,
-    pub savings_rate_relative_deviation_percent: Option<String>,
-    pub minimum_savings_rate_percent: String,
+    pub savings_rate_plan_completion_percent: Option<String>,
     pub categories: Vec<CategoryBreakdownDto>,
     pub projects: Vec<ProjectBreakdownDto>,
     pub important_variances: Vec<ProjectBreakdownDto>,
@@ -288,6 +328,7 @@ pub struct FinancialCapacityDto {
     pub essential_expenses: String,
     pub fixed_commitments: String,
     pub discretionary_budget: String,
+    pub minimum_savings_amount: String,
     pub preserved_capacity: String,
     pub maximum_capacity: String,
     pub fixed_commitment_ratio_percent: Option<String>,
@@ -378,69 +419,4 @@ pub struct CapacityDto {
     pub maximum_capacity: String,
     pub fixed_commitment_ratio: Option<String>,
     pub stable_income_coverage_ratio: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DataSummaryDto {
-    pub settings: Option<DataSettingsSummaryDto>,
-    pub settings_count: u64,
-    pub exchange_rate_count: u64,
-    pub plan_item_count: u64,
-    pub monthly_item_count: u64,
-    pub actual_entry_count: u64,
-    pub first_month: Option<String>,
-    pub last_month: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DataSettingsSummaryDto {
-    pub target_month: String,
-    pub base_currency: String,
-    pub minimum_savings_rate_basis_points: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct BackupResultDto {
-    pub status: String,
-    pub file_name: Option<String>,
-    pub created_at: Option<String>,
-    pub summary: Option<DataSummaryDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RestoreInspectionDto {
-    pub status: String,
-    pub token: Option<String>,
-    pub file_name: Option<String>,
-    pub backup_created_at: Option<String>,
-    pub backup_app_version: Option<String>,
-    pub schema_version: Option<i64>,
-    pub migrations_applied: bool,
-    pub summary: Option<DataSummaryDto>,
-    pub current_summary: Option<DataSummaryDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RestoreBackupInputDto {
-    pub token: String,
-    #[serde(default)]
-    pub confirmed: bool,
-    pub confirmation_phrase: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RestoreResultDto {
-    pub restored: bool,
-    pub recovery_point_name: String,
-    pub restored_at: String,
-    pub summary: DataSummaryDto,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CsvExportResultDto {
-    pub status: String,
-    pub folder_name: Option<String>,
-    pub created_at: Option<String>,
-    pub file_count: u8,
 }

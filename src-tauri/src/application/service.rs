@@ -7,8 +7,8 @@ use std::{
 use chrono::{Datelike, Local, Utc};
 use pfcm_domain::{
     ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, CapacityInput,
-    Category, CurrencyCode, ExchangeRate, MonthlyItem, PlanItem, RecognitionMode, Settings,
-    YearMonth, calculate_financial_capacity, create_monthly_snapshot, is_recognized_in,
+    Category, CurrencyCode, ExchangeRate, MonthlyItem, NextMonthGoal, PlanItem, RecognitionMode,
+    Settings, YearMonth, calculate_financial_capacity, create_monthly_snapshot, is_recognized_in,
 };
 use rust_decimal::{Decimal, RoundingStrategy};
 use sqlx::Executor;
@@ -16,21 +16,21 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::infrastructure::{
-    DeletePlanResult, Store, StoredActualEntry, StoredExchangeRate, StoredMonthlyItem,
-    StoredPlanItem, StoredSettings,
+    ActualEntryExchangeSnapshot, DeletePlanResult, Store, StoredActualEntry, StoredExchangeRate,
+    StoredMonthlyItem, StoredNextMonthGoal, StoredPlanItem, StoredSettings,
 };
 
 use super::{
     analytics::build_month_analytics,
-    data_protection::DataProtectionState,
     dto::{
         ActualEntryDto, ActualEntryInputDto, ConfirmActualsDto, ConfirmActualsInputDto,
         ConfirmMonthlyItemInputDto, DeletePlanItemDto, EnsureActualOnlyInputDto, ExchangeRateDto,
         ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
-        InitializeMonthInputDto, MonthAnalyticsDto, MonthInitializationStatusDto, MonthPreviewDto,
-        MonthPreviewItemDto, MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto,
-        PlanMutationDto, RateOverrideDto, SettingsDto, SettingsInputDto, StartupStatusDto,
-        StopPlanItemRequestDto,
+        InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
+        MonthInitializationStatusDto, MonthPreviewDto, MonthPreviewItemDto, MonthlyItemDto,
+        MonthlyNoteInputDto, NextMonthGoalDto, NextMonthGoalInputDto, PlanItemDto,
+        PlanItemInputDto, RateOverrideDto, ReferenceRateImportDto, SettingsDto, SettingsInputDto,
+        StartupStatusDto, StopPlanItemRequestDto,
     },
     error::AppError,
 };
@@ -38,7 +38,6 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InitializationTrigger {
     AppStartup,
-    PlanCreated,
     Explicit,
 }
 
@@ -47,7 +46,6 @@ pub struct FinanceService {
     pub(crate) store: Arc<RwLock<Store>>,
     pub(crate) operation_gate: Arc<RwLock<()>>,
     pub(crate) startup_status: Arc<RwLock<StartupStatusDto>>,
-    pub(crate) data_protection: Arc<DataProtectionState>,
 }
 
 impl FinanceService {
@@ -61,7 +59,6 @@ impl FinanceService {
                 initialization: None,
                 error: None,
             })),
-            data_protection: Arc::new(DataProtectionState::default()),
         })
     }
 
@@ -76,18 +73,17 @@ impl FinanceService {
 
     pub async fn initialize_on_startup(&self) {
         let _operation = self.operation_gate.read().await;
-        let result = match self.current_store().await.get_settings().await {
-            Ok(Some(_)) => {
-                self.ensure_month_initialized(
-                    current_natural_month().expect("local calendar month must be valid"),
-                    InitializationTrigger::AppStartup,
-                    Vec::new(),
-                )
-                .await
-            }
-            Ok(None) => Ok(None),
-            Err(error) => Err(AppError::from(error)),
-        };
+        let result = async {
+            self.ensure_default_settings_unlocked().await?;
+            self.ensure_next_month_goal_unlocked().await?;
+            self.ensure_month_initialized(
+                current_natural_month().expect("local calendar month must be valid"),
+                InitializationTrigger::AppStartup,
+                Vec::new(),
+            )
+            .await
+        }
+        .await;
 
         let mut status = self.startup_status.write().await;
         match result {
@@ -116,6 +112,30 @@ impl FinanceService {
             .map(|value| value.map(settings_dto))
     }
 
+    pub async fn ensure_default_settings(&self) -> Result<SettingsDto, AppError> {
+        let _operation = self.operation_gate.read().await;
+        self.ensure_default_settings_unlocked()
+            .await
+            .map(settings_dto)
+    }
+
+    async fn ensure_default_settings_unlocked(&self) -> Result<StoredSettings, AppError> {
+        let store = self.current_store().await;
+        if let Some(settings) = store.get_settings().await.map_err(AppError::from)? {
+            return Ok(settings);
+        }
+
+        let settings = Settings::new(
+            CurrencyCode::new("CNY")
+                .map_err(|error| AppError::from_domain(error, Some("baseCurrency")))?,
+        )
+        .map_err(|error| AppError::from_domain(error, None))?;
+        store
+            .create_settings(&settings, &timestamp())
+            .await
+            .map_err(AppError::from)
+    }
+
     pub async fn save_settings(&self, input: SettingsInputDto) -> Result<SettingsDto, AppError> {
         let _operation = self.operation_gate.read().await;
         let settings = parse_settings(input)?;
@@ -140,14 +160,49 @@ impl FinanceService {
         }
         .map_err(AppError::from)?;
 
-        let _ = self
-            .ensure_month_initialized(
-                current_natural_month()?,
-                InitializationTrigger::AppStartup,
-                Vec::new(),
-            )
-            .await?;
         Ok(settings_dto(stored))
+    }
+
+    pub async fn get_next_month_goal(&self) -> Result<NextMonthGoalDto, AppError> {
+        let _operation = self.operation_gate.read().await;
+        self.ensure_next_month_goal_unlocked()
+            .await
+            .map(next_month_goal_dto)
+    }
+
+    pub async fn save_next_month_goal(
+        &self,
+        input: NextMonthGoalInputDto,
+    ) -> Result<NextMonthGoalDto, AppError> {
+        let _operation = self.operation_gate.read().await;
+        self.require_settings().await?;
+        let goal = NextMonthGoal::new(
+            next_natural_month()?,
+            input.minimum_savings_rate_basis_points,
+        )
+        .map_err(|error| AppError::from_domain(error, Some("minimumSavingsRateBasisPoints")))?;
+        self.current_store()
+            .await
+            .upsert_next_month_goal(&goal, &timestamp())
+            .await
+            .map_err(AppError::from)
+            .map(next_month_goal_dto)
+    }
+
+    async fn ensure_next_month_goal_unlocked(&self) -> Result<StoredNextMonthGoal, AppError> {
+        let store = self.current_store().await;
+        let target_month = next_natural_month()?;
+        if let Some(goal) = store.get_next_month_goal().await.map_err(AppError::from)?
+            && goal.value.target_month() == target_month
+        {
+            return Ok(goal);
+        }
+        let goal = NextMonthGoal::new(target_month, 2_000)
+            .map_err(|error| AppError::from_domain(error, None))?;
+        store
+            .upsert_next_month_goal(&goal, &timestamp())
+            .await
+            .map_err(AppError::from)
     }
 
     pub async fn list_exchange_rates(&self) -> Result<Vec<ExchangeRateDto>, AppError> {
@@ -184,7 +239,122 @@ impl FinanceService {
                 .map_err(|error| AppError::from_domain(error, Some("rate")))?;
         self.current_store()
             .await
-            .upsert_exchange_rate(&exchange_rate, &timestamp())
+            .upsert_exchange_rate(
+                &exchange_rate,
+                "MANUAL",
+                Some(current_natural_date()?),
+                &timestamp(),
+            )
+            .await
+            .map_err(AppError::from)?;
+        self.list_exchange_rates_unlocked().await
+    }
+
+    pub async fn import_reference_rates(
+        &self,
+        input: ReferenceRateImportDto,
+    ) -> Result<Vec<ExchangeRateDto>, AppError> {
+        let _operation = self.operation_gate.read().await;
+        let settings = self.require_settings().await?;
+        let base = settings.value.base_currency().clone();
+        let mut observations = HashMap::new();
+        for observation in input.observations {
+            let currency = CurrencyCode::new(&observation.currency)
+                .map_err(|error| AppError::from_domain(error, Some("currency")))?;
+            let rate = Decimal::from_str_exact(observation.euro_rate.trim()).map_err(|_| {
+                AppError::validation(
+                    "INVALID_REFERENCE_RATE",
+                    "euroRate",
+                    "error.invalid_exchange_rate",
+                )
+            })?;
+            if rate <= Decimal::ZERO {
+                return Err(AppError::validation(
+                    "INVALID_REFERENCE_RATE",
+                    "euroRate",
+                    "error.invalid_exchange_rate",
+                ));
+            }
+            let observed_on = parse_date(&observation.observed_on, "observedOn")?;
+            observations.insert(currency, (rate, observed_on));
+        }
+        let reference_date = observations
+            .values()
+            .map(|(_, date)| *date)
+            .max()
+            .ok_or_else(|| {
+                AppError::validation(
+                    "REFERENCE_RATES_EMPTY",
+                    "observations",
+                    "error.reference_rates_empty",
+                )
+            })?;
+        let base_per_euro = if base.as_str() == "EUR" {
+            Decimal::ONE
+        } else {
+            let (rate, observed_on) = observations.get(&base).ok_or_else(|| {
+                AppError::validation(
+                    "REFERENCE_BASE_UNAVAILABLE",
+                    "baseCurrency",
+                    "error.reference_base_unavailable",
+                )
+            })?;
+            if *observed_on != reference_date {
+                return Err(AppError::validation(
+                    "REFERENCE_BASE_STALE",
+                    "baseCurrency",
+                    "error.reference_base_stale",
+                ));
+            }
+            *rate
+        };
+        let timestamp = timestamp();
+        let mut currencies = BTreeSet::new();
+        for value in input.currencies {
+            currencies.insert(
+                CurrencyCode::new(value)
+                    .map_err(|error| AppError::from_domain(error, Some("currency")))?,
+            );
+        }
+        let mut imported_rates = Vec::new();
+        for currency in currencies {
+            if currency == base {
+                continue;
+            }
+            let source_per_euro = if currency.as_str() == "EUR" {
+                Decimal::ONE
+            } else {
+                let (rate, observed_on) = observations.get(&currency).ok_or_else(|| {
+                    AppError::validation(
+                        "REFERENCE_CURRENCY_UNAVAILABLE",
+                        "currency",
+                        "error.reference_currency_unavailable",
+                    )
+                })?;
+                if *observed_on != reference_date {
+                    return Err(AppError::validation(
+                        "REFERENCE_CURRENCY_STALE",
+                        "currency",
+                        "error.reference_currency_stale",
+                    ));
+                }
+                *rate
+            };
+            let cross_rate = base_per_euro.checked_div(source_per_euro).ok_or_else(|| {
+                AppError::business("ARITHMETIC_OVERFLOW", "error.arithmetic_overflow")
+            })?;
+            let rate = ExchangeRate::new(currency, base.clone(), cross_rate)
+                .map_err(|error| AppError::from_domain(error, Some("rate")))?;
+            imported_rates.push(rate);
+        }
+        self.current_store()
+            .await
+            .upsert_exchange_rates(
+                &imported_rates,
+                "ECB_REFERENCE",
+                Some(reference_date),
+                &timestamp,
+            )
             .await
             .map_err(AppError::from)?;
         self.list_exchange_rates_unlocked().await
@@ -211,10 +381,7 @@ impl FinanceService {
             .map(|items| items.into_iter().map(plan_item_dto).collect())
     }
 
-    pub async fn create_plan_item(
-        &self,
-        input: PlanItemInputDto,
-    ) -> Result<PlanMutationDto, AppError> {
+    pub async fn create_plan_item(&self, input: PlanItemInputDto) -> Result<PlanItemDto, AppError> {
         let _operation = self.operation_gate.read().await;
         self.require_settings().await?;
         let plan_item = parse_plan_item(input, false)?;
@@ -225,17 +392,7 @@ impl FinanceService {
             .insert_plan_item(&plan_item, &timestamp())
             .await
             .map_err(AppError::from)?;
-        let initialization = self
-            .ensure_month_initialized(
-                current_natural_month()?,
-                InitializationTrigger::PlanCreated,
-                Vec::new(),
-            )
-            .await?;
-        Ok(PlanMutationDto {
-            plan_item: plan_item_dto(stored),
-            current_month_initialization: initialization,
-        })
+        Ok(plan_item_dto(stored))
     }
 
     pub async fn update_plan_item(&self, input: PlanItemInputDto) -> Result<PlanItemDto, AppError> {
@@ -338,6 +495,32 @@ impl FinanceService {
             .map(monthly_item_dto)
     }
 
+    pub async fn create_manual_monthly_item(
+        &self,
+        input: ManualMonthlyItemInputDto,
+    ) -> Result<MonthlyItemDto, AppError> {
+        let _operation = self.operation_gate.read().await;
+        let month = parse_month(&input.month, "month")?;
+        let category = Category::from_str(&input.category)
+            .map_err(|error| AppError::from_domain(error, Some("category")))?;
+        let settings = self.require_settings().await?;
+        let monthly = MonthlyItem::manual(
+            Uuid::new_v4(),
+            input.name,
+            month,
+            category,
+            settings.value.base_currency().clone(),
+            input.note,
+        )
+        .map_err(|error| AppError::from_domain(error, Some("name")))?;
+        self.current_store()
+            .await
+            .insert_monthly_item(&monthly, &timestamp())
+            .await
+            .map_err(AppError::from)
+            .map(monthly_item_dto)
+    }
+
     pub async fn list_actual_entries(
         &self,
         monthly_item_id: String,
@@ -363,16 +546,23 @@ impl FinanceService {
             .get_monthly_item(monthly_item_id)
             .await
             .map_err(AppError::from)?;
-        if monthly.value.source_plan_item_id().is_none() {
+        if monthly.value.source_plan_item_id().is_none()
+            && monthly.value.item_origin() != pfcm_domain::MonthlyItemOrigin::Manual
+        {
             return Err(AppError::business(
                 "DELETED_PLAN_CANNOT_ACCEPT_ENTRY",
                 "error.deleted_plan_cannot_accept_entry",
             ));
         }
-        let entry = parse_actual_entry(input, Uuid::new_v4(), monthly.value.month())?;
+        let (entry, exchange_snapshot) = parse_actual_entry(
+            input,
+            Uuid::new_v4(),
+            monthly.value.month(),
+            monthly.value.currency(),
+        )?;
         self.current_store()
             .await
-            .insert_actual_entry(&entry, &timestamp())
+            .insert_actual_entry(&entry, &exchange_snapshot, &timestamp())
             .await
             .map_err(AppError::from)
             .map(actual_entry_dto)
@@ -409,10 +599,20 @@ impl FinanceService {
             .get_monthly_item(monthly_item_id)
             .await
             .map_err(AppError::from)?;
-        let entry = parse_actual_entry(input, id, monthly.value.month())?;
+        let preserved_snapshot = existing.exchange_snapshot.clone();
+        let input = ActualEntryInputDto {
+            currency: preserved_snapshot.source_currency.to_string(),
+            exchange_rate: preserved_snapshot.exchange_rate.decimal_string(),
+            exchange_rate_source: preserved_snapshot.source.clone(),
+            exchange_rate_observed_on: preserved_snapshot.observed_on.to_string(),
+            ..input
+        };
+        let (entry, mut exchange_snapshot) =
+            parse_actual_entry(input, id, monthly.value.month(), monthly.value.currency())?;
+        exchange_snapshot.source = preserved_snapshot.source;
         self.current_store()
             .await
-            .update_actual_entry(&entry, &timestamp())
+            .update_actual_entry(&entry, &exchange_snapshot, &timestamp())
             .await
             .map_err(AppError::from)
             .map(actual_entry_dto)
@@ -504,7 +704,6 @@ impl FinanceService {
         Ok(build_month_analytics(
             month,
             settings.value.base_currency().as_str(),
-            settings.value.minimum_savings_rate(),
             &items,
         ))
     }
@@ -533,24 +732,17 @@ impl FinanceService {
             analytics.push(build_month_analytics(
                 month,
                 settings.value.base_currency().as_str(),
-                settings.value.minimum_savings_rate(),
                 &items,
             ));
         }
         Ok(HistoryAnalyticsDto { months: analytics })
     }
 
-    pub async fn financial_capacity(
-        &self,
-        target_month: Option<String>,
-    ) -> Result<FinancialCapacityDto, AppError> {
+    pub async fn financial_capacity(&self) -> Result<FinancialCapacityDto, AppError> {
         let _operation = self.operation_gate.read().await;
         let settings = self.require_settings().await?;
-        let target_month = target_month
-            .as_deref()
-            .map(|month| parse_month(month, "targetMonth"))
-            .transpose()?
-            .unwrap_or(settings.value.target_month());
+        let goal = self.ensure_next_month_goal_unlocked().await?;
+        let target_month = goal.value.target_month();
         let plans = self
             .current_store()
             .await
@@ -585,7 +777,7 @@ impl FinanceService {
             .collect::<Vec<_>>();
         let result = calculate_financial_capacity(
             target_month,
-            settings.value.minimum_savings_rate(),
+            goal.value.minimum_savings_rate(),
             settings.value.base_currency().clone(),
             &inputs,
         )
@@ -594,7 +786,7 @@ impl FinanceService {
             target_month: target_month.to_string(),
             base_currency: result.base_currency().to_string(),
             minimum_savings_rate_percent: format_decimal(
-                settings.value.minimum_savings_rate().factor() * Decimal::ONE_HUNDRED,
+                goal.value.minimum_savings_rate().factor() * Decimal::ONE_HUNDRED,
                 2,
             ),
             stable_income: result.stable_income().decimal_string(),
@@ -602,6 +794,7 @@ impl FinanceService {
             essential_expenses: result.essential_expenses().decimal_string(),
             fixed_commitments: result.fixed_commitments().decimal_string(),
             discretionary_budget: result.discretionary_budget().decimal_string(),
+            minimum_savings_amount: result.minimum_savings_amount().decimal_string(),
             preserved_capacity: result.preserved_capacity().decimal_string(),
             maximum_capacity: result.maximum_capacity().decimal_string(),
             fixed_commitment_ratio_percent: result
@@ -910,10 +1103,8 @@ impl FinanceService {
 
 fn parse_settings(input: SettingsInputDto) -> Result<Settings, AppError> {
     Settings::new(
-        parse_month(&input.target_month, "targetMonth")?,
         CurrencyCode::new(&input.base_currency)
             .map_err(|error| AppError::from_domain(error, Some("baseCurrency")))?,
-        input.minimum_savings_rate_basis_points,
     )
     .map_err(|error| AppError::from_domain(error, None))
 }
@@ -957,20 +1148,61 @@ fn parse_actual_entry(
     input: ActualEntryInputDto,
     id: Uuid,
     month: YearMonth,
-) -> Result<ActualEntry, AppError> {
-    ActualEntry::new(
+    base_currency: &CurrencyCode,
+) -> Result<(ActualEntry, ActualEntryExchangeSnapshot), AppError> {
+    let source_amount = Amount::from_str(&input.amount)
+        .map_err(|error| AppError::from_domain(error, Some("amount")))?;
+    let source_currency = CurrencyCode::new(&input.currency)
+        .map_err(|error| AppError::from_domain(error, Some("currency")))?;
+    let exchange_rate = ExchangeRate::from_str(
+        source_currency.clone(),
+        base_currency.clone(),
+        &input.exchange_rate,
+    )
+    .map_err(|error| AppError::from_domain(error, Some("exchangeRate")))?;
+    let exchange_rate_source = if source_currency == *base_currency {
+        "BASE_CURRENCY".to_owned()
+    } else {
+        match input.exchange_rate_source.as_str() {
+            "ECB_REFERENCE" | "MANUAL" => input.exchange_rate_source,
+            _ => {
+                return Err(AppError::validation(
+                    "INVALID_EXCHANGE_RATE_SOURCE",
+                    "exchangeRateSource",
+                    "error.invalid_exchange_rate_source",
+                ));
+            }
+        }
+    };
+    let observed_on = parse_date(&input.exchange_rate_observed_on, "exchangeRateObservedOn")?;
+    let converted = source_amount
+        .as_decimal()
+        .checked_mul(exchange_rate.value())
+        .ok_or_else(|| AppError::business("ARITHMETIC_OVERFLOW", "error.arithmetic_overflow"))?;
+    let amount = Amount::from_decimal(converted)
+        .map_err(|error| AppError::from_domain(error, Some("amount")))?;
+    let entry = ActualEntry::new(
         id,
         parse_uuid(&input.monthly_item_id, "monthlyItemId")?,
         month,
         parse_date(&input.occurred_on, "occurredOn")?,
         ActualEntryEffect::from_str(&input.effect)
             .map_err(|error| AppError::from_domain(error, Some("effect")))?,
-        Amount::from_str(&input.amount)
-            .map_err(|error| AppError::from_domain(error, Some("amount")))?,
+        amount,
         ActualEntryOrigin::User,
         input.note,
     )
-    .map_err(|error| AppError::from_domain(error, None))
+    .map_err(|error| AppError::from_domain(error, None))?;
+    Ok((
+        entry,
+        ActualEntryExchangeSnapshot {
+            source_amount,
+            source_currency,
+            exchange_rate,
+            source: exchange_rate_source,
+            observed_on,
+        },
+    ))
 }
 
 fn parse_rate_overrides(
@@ -1007,6 +1239,18 @@ fn current_natural_month() -> Result<YearMonth, AppError> {
         .map_err(|error| AppError::from_domain(error, None))
 }
 
+fn current_natural_date() -> Result<CalendarDate, AppError> {
+    let now = Local::now();
+    CalendarDate::new(now.year(), now.month(), now.day())
+        .map_err(|error| AppError::from_domain(error, None))
+}
+
+fn next_natural_month() -> Result<YearMonth, AppError> {
+    current_natural_month()?
+        .next_month()
+        .map_err(|error| AppError::from_domain(error, None))
+}
+
 fn month_direction(month: YearMonth) -> Result<&'static str, AppError> {
     let current = current_natural_month()?;
     Ok(if month < current {
@@ -1037,8 +1281,15 @@ fn missing_rate_error(currency: &CurrencyCode) -> AppError {
 
 fn settings_dto(stored: StoredSettings) -> SettingsDto {
     SettingsDto {
-        target_month: stored.value.target_month().to_string(),
         base_currency: stored.value.base_currency().to_string(),
+        created_at: stored.created_at,
+        updated_at: stored.updated_at,
+    }
+}
+
+fn next_month_goal_dto(stored: StoredNextMonthGoal) -> NextMonthGoalDto {
+    NextMonthGoalDto {
+        target_month: stored.value.target_month().to_string(),
         minimum_savings_rate_basis_points: stored.value.minimum_savings_rate().basis_points(),
         created_at: stored.created_at,
         updated_at: stored.updated_at,
@@ -1051,6 +1302,8 @@ fn exchange_rate_dto(stored: StoredExchangeRate, base: &CurrencyCode) -> Exchang
         base_currency: base.to_string(),
         rate: stored.exchange_rate.decimal_string(),
         is_base_currency: &stored.currency == base,
+        source: stored.source,
+        observed_on: stored.observed_on.map(|date| date.to_string()),
         plan_reference_count: stored.plan_reference_count,
         updated_at: stored.updated_at,
     }
@@ -1079,7 +1332,8 @@ fn plan_item_dto(stored: StoredPlanItem) -> PlanItemDto {
 fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
     let value = stored.value;
     let actual = value.actual_amount();
-    let variance_amount = actual.map(|actual| {
+    let has_plan_baseline = value.item_origin() != pfcm_domain::MonthlyItemOrigin::Manual;
+    let variance_amount = actual.filter(|_| has_plan_baseline).map(|actual| {
         format_decimal(
             actual
                 .as_decimal()
@@ -1088,7 +1342,7 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
             2,
         )
     });
-    let completion_rate_percent = actual.and_then(|actual| {
+    let completion_rate_percent = actual.filter(|_| has_plan_baseline).and_then(|actual| {
         let planned = value.planned_amount().as_decimal();
         if planned.is_zero() {
             None
@@ -1103,7 +1357,7 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
         }
     });
     let data_status = value.actual_data_status().code();
-    let variance_effect = match actual {
+    let variance_effect = match actual.filter(|_| has_plan_baseline) {
         None => "UNKNOWN",
         Some(actual) if actual.as_decimal() == value.planned_amount().as_decimal() => "ON_PLAN",
         Some(actual) if value.flow_type() == pfcm_domain::FlowType::Income => {
@@ -1130,6 +1384,7 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
         flow_type: value.flow_type().code().to_owned(),
         recognition_mode: value.recognition_mode().code().to_owned(),
         item_source: value.item_source().code().to_owned(),
+        item_origin: value.item_origin().code().to_owned(),
         scheduled_date: value.scheduled_date().map(|date| date.to_string()),
         planned_amount: value.planned_amount().decimal_string(),
         actual_amount: actual.map(pfcm_domain::SignedAmount::decimal_string),
@@ -1148,12 +1403,18 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
 
 fn actual_entry_dto(stored: StoredActualEntry) -> ActualEntryDto {
     let value = stored.value;
+    let snapshot = stored.exchange_snapshot;
     ActualEntryDto {
         id: value.id().to_string(),
         monthly_item_id: value.monthly_item_id().to_string(),
         occurred_on: value.occurred_on().to_string(),
         effect: value.effect().code().to_owned(),
         amount: value.amount().decimal_string(),
+        source_amount: snapshot.source_amount.decimal_string(),
+        source_currency: snapshot.source_currency.to_string(),
+        exchange_rate: snapshot.exchange_rate.decimal_string(),
+        exchange_rate_source: snapshot.source,
+        exchange_rate_observed_on: snapshot.observed_on.to_string(),
         origin: value.origin().code().to_owned(),
         note: value.note().map(str::to_owned),
         created_at: stored.created_at,

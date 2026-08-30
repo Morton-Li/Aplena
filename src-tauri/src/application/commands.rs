@@ -7,20 +7,19 @@ use pfcm_domain::{
 };
 use uuid::Uuid;
 
-use tauri::{AppHandle, State};
-use tauri_plugin_dialog::DialogExt;
+use tauri::State;
 
 use super::{
     dto::{
-        ActualEntryDto, ActualEntryInputDto, BackupResultDto, CapacityDto, CapacityRequestDto,
-        ConfirmActualsDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto, CsvExportResultDto,
-        DeletePlanItemDto, DomainContractDto, EnsureActualOnlyInputDto, EnumOptionDto,
-        ExchangeRateDto, ExchangeRateInputDto, ExchangeRateUpsertDto, FinancialCapacityDto,
-        HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto, MonthAnalyticsDto,
+        ActualEntryDto, ActualEntryInputDto, CapacityDto, CapacityRequestDto, ConfirmActualsDto,
+        ConfirmActualsInputDto, ConfirmMonthlyItemInputDto, DeletePlanItemDto, DomainContractDto,
+        EnsureActualOnlyInputDto, EnumOptionDto, ExchangeRateDto, ExchangeRateInputDto,
+        ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
+        InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
         MonthInitializationStatusDto, MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto,
-        PlanItemDto, PlanItemInputDto, PlanMutationDto, PlanPreviewDto, PlanPreviewRequestDto,
-        RestoreBackupInputDto, RestoreInspectionDto, RestoreResultDto, SettingsDto,
-        SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
+        NextMonthGoalDto, NextMonthGoalInputDto, PlanItemDto, PlanItemInputDto, PlanPreviewDto,
+        PlanPreviewRequestDto, ReferenceRateImportDto, SettingsDto, SettingsInputDto,
+        StartupStatusDto, StopPlanItemRequestDto,
     },
     error::AppError,
     service::FinanceService,
@@ -41,11 +40,33 @@ pub async fn get_settings(
 }
 
 #[tauri::command]
+pub async fn ensure_default_settings(
+    service: State<'_, FinanceService>,
+) -> Result<SettingsDto, AppError> {
+    service.ensure_default_settings().await
+}
+
+#[tauri::command]
 pub async fn save_settings(
     service: State<'_, FinanceService>,
     input: SettingsInputDto,
 ) -> Result<SettingsDto, AppError> {
     service.save_settings(input).await
+}
+
+#[tauri::command]
+pub async fn get_next_month_goal(
+    service: State<'_, FinanceService>,
+) -> Result<NextMonthGoalDto, AppError> {
+    service.get_next_month_goal().await
+}
+
+#[tauri::command]
+pub async fn save_next_month_goal(
+    service: State<'_, FinanceService>,
+    input: NextMonthGoalInputDto,
+) -> Result<NextMonthGoalDto, AppError> {
+    service.save_next_month_goal(input).await
 }
 
 #[tauri::command]
@@ -61,6 +82,14 @@ pub async fn upsert_exchange_rate(
     input: ExchangeRateUpsertDto,
 ) -> Result<Vec<ExchangeRateDto>, AppError> {
     service.upsert_exchange_rate(input).await
+}
+
+#[tauri::command]
+pub async fn import_reference_rates(
+    service: State<'_, FinanceService>,
+    input: ReferenceRateImportDto,
+) -> Result<Vec<ExchangeRateDto>, AppError> {
+    service.import_reference_rates(input).await
 }
 
 #[tauri::command]
@@ -82,7 +111,7 @@ pub async fn list_plan_items(
 pub async fn create_plan_item(
     service: State<'_, FinanceService>,
     input: PlanItemInputDto,
-) -> Result<PlanMutationDto, AppError> {
+) -> Result<PlanItemDto, AppError> {
     service.create_plan_item(input).await
 }
 
@@ -124,6 +153,14 @@ pub async fn ensure_actual_only_monthly_item(
     input: EnsureActualOnlyInputDto,
 ) -> Result<MonthlyItemDto, AppError> {
     service.ensure_actual_only(input).await
+}
+
+#[tauri::command]
+pub async fn create_manual_monthly_item(
+    service: State<'_, FinanceService>,
+    input: ManualMonthlyItemInputDto,
+) -> Result<MonthlyItemDto, AppError> {
+    service.create_manual_monthly_item(input).await
 }
 
 #[tauri::command]
@@ -231,104 +268,8 @@ pub async fn get_history_analytics(
 #[tauri::command]
 pub async fn get_financial_capacity(
     service: State<'_, FinanceService>,
-    target_month: Option<String>,
 ) -> Result<FinancialCapacityDto, AppError> {
-    service.financial_capacity(target_month).await
-}
-
-#[tauri::command]
-pub async fn create_backup(
-    app: AppHandle,
-    service: State<'_, FinanceService>,
-) -> Result<BackupResultDto, AppError> {
-    let default_name = format!(
-        "Aplena-{}.aplena",
-        chrono::Local::now().format("%Y%m%d-%H%M%S")
-    );
-    let selected = app
-        .dialog()
-        .file()
-        .set_title("保存 Aplena 完整备份")
-        .set_file_name(default_name)
-        .add_filter("Aplena 备份", &["aplena"])
-        .blocking_save_file();
-    let Some(selected) = selected else {
-        return Ok(BackupResultDto {
-            status: "CANCELLED".to_owned(),
-            file_name: None,
-            created_at: None,
-            summary: None,
-        });
-    };
-    let mut destination = selected
-        .into_path()
-        .map_err(|_| AppError::business("INVALID_SELECTED_PATH", "error.invalid_selected_path"))?;
-    if destination.extension().and_then(|value| value.to_str()) != Some("aplena") {
-        destination.set_extension("aplena");
-    }
-    service.create_backup_to(destination).await
-}
-
-#[tauri::command]
-pub async fn inspect_backup(
-    app: AppHandle,
-    service: State<'_, FinanceService>,
-) -> Result<RestoreInspectionDto, AppError> {
-    let selected = app
-        .dialog()
-        .file()
-        .set_title("检查 Aplena 备份")
-        .add_filter("Aplena 备份", &["aplena"])
-        .blocking_pick_file();
-    let Some(selected) = selected else {
-        return Ok(RestoreInspectionDto {
-            status: "CANCELLED".to_owned(),
-            token: None,
-            file_name: None,
-            backup_created_at: None,
-            backup_app_version: None,
-            schema_version: None,
-            migrations_applied: false,
-            summary: None,
-            current_summary: None,
-        });
-    };
-    let path = selected
-        .into_path()
-        .map_err(|_| AppError::business("INVALID_SELECTED_PATH", "error.invalid_selected_path"))?;
-    service.inspect_backup_at(path).await
-}
-
-#[tauri::command]
-pub async fn restore_backup(
-    service: State<'_, FinanceService>,
-    input: RestoreBackupInputDto,
-) -> Result<RestoreResultDto, AppError> {
-    service.restore_inspected_backup(input).await
-}
-
-#[tauri::command]
-pub async fn export_csv(
-    app: AppHandle,
-    service: State<'_, FinanceService>,
-) -> Result<CsvExportResultDto, AppError> {
-    let selected = app
-        .dialog()
-        .file()
-        .set_title("选择 Aplena CSV 导出位置")
-        .blocking_pick_folder();
-    let Some(selected) = selected else {
-        return Ok(CsvExportResultDto {
-            status: "CANCELLED".to_owned(),
-            folder_name: None,
-            created_at: None,
-            file_count: 0,
-        });
-    };
-    let path = selected
-        .into_path()
-        .map_err(|_| AppError::business("INVALID_SELECTED_PATH", "error.invalid_selected_path"))?;
-    service.export_csv_to(path).await
+    service.financial_capacity().await
 }
 
 #[tauri::command]
