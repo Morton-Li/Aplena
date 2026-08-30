@@ -1,14 +1,26 @@
 import type { ReferenceRateObservation } from "./finance";
 
+export const SUPPORTED_CURRENCIES = ["CNY", "USD", "EUR", "HKD", "JPY", "GBP"] as const;
+
 export const ECB_REFERENCE_RATES_URL =
   "https://data-api.ecb.europa.eu/service/data/EXR/D..EUR.SP00.A?format=csvdata&lastNObservations=1&detail=dataonly";
+
+const ECB_REQUEST_TIMEOUT_MS = 10_000;
 
 export async function fetchEcbReferenceRates(
   fetcher: typeof fetch = fetch,
 ): Promise<ReferenceRateObservation[]> {
-  const response = await fetcher(ECB_REFERENCE_RATES_URL, {
-    headers: { Accept: "text/csv" },
-  });
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), ECB_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetcher(ECB_REFERENCE_RATES_URL, {
+      headers: { Accept: "text/csv" },
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
   if (!response.ok) {
     throw new Error(`ECB reference rates request failed (${response.status})`);
   }
@@ -22,6 +34,17 @@ export async function fetchEcbReferenceRates(
     { currency: "EUR", euroRate: "1", observedOn },
     ...rows.filter((row) => row.observedOn === observedOn),
   ].sort((left, right) => left.currency.localeCompare(right.currency));
+}
+
+export function isReferenceRateStale(
+  observedOn: string,
+  today = new Date().toISOString().slice(0, 10),
+  maxAgeDays = 7,
+): boolean {
+  const observed = Date.parse(`${observedOn}T00:00:00Z`);
+  const current = Date.parse(`${today}T00:00:00Z`);
+  if (!Number.isFinite(observed) || !Number.isFinite(current)) return true;
+  return current - observed > maxAgeDays * 86_400_000;
 }
 
 export function deriveReferenceRate(

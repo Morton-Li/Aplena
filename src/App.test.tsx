@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App, ApplicationErrorBoundary } from "./App";
 import type { Invoke } from "./shared/api/domain";
 import type {
+  ActualEntry,
   InitializeMonthResult,
   ExchangeRate,
   FinancialCapacity,
@@ -97,6 +98,26 @@ const cachedUsdRate: ExchangeRate = {
   plan_reference_count: 0,
   updated_at: "2026-08-01T00:00:00Z",
 };
+
+function actualEntry(overrides: Partial<ActualEntry> = {}): ActualEntry {
+  return {
+    id: "00000000-0000-0000-0000-000000000501",
+    monthly_item_id: "00000000-0000-0000-0000-000000000201",
+    occurred_on: "2026-08-10",
+    effect: "INCREASE",
+    amount: "120.00",
+    source_amount: "120.00",
+    source_currency: "CNY",
+    exchange_rate: "1.00000000",
+    exchange_rate_source: "BASE_CURRENCY",
+    exchange_rate_observed_on: "2026-08-10",
+    origin: "USER",
+    note: "首笔记录",
+    created_at: "2026-08-10T00:00:00Z",
+    updated_at: "2026-08-10T00:00:00Z",
+    ...overrides,
+  };
+}
 
 const examplePlan: PlanItem = {
   id: "00000000-0000-0000-0000-000000000101",
@@ -316,6 +337,7 @@ interface HarnessOptions {
   history?: MonthAnalytics[];
   capacity?: FinancialCapacity;
   goal?: NextMonthGoal;
+  actualEntries?: Record<string, ActualEntry[]>;
 }
 
 function installHarness(options: HarnessOptions = {}) {
@@ -324,6 +346,9 @@ function installHarness(options: HarnessOptions = {}) {
   let storedRates = [...(options.rates ?? [baseRate])];
   const plans = [...(options.plans ?? [])];
   const monthly = { ...(options.monthly ?? {}) };
+  const actualEntries = Object.fromEntries(
+    Object.entries(options.actualEntries ?? {}).map(([itemId, entries]) => [itemId, [...entries]]),
+  );
   const initialized = new Set<string>();
   const invoke: Invoke = async <T,>(command: string, args?: Record<string, unknown>) => {
     if (options.rejectCommand?.command === command) {
@@ -475,8 +500,10 @@ function installHarness(options: HarnessOptions = {}) {
         const month = args?.month as string;
         return (monthly[month] ?? (initialized.has(month) ? [monthlyItem({ month })] : [])) as T;
       }
-      case "list_actual_entries":
-        return [] as T;
+      case "list_actual_entries": {
+        const monthlyItemId = args?.monthlyItemId as string;
+        return (actualEntries[monthlyItemId] ?? []) as T;
+      }
       case "ensure_actual_only_monthly_item":
         return monthlyItem({ item_source: "ACTUAL_ONLY", planned_amount: "0.00" }) as T;
       case "create_manual_monthly_item":
@@ -492,10 +519,20 @@ function installHarness(options: HarnessOptions = {}) {
       case "create_actual_entry":
       case "update_actual_entry": {
         const input = args?.input as { id?: string; monthlyItemId: string; occurredOn: string; effect: string; amount: string; currency: string; exchangeRate: string; exchangeRateSource: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL"; exchangeRateObservedOn: string; note?: string };
-        return { id: input.id ?? "00000000-0000-0000-0000-000000000501", monthly_item_id: input.monthlyItemId, occurred_on: input.occurredOn, effect: input.effect, amount: input.amount, source_amount: input.amount, source_currency: input.currency, exchange_rate: input.exchangeRate, exchange_rate_source: input.exchangeRateSource, exchange_rate_observed_on: input.exchangeRateObservedOn, origin: "USER", note: input.note ?? null, created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z" } as T;
+        const saved = { id: input.id ?? "00000000-0000-0000-0000-000000000599", monthly_item_id: input.monthlyItemId, occurred_on: input.occurredOn, effect: input.effect, amount: input.amount, source_amount: input.amount, source_currency: input.currency, exchange_rate: input.exchangeRate, exchange_rate_source: input.exchangeRateSource, exchange_rate_observed_on: input.exchangeRateObservedOn, origin: "USER", note: input.note ?? null, created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z" } as ActualEntry;
+        const entries = actualEntries[input.monthlyItemId] ?? [];
+        actualEntries[input.monthlyItemId] = input.id
+          ? entries.map((entry) => entry.id === input.id ? saved : entry)
+          : [...entries, saved];
+        return saved as T;
       }
-      case "delete_actual_entry":
+      case "delete_actual_entry": {
+        const id = args?.id as string;
+        for (const [itemId, entries] of Object.entries(actualEntries)) {
+          actualEntries[itemId] = entries.filter((entry) => entry.id !== id);
+        }
         return undefined as T;
+      }
       case "confirm_monthly_item":
         return monthlyItem({ actual_amount: "0.00", actual_confirmed_at: "2026-08-31T00:00:00Z", data_status: "CONFIRMED_ZERO" }) as T;
       case "update_monthly_note":
@@ -575,10 +612,35 @@ describe("planning workflows", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "更新官方汇率" }));
-    expect(await screen.findByText("欧洲央行每日参考汇率已更新，既有费用的汇率快照未作修改。")).toBeInTheDocument();
+    expect(await screen.findByText(/已更新 2 个币种的欧洲央行每日参考汇率.*参考日期 2026-08-28.*既有费用的汇率快照未作修改/)).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("import_reference_rates", {
       input: expect.objectContaining({ currencies: ["USD", "EUR"] }),
     });
+  });
+
+  it("imports every supported foreign currency on a fresh database", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE",
+      "EXR.D.CNY.EUR.SP00.A,D,CNY,EUR,SP00,A,2026-08-28,7.8251",
+      "EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2026-08-28,1.1643",
+      "EXR.D.HKD.EUR.SP00.A,D,HKD,EUR,SP00,A,2026-08-28,9.1000",
+      "EXR.D.JPY.EUR.SP00.A,D,JPY,EUR,SP00,A,2026-08-28,172.0000",
+      "EXR.D.GBP.EUR.SP00.A,D,GBP,EUR,SP00,A,2026-08-28,0.8600",
+    ].join("\n"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    installHarness({ rates: [baseRate], plans: [] });
+    const user = userEvent.setup();
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "更新官方汇率" }));
+    expect(await screen.findByText(/已更新 5 个币种.*参考日期 2026-08-28/)).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("import_reference_rates", {
+      input: expect.objectContaining({ currencies: ["USD", "EUR", "HKD", "JPY", "GBP"] }),
+    });
+    for (const currency of ["USD", "EUR", "HKD", "JPY", "GBP"]) {
+      expect(screen.getByText(currency)).toBeInTheDocument();
+    }
   });
 
   it("keeps the goal isolated to the next natural month and saves its policy", async () => {
@@ -828,6 +890,166 @@ describe("planning workflows", () => {
       input: expect.objectContaining({ amount: "3200.00", effect: "INCREASE" }),
     });
     expect(invokeMock.mock.calls.some(([command]) => command === "ensure_actual_only_monthly_item")).toBe(false);
+  });
+
+  it("creates an independent expense with expense labels when an income rule already exists", async () => {
+    installHarness({
+      plans: [{ ...examplePlan, category: "FIXED_INCOME", flow_type: "INCOME" }],
+      monthly: { "2026-08": [] },
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
+    await user.type(screen.getByLabelText("项目名称"), "独立支出");
+    await user.click(screen.getByLabelText("类型"));
+    expect(screen.getByRole("option", { name: "支出" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "退款" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "收入" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "支出" }));
+    fireEvent.change(screen.getByLabelText("原币金额"), { target: { value: "88.00" } });
+    await user.click(screen.getByRole("button", { name: "保存条目" }));
+
+    expect(invokeMock).toHaveBeenCalledWith("create_manual_monthly_item", {
+      input: { name: "独立支出", month: "2026-08", category: "ESSENTIAL_EXPENSE" },
+    });
+    expect(invokeMock.mock.calls.some(([command]) => command === "ensure_actual_only_monthly_item")).toBe(false);
+  });
+
+  it("adds refunds to an existing manual expense even when an income rule exists", async () => {
+    const manualExpense = monthlyItem({
+      source_plan_item_id: null,
+      item_name: "临时维修",
+      item_origin: "MANUAL",
+      item_source: "ACTUAL_ONLY",
+      planned_amount: "0.00",
+    });
+    installHarness({
+      plans: [{ ...examplePlan, category: "FIXED_INCOME", flow_type: "INCOME" }],
+      monthly: { "2026-08": [manualExpense] },
+      actualEntries: { [manualExpense.id]: [actualEntry()] },
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "查看 临时维修 详情" }));
+    await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
+    await user.click(screen.getByLabelText("类型"));
+    expect(screen.getByRole("option", { name: "退款" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "冲减" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "退款" }));
+    const refundAmount = screen.getByLabelText("原币金额");
+    fireEvent.change(refundAmount, { target: { value: "20.00" } });
+    expect(refundAmount).toHaveValue("20.00");
+    const save = screen.getByRole("button", { name: "保存条目" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+
+    expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({
+        monthlyItemId: manualExpense.id,
+        effect: "DECREASE",
+        amount: "20.00",
+      }),
+    });
+  });
+
+  it("uses an existing manual income flow and edits its amount and note without a plan", async () => {
+    const manualIncome = monthlyItem({
+      source_plan_item_id: null,
+      item_name: "临时收入",
+      category: "VARIABLE_INCOME",
+      flow_type: "INCOME",
+      item_origin: "MANUAL",
+      item_source: "ACTUAL_ONLY",
+      planned_amount: "0.00",
+      actual_amount: "120.00",
+      actual_entry_count: 1,
+      actual_confirmed_at: "2026-08-31T00:00:00Z",
+      data_status: "FINAL",
+    });
+    const incomeEntry = actualEntry({ monthly_item_id: manualIncome.id });
+    installHarness({
+      plans: [],
+      monthly: { "2026-08": [manualIncome] },
+      actualEntries: { [manualIncome.id]: [incomeEntry] },
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "查看 临时收入 详情" }));
+    await user.click((await screen.findAllByRole("button", { name: "编辑" }))[0]);
+    await user.click(screen.getByLabelText("类型"));
+    expect(screen.getByRole("option", { name: "冲减" })).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "冲减" }));
+    const editedAmount = screen.getByLabelText("原币金额");
+    fireEvent.change(editedAmount, { target: { value: "135.50" } });
+    expect(editedAmount).toHaveValue("135.50");
+    await user.clear(screen.getByLabelText("备注（可选）"));
+    await user.type(screen.getByLabelText("备注（可选）"), "核对后调整");
+    expect(screen.getByRole("button", { name: "保存条目" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "保存条目" }));
+
+    expect(invokeMock).toHaveBeenCalledWith("update_actual_entry", {
+      input: expect.objectContaining({
+        id: incomeEntry.id,
+        amount: "135.50",
+        note: "核对后调整",
+        exchangeRate: "1.00000000",
+      }),
+    });
+  });
+
+  it("shows supported foreign currencies on a fresh database and resolves the selected rate", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE",
+      "EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2026-08-28,1.1643",
+      "EXR.D.CNY.EUR.SP00.A,D,CNY,EUR,SP00,A,2026-08-28,7.8251",
+    ].join("\n"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    installHarness({ rates: [baseRate], monthly: { "2026-08": [monthlyItem()] } });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
+    await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
+    await user.click(screen.getByLabelText("实际条目币种"));
+    await user.click(screen.getByRole("option", { name: /USD/ }));
+    expect(await screen.findByText(/1 USD = 6\.72086232 CNY/)).toBeInTheDocument();
+  });
+
+  it("confirms actual-entry deletion in-app and keeps cancel and Escape non-destructive", async () => {
+    const item = monthlyItem({ actual_amount: "120.00", actual_entry_count: 1, data_status: "IN_PROGRESS" });
+    const entry = actualEntry({ monthly_item_id: item.id });
+    installHarness({
+      monthly: { "2026-08": [item] },
+      actualEntries: { [item.id]: [entry] },
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
+    await user.click((await screen.findAllByRole("button", { name: "删除" }))[0]);
+    expect(await screen.findByRole("dialog", { name: "确认删除这条记录？" })).toHaveTextContent("2026-08-10");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(invokeMock.mock.calls.some(([command]) => command === "delete_actual_entry")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "确认删除这条记录？" })).not.toBeInTheDocument();
+    expect(invokeMock.mock.calls.some(([command]) => command === "delete_actual_entry")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    const confirmDelete = screen.getByRole("button", { name: "确认删除" });
+    confirmDelete.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(invokeMock.mock.calls.filter(([command]) => command === "delete_actual_entry")).toHaveLength(1));
+    expect(await screen.findByText("还没有实际条目")).toBeInTheDocument();
   });
 
   it("keeps monthly execution fixed to the current natural month", async () => {
