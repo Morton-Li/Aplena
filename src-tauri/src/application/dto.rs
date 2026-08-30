@@ -62,6 +62,7 @@ pub struct MonthlyItemDto {
     pub flow_type: String,
     pub recognition_mode: String,
     pub item_source: String,
+    pub item_origin: String,
     pub scheduled_date: Option<String>,
     pub planned_amount: String,
     pub actual_amount: Option<String>,
@@ -119,6 +120,15 @@ pub struct ActualEntryDto {
 pub struct EnsureActualOnlyInputDto {
     pub plan_item_id: String,
     pub month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualMonthlyItemInputDto {
+    pub name: String,
+    pub month: String,
+    pub category: String,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -258,6 +268,7 @@ pub struct MonthAnalyticsDto {
     pub currency: String,
     pub actual_status: String,
     pub total_item_count: u64,
+    pub planned_item_count: u64,
     pub recorded_item_count: u64,
     pub completeness_percent: Option<String>,
     pub income: AmountComparisonDto,

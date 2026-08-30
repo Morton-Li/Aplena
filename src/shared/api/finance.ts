@@ -64,6 +64,7 @@ export interface MonthlyItem {
   flow_type: string;
   recognition_mode: string;
   item_source: "PLANNED" | "ACTUAL_ONLY";
+  item_origin: "PLAN_LINKED" | "MANUAL";
   scheduled_date: string | null;
   planned_amount: string;
   actual_amount: string | null;
@@ -199,6 +200,7 @@ export interface MonthAnalytics {
   currency: string;
   actual_status: "EMPTY" | "PARTIAL" | "COMPLETE";
   total_item_count: number;
+  planned_item_count: number;
   recorded_item_count: number;
   completeness_percent: string | null;
   income: AmountComparison;
@@ -444,6 +446,13 @@ export function ensureActualOnlyMonthlyItem(
   invokeCommand: Invoke = invoke,
 ): Promise<MonthlyItem> {
   return invokeCommand<MonthlyItem>("ensure_actual_only_monthly_item", { input });
+}
+
+export function createManualMonthlyItem(
+  input: { name: string; month: string; category: string; note?: string },
+  invokeCommand: Invoke = invoke,
+): Promise<MonthlyItem> {
+  return invokeCommand<MonthlyItem>("create_manual_monthly_item", { input });
 }
 
 export function listActualEntries(

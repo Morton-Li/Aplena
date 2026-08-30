@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import {
   getFinancialCapacity,
   getHistoryAnalytics,
   getMonthAnalytics,
   getSettings,
+  listPlanItems,
   queryKeys,
   type CategoryBreakdown,
   type MonthAnalytics,
@@ -38,12 +40,14 @@ export function AnalysisPage() {
     queryFn: () => getFinancialCapacity(month),
     enabled: Boolean(month),
   });
+  const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
 
   if (
     settingsQuery.isPending ||
     analyticsQuery.isPending ||
     historyQuery.isPending ||
-    capacityQuery.isPending
+    capacityQuery.isPending ||
+    plansQuery.isPending
   ) {
     return <section className="state-card">正在计算分类、项目与财务承载能力…</section>;
   }
@@ -51,7 +55,8 @@ export function AnalysisPage() {
     settingsQuery.isError ||
     analyticsQuery.isError ||
     historyQuery.isError ||
-    capacityQuery.isError
+    capacityQuery.isError ||
+    plansQuery.isError
   ) {
     return (
       <section className="state-card">
@@ -60,7 +65,8 @@ export function AnalysisPage() {
             settingsQuery.error ??
               analyticsQuery.error ??
               historyQuery.error ??
-              capacityQuery.error,
+              capacityQuery.error ??
+              plansQuery.error,
           )}
         </span>
       </section>
@@ -70,22 +76,25 @@ export function AnalysisPage() {
     return <section className="state-card">尚未完成首次设置。</section>;
   }
 
+  const hasPlanBaseline = analyticsQuery.data.planned_item_count > 0;
+  const hasLongTermPlans = (plansQuery.data?.length ?? 0) > 0;
+
   return (
     <>
       <header className="page-header">
         <div>
           <p className="eyebrow">财务分析 · {analyticsQuery.data.month}</p>
-          <h1>结构与承载能力</h1>
-          <p>分类、占比、项目排名和承载能力均由月度快照实时派生。</p>
+          <h1>{hasLongTermPlans ? "结构与承载能力" : "收支结构分析"}</h1>
+          <p>{hasLongTermPlans ? "分类、占比、项目排名和承载能力均由月度数据实时派生。" : "分类、占比和项目排名均由月度实际实时派生；长期规划分析可按需启用。"}</p>
         </div>
         <span className="context-chip">
           实际完整度 {percent(analyticsQuery.data.completeness_percent)}
         </span>
       </header>
 
-      <StructureSection analytics={analyticsQuery.data} history={historyQuery.data.months} />
-      <ProjectRanking analytics={analyticsQuery.data} />
-      <CapacityPanel capacity={capacityQuery.data} />
+      <StructureSection analytics={analyticsQuery.data} history={historyQuery.data.months} hasPlanBaseline={hasPlanBaseline} />
+      <ProjectRanking analytics={analyticsQuery.data} hasPlanBaseline={hasPlanBaseline} />
+      {hasLongTermPlans ? <CapacityPanel capacity={capacityQuery.data} /> : <section className="capacity-panel capacity-panel-optional"><header><div><p className="section-label">可选增强</p><h2>财务承载能力尚未启用</h2></div></header><p>设置长期收入与支出后，Aplena 才会计算可承担的新长期支出；当前月度实际和结构分析不受影响。</p><Link className="button button-secondary" to="/plans">设置长期计划</Link></section>}
     </>
   );
 }
@@ -93,14 +102,17 @@ export function AnalysisPage() {
 function StructureSection({
   analytics,
   history,
+  hasPlanBaseline,
 }: {
   analytics: MonthAnalytics;
   history: MonthAnalytics[];
+  hasPlanBaseline: boolean;
 }) {
   const [flow, setFlow] = useState<FlowFilter>("EXPENSE");
   const categories = analytics.categories.filter((item) => item.flow_type === flow);
-  const structureOption = useMemo(() => categoryStructureOption(categories), [categories]);
-  const historyOption = useMemo(() => categoryHistoryOption(history, flow), [history, flow]);
+  const structureOption = useMemo(() => categoryStructureOption(categories, hasPlanBaseline), [categories, hasPlanBaseline]);
+  const historyHasPlanBaseline = history.some((month) => month.planned_item_count > 0);
+  const historyOption = useMemo(() => categoryHistoryOption(history, flow, historyHasPlanBaseline), [history, flow, historyHasPlanBaseline]);
   const actualLabel = analytics.actual_status === "COMPLETE" ? "最终实际" : "当前已录";
 
   return (
@@ -138,29 +150,29 @@ function StructureSection({
           </header>
           <AnalyticsChart
             option={structureOption}
-            label={`${analytics.month}${flowLabel(flow)}分类计划与实际占比柱状图`}
+            label={`${analytics.month}${flowLabel(flow)}分类${hasPlanBaseline ? "计划与实际" : "实际"}占比柱状图`}
           />
-          <CategoryTable categories={categories} actualLabel={actualLabel} currency={analytics.currency} />
+          <CategoryTable categories={categories} actualLabel={actualLabel} currency={analytics.currency} hasPlanBaseline={hasPlanBaseline} />
         </section>
         <section className="analysis-card">
           <header>
             <h3>历史结构变化</h3>
-            <span>按月快照</span>
+            <span>{historyHasPlanBaseline ? "计划基准" : "月度实际"}</span>
           </header>
           <AnalyticsChart
             option={historyOption}
-            label={`各月${flowLabel(flow)}分类计划金额变化趋势图`}
+            label={`各月${flowLabel(flow)}分类${historyHasPlanBaseline ? "计划" : "实际"}金额变化趋势图`}
           />
-          <CategoryHistoryTable history={history} flow={flow} />
+          <CategoryHistoryTable history={history} flow={flow} usePlan={historyHasPlanBaseline} />
         </section>
       </div>
     </section>
   );
 }
 
-function ProjectRanking({ analytics }: { analytics: MonthAnalytics }) {
+function ProjectRanking({ analytics, hasPlanBaseline }: { analytics: MonthAnalytics; hasPlanBaseline: boolean }) {
   const [flow, setFlow] = useState<FlowFilter>("EXPENSE");
-  const [mode, setMode] = useState<RankingMode>("PLANNED");
+  const [mode, setMode] = useState<RankingMode>(hasPlanBaseline ? "PLANNED" : "ACTUAL");
   const projects = analytics.projects
     .filter((project) => project.flow_type === flow)
     .filter((project) => mode === "PLANNED" || project.actual_rank !== null)
@@ -199,10 +211,10 @@ function ProjectRanking({ analytics }: { analytics: MonthAnalytics }) {
               ariaLabel="排名依据"
               value={mode}
               onChange={(value) => setMode(value as RankingMode)}
-              options={[
+              options={hasPlanBaseline ? [
                 { value: "PLANNED", label: "计划金额" },
                 { value: "ACTUAL", label: "实际金额" },
-              ]}
+              ] : [{ value: "ACTUAL", label: "实际金额" }]}
             />
           </label>
         </div>
@@ -262,10 +274,12 @@ function CategoryTable({
   categories,
   actualLabel,
   currency,
+  hasPlanBaseline,
 }: {
   categories: CategoryBreakdown[];
   actualLabel: string;
   currency: string;
+  hasPlanBaseline: boolean;
 }) {
   return (
     <table className="data-table">
@@ -283,8 +297,8 @@ function CategoryTable({
         {categories.map((item) => (
           <tr key={item.category}>
             <th>{categoryLabel(item.category)}</th>
-            <td>{formatMoney(item.planned_amount, currency)}</td>
-            <td>{percent(item.planned_share_percent)}</td>
+            <td>{hasPlanBaseline ? formatMoney(item.planned_amount, currency) : "—"}</td>
+            <td>{hasPlanBaseline ? percent(item.planned_share_percent) : "—"}</td>
             <td>{formatMoney(item.actual_to_date, currency)}</td>
             <td>{percent(item.actual_share_percent)}</td>
           </tr>
@@ -297,9 +311,11 @@ function CategoryTable({
 function CategoryHistoryTable({
   history,
   flow,
+  usePlan,
 }: {
   history: MonthAnalytics[];
   flow: FlowFilter;
+  usePlan: boolean;
 }) {
   const categoryCodes = flow === "INCOME"
     ? ["FIXED_INCOME", "VARIABLE_INCOME"]
@@ -319,7 +335,7 @@ function CategoryHistoryTable({
             <th>{month.month}</th>
             {categoryCodes.map((category) => (
               <td key={category}>
-                {formatMoney(month.categories.find((item) => item.category === category)?.planned_amount ?? null, month.currency)}
+                {formatMoney(usePlan ? month.categories.find((item) => item.category === category)?.planned_amount ?? null : month.categories.find((item) => item.category === category)?.actual_to_date ?? null, month.currency)}
               </td>
             ))}
           </tr>
@@ -329,10 +345,16 @@ function CategoryHistoryTable({
   );
 }
 
-function categoryStructureOption(categories: CategoryBreakdown[]) {
+function categoryStructureOption(categories: CategoryBreakdown[], hasPlanBaseline: boolean) {
+  const actualSeries = {
+    name: "实际占比",
+    type: "bar",
+    data: categories.map((item) => item.actual_share_percent),
+    itemStyle: { color: "#2563eb" },
+  };
   return {
     tooltip: { trigger: "axis" },
-    legend: { top: 0, data: ["计划占比", "实际占比"], textStyle: chartLegendText },
+    legend: { top: 0, data: hasPlanBaseline ? ["计划占比", "实际占比"] : ["实际占比"], textStyle: chartLegendText },
     grid: { left: 48, right: 18, top: 50, bottom: 70 },
     xAxis: {
       type: "category",
@@ -340,24 +362,19 @@ function categoryStructureOption(categories: CategoryBreakdown[]) {
       axisLabel: { interval: 0, rotate: 18 },
     },
     yAxis: { type: "value", axisLabel: { formatter: "{value}%" } },
-    series: [
+    series: hasPlanBaseline ? [
       {
         name: "计划占比",
         type: "bar",
         data: categories.map((item) => item.planned_share_percent),
         itemStyle: { color: "#94a3b8" },
       },
-      {
-        name: "实际占比",
-        type: "bar",
-        data: categories.map((item) => item.actual_share_percent),
-        itemStyle: { color: "#2563eb" },
-      },
-    ],
+      actualSeries,
+    ] : [actualSeries],
   };
 }
 
-function categoryHistoryOption(history: MonthAnalytics[], flow: FlowFilter) {
+function categoryHistoryOption(history: MonthAnalytics[], flow: FlowFilter, usePlan: boolean) {
   const categories = flow === "INCOME"
     ? ["FIXED_INCOME", "VARIABLE_INCOME"]
     : ["ESSENTIAL_EXPENSE", "FIXED_COMMITMENT_EXPENSE", "DISCRETIONARY_BUDGET"];
@@ -378,7 +395,9 @@ function categoryHistoryOption(history: MonthAnalytics[], flow: FlowFilter) {
       type: "line",
       data: history.map(
         (month) =>
-          month.categories.find((item) => item.category === category)?.planned_amount ?? "0.00",
+          usePlan
+            ? month.categories.find((item) => item.category === category)?.planned_amount ?? null
+            : month.categories.find((item) => item.category === category)?.actual_to_date ?? null,
       ),
       itemStyle: { color: colors[index] },
       lineStyle: { color: colors[index] },

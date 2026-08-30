@@ -104,9 +104,9 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
     <>
       <header className="page-header">
         <div>
-          <p className="eyebrow">规划基准</p>
+          <p className="eyebrow">可选增强</p>
           <h1>长期计划</h1>
-          <p>管理周期性收入与支出；修改只影响尚未生成的月份。</p>
+          <p>自动生成周期基准、计划偏差与承载能力分析；不设置也可直接使用月度实际与报表。</p>
         </div>
         <button className="button button-primary" type="button" onClick={() => setEditor("new")}>
           新建计划
@@ -144,7 +144,7 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
       {plansQuery.isError && <StatePanel error={plansQuery.error} />}
       {plansQuery.isSuccess && filtered.length === 0 && (
         plansQuery.data.length === 0
-          ? <EmptyState eyebrow="从第一项计划开始" title="还没有长期收入或支出计划" description="先建立一个可持续维护的计划；Aplena 会从计划生成月度快照，不需要导入交易流水。" action={<button className="button button-primary" type="button" onClick={() => setEditor("new")}>创建第一项计划</button>} />
+          ? <EmptyState eyebrow="可按需启用" title="暂未设置周期性计划" description="这不会影响月度实际录入和基础财务报表。需要自动生成月度基准、比较偏差或计算承载能力时，再创建长期计划。" action={<button className="button button-secondary" type="button" onClick={() => setEditor("new")}>创建长期计划</button>} />
           : <EmptyState compact eyebrow="没有匹配项" title="换一个筛选条件试试" description="当前搜索词与类别组合没有匹配任何计划，已有计划没有被删除。" action={<button className="button button-secondary" type="button" onClick={() => { setSearch(""); setCategory("ALL"); }}>清除筛选</button>} />
       )}
       {filtered.length > 0 && (

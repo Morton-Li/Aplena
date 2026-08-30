@@ -259,6 +259,7 @@ pub async fn validate_database(pool: &SqlitePool) -> Result<(), ProtectionError>
           (SELECT COUNT(*) FROM plan_items WHERE planned_amount_scaled < 0 OR period_months <= 0 OR end_date < start_date OR date(start_date) != start_date OR (end_date IS NOT NULL AND date(end_date) != end_date)) + \
           (SELECT COUNT(*) FROM monthly_items WHERE planned_amount_scaled < 0 OR \
             (category IN ('FIXED_INCOME', 'VARIABLE_INCOME')) != (flow_type = 'INCOME') OR \
+            (item_origin = 'MANUAL' AND (source_plan_item_id IS NOT NULL OR item_source != 'ACTUAL_ONLY')) OR \
             (item_source = 'ACTUAL_ONLY' AND (planned_amount_scaled != 0 OR scheduled_date IS NOT NULL)) OR \
             (item_source = 'PLANNED' AND recognition_mode = 'PAYMENT' AND scheduled_date IS NULL) OR \
             (item_source = 'PLANNED' AND recognition_mode = 'AMORTIZED' AND scheduled_date IS NOT NULL)) + \
@@ -286,6 +287,7 @@ pub async fn validate_database(pool: &SqlitePool) -> Result<(), ProtectionError>
           'exchange_rate_base_lock', 'monthly_item_currency_matches_settings',\
           'actual_entry_month_insert', 'actual_entry_month_update', 'actual_entry_reopens_insert',\
           'actual_entry_reopens_update', 'actual_entry_reopens_delete',\
+          'monthly_item_manual_origin_insert', 'monthly_item_manual_origin_update',\
           'idx_plan_items_active_dates', 'idx_monthly_items_month_category_flow',\
           'idx_monthly_items_source_plan', 'idx_actual_entries_monthly_item',\
           'idx_actual_entries_occurred_on')",
@@ -293,7 +295,7 @@ pub async fn validate_database(pool: &SqlitePool) -> Result<(), ProtectionError>
     .fetch_one(pool)
     .await
     .map_err(StoreError::from)?;
-    if required_objects != 15 {
+    if required_objects != 17 {
         return Err(ProtectionError::InvariantFailed);
     }
     Ok(())
@@ -785,7 +787,7 @@ async fn write_plan_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), Prot
 async fn write_monthly_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), ProtectionError> {
     let rows = sqlx::query(
         "SELECT m.id, m.source_plan_item_id, m.snapshot_name, m.month, m.category, m.flow_type, \
-                m.recognition_mode, m.item_source, m.scheduled_date, m.planned_amount_scaled, \
+                m.recognition_mode, m.item_source, m.item_origin, m.scheduled_date, m.planned_amount_scaled, \
                 CASE WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL \
                   THEN COALESCE(SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END), 0) \
                   ELSE NULL END AS derived_actual_amount_scaled, COUNT(e.id) AS actual_entry_count, \
@@ -808,6 +810,7 @@ async fn write_monthly_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), P
         "recognition_mode_code",
         "recognition_mode_label_zh",
         "item_source_code",
+        "item_origin_code",
         "scheduled_date",
         "planned_amount",
         "derived_actual_amount",
@@ -846,6 +849,7 @@ async fn write_monthly_items_csv(pool: &SqlitePool, path: &Path) -> Result<(), P
             recognition_mode.clone(),
             recognition_label(&recognition_mode)?.to_owned(),
             row.try_get("item_source")?,
+            row.try_get("item_origin")?,
             row.try_get::<Option<String>, _>("scheduled_date")?
                 .unwrap_or_default(),
             scaled_decimal(row.try_get("planned_amount_scaled")?, 2)?,

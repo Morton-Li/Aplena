@@ -113,6 +113,7 @@ MonthlyItem + ActualEntry ──> Analytics
 | `month` | 月初锚点 |
 | 快照名称/类别/方向/模式 | 创建时冻结 |
 | `item_source` | `PLANNED` / `ACTUAL_ONLY` |
+| `item_origin` | `PLAN_LINKED` / `MANUAL` |
 | `scheduled_date` | 仅正式 PAYMENT 快照有值 |
 | `planned_amount` | 已完成汇率与周期计算的本位币金额 |
 | `actual_confirmed_at` | 可空的最终核对标记 |
@@ -204,6 +205,8 @@ planned = ROUND_HALF_UP(amount × rate, 2)
 - 计划已结束：允许并提示迟到事实；
 - 计划已删除或快照已脱离来源：拒绝新条目。
 
+用户也可不选择长期计划，直接创建 `MANUAL + ACTUAL_ONLY` 月度项目。它允许新增实际条目并参与实际汇总，但不计算计划偏差；这与计划删除后留下的 `PLAN_LINKED` 脱离快照是不同状态。
+
 ### 7.2 上下文添加
 
 从月度项目卡片进入时，项目固定不可改。支出显示“支出/退款”，收入显示“收入/冲减”。
@@ -261,6 +264,7 @@ FINAL --编辑/删除/添加--> IN_PROGRESS 或 MISSING
 - `preview_month`、`initialize_month`、自动当前月初始化；
 - `list_monthly_items`、`update_monthly_note`；
 - `ensure_actual_only_monthly_item`；
+- `create_manual_monthly_item`；
 - `list/create/update/delete_actual_entry`；
 - `confirm_monthly_item`、`confirm_monthly_actuals`；
 - 月度、历史与承载能力查询；

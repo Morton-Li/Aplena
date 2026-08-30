@@ -311,9 +311,9 @@ async fn csv_export_is_deterministic_rfc_quoted_formula_safe_and_preserves_null_
     assert_eq!(&plan_row[13], "'@危险,备注\n第二行");
     let mut monthly = csv::Reader::from_path(first.join("monthly_items.csv")).unwrap();
     let monthly_row = monthly.records().next().unwrap().unwrap();
-    assert_eq!(&monthly_row[12], "12.50");
-    assert_eq!(&monthly_row[13], "");
-    assert_eq!(&monthly_row[16], "MISSING");
+    assert_eq!(&monthly_row[13], "12.50");
+    assert_eq!(&monthly_row[14], "");
+    assert_eq!(&monthly_row[17], "MISSING");
 }
 
 #[tokio::test]

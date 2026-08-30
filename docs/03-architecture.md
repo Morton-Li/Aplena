@@ -101,9 +101,9 @@ actual_entries
 前端提供两条入口：
 
 - 月度卡片上下文入口，月度项目固定；
-- 全局入口，先选计划。目标月没有快照时调用 `ensure_actual_only_monthly_item`，再创建条目。
+- 全局入口默认直接创建 `MANUAL` 月度项目并记录实际；用户也可选择关联长期计划，目标月没有快照时调用 `ensure_actual_only_monthly_item`。
 
-应用服务验证 UUID、日期、效果、金额、来源计划状态和禁止改挂。Store 写入后，SQLite 触发器清除确认时间。日期同月约束也由触发器防守，避免绕过服务层写入污染数据。
+应用服务验证 UUID、日期、效果、金额、月度项目创建来源、来源计划状态和禁止改挂。手动月度项目无需计划引用，已删除计划留下的脱离快照仍拒绝新增条目。Store 写入后，SQLite 触发器清除确认时间。日期同月约束也由触发器防守，避免绕过服务层写入污染数据。
 
 条目查询按日期和 UUID 稳定排序。迁移来源条目允许读取但 Store 拒绝更新和删除。
 
@@ -128,6 +128,7 @@ settings / exchange rates / plan items
 preview_plan_item / get_financial_capacity
 preview_month / initialize_month / get_startup_status
 list_monthly_items / update_monthly_note
+create_manual_monthly_item
 ensure_actual_only_monthly_item
 list_actual_entries / create_actual_entry
 update_actual_entry / delete_actual_entry
@@ -150,7 +151,7 @@ DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `fiel
 6. 启用 foreign keys、WAL 和同步策略；
 7. 启动当前自然月自动初始化。
 
-本项目不修改已经发布的迁移。schema 3 通过重建表完成日级日期、分精度和实际条目转换。
+本项目不修改已经发布的迁移。schema 3 通过重建表完成日级日期、分精度和实际条目转换；schema 4 追加 `item_origin`，把手动月度项目与计划关联或计划删除后脱离的快照明确区分。
 
 ## 10. 备份、恢复和导出
 
@@ -196,7 +197,7 @@ CSV 是人类可读导出，包含五张表。字符串执行 RFC 4180 引号和
 
 ### 12.4 前端
 
-验证首次设置、两种计划模式、日级录入、实际四状态、退款/冲减、只读净额、全局仅实际入口、月份浏览、显式初始化、分析展示和恢复确认。
+验证默认设置直达应用、无计划手动月度录入、两种计划模式、日级录入、实际四状态、退款/冲减、只读净额、计划外实际入口、月份浏览、显式初始化、分析展示和恢复确认。
 
 ### 12.5 发布级验证
 

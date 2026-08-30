@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
   confirmMonthlyActuals,
   confirmMonthlyItem,
   createActualEntry,
+  createManualMonthlyItem,
   deleteActualEntry,
   ensureActualOnlyMonthlyItem,
   getSettings,
@@ -27,6 +28,7 @@ import {
   type PlanItem,
   type RateOverrideInput,
 } from "../../shared/api/finance";
+import { getDomainContract } from "../../shared/api/domain";
 import { describeError } from "../../shared/formatting/errors";
 import { formatMoney, formatPercent } from "../../shared/formatting/finance";
 import { Dialog } from "../../shared/components/Dialog";
@@ -168,7 +170,7 @@ export function MonthlyPage() {
       )}
 
       {itemsQuery.data?.length === 0 && previewQuery.data?.candidate_count === 0 && previewQuery.data.missing_currencies.length === 0 && (
-        <EmptyState eyebrow="这个月份没有执行项" title="当前无需录入或确认" description="这个月份没有有效的均摊计划；按支付月份确认的项目只会在实际支付月出现。浏览不会创建额外快照。" action={<Link className="button button-secondary" to="/plans">查看长期计划</Link>} />
+        <EmptyState eyebrow="这个月份还没有数据" title="直接记录本月第一项收入或支出" description="月度实际可以独立录入。长期计划仅用于自动生成周期基准与承载能力分析，不是开始使用 Aplena 的前置条件。" action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>录入本月实际</button><Link className="button button-secondary" to="/plans">设置长期计划（可选）</Link></div>} />
       )}
 
       {initializing && previewQuery.data && ratesQuery.data && (
@@ -239,7 +241,9 @@ function MonthlyRow({ item, onSaved }: { item: MonthlyItem; onSaved: () => Promi
     onSuccess: async () => { setEditingNote(false); await onSaved(); },
   });
   const varianceCopy =
-    item.variance_effect === "UNKNOWN"
+    item.item_origin === "MANUAL"
+      ? "无计划基准"
+      : item.variance_effect === "UNKNOWN"
       ? "尚无偏差"
       : item.variance_effect === "ON_PLAN"
         ? "与计划一致"
@@ -249,16 +253,16 @@ function MonthlyRow({ item, onSaved }: { item: MonthlyItem; onSaved: () => Promi
   return (
     <article className="monthly-card">
       <header>
-        <div><span className={"status-dot status-" + item.data_status.toLowerCase()} aria-hidden="true" /><h2>{item.item_name}</h2>{item.item_source === "ACTUAL_ONLY" && <span className="category-pill">仅实际</span>}</div>
+        <div><span className={"status-dot status-" + item.data_status.toLowerCase()} aria-hidden="true" /><h2>{item.item_name}</h2>{item.item_origin === "MANUAL" ? <span className="category-pill">本月项目</span> : item.item_source === "ACTUAL_ONLY" ? <span className="category-pill">计划外实际</span> : null}</div>
         <span className={"variance-badge variance-" + item.variance_effect.toLowerCase()}>{varianceCopy}</span>
       </header>
       <div className="monthly-facts">
-        <div><span>计划金额</span><strong>{formatMoney(item.planned_amount, item.currency)}</strong></div>
+        <div><span>计划金额</span><strong>{item.item_origin === "MANUAL" ? "—" : formatMoney(item.planned_amount, item.currency)}</strong></div>
         <div><span>实际净额（条目汇总）</span><strong>{formatMoney(item.actual_amount, item.currency, "尚无条目")}</strong></div>
         <div><span>偏差</span><strong>{formatMoney(item.variance_amount, item.currency)}</strong></div>
         <div><span>完成率</span><strong>{formatPercent(item.completion_rate_percent)}</strong></div>
       </div>
-      <div className="monthly-meta">{categoryLabel(item.category)} · {flowLabel(item.flow_type)} · {recognitionLabel(item.recognition_mode)}{item.scheduled_date ? ` · 计划支付 ${item.scheduled_date}` : ""} · {statusLabel(item.data_status)} · {item.actual_entry_count} 条</div>
+      <div className="monthly-meta">{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{item.item_origin === "MANUAL" ? "" : ` · ${recognitionLabel(item.recognition_mode)}`}{item.scheduled_date ? ` · 计划支付 ${item.scheduled_date}` : ""} · {statusLabel(item.data_status)} · {item.actual_entry_count} 条</div>
       <div className="monthly-actions">
         <button className="button button-secondary" type="button" onClick={() => setAdding(true)}>添加{item.flow_type === "EXPENSE" ? "支出或退款" : "收入或冲减"}</button>
         <button className="button button-quiet" type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? "收起条目" : "查看条目"}</button>
@@ -299,11 +303,16 @@ function EntryList({ item, entries, pending, error, onSaved }: { item: MonthlyIt
 }
 
 function EntryDialog({ month, plans, monthlyItems, fixedItem, existing, onClose, onSaved }: { month: string; plans: PlanItem[]; monthlyItems: MonthlyItem[]; fixedItem?: MonthlyItem; existing?: ActualEntry; onClose: () => void; onSaved: () => Promise<void> }) {
+  const contractQuery = useQuery({ queryKey: queryKeys.domain, queryFn: () => getDomainContract() });
+  const [entryMode, setEntryMode] = useState<"MANUAL" | "PLAN_LINKED">("MANUAL");
   const defaultPlanId = fixedItem?.source_plan_item_id ?? plans[0]?.id ?? "";
   const [planId, setPlanId] = useState(defaultPlanId);
   const selectedItem = fixedItem ?? monthlyItems.find((item) => item.source_plan_item_id === planId);
   const selectedPlan = plans.find((plan) => plan.id === planId);
-  const flow = selectedItem?.flow_type ?? selectedPlan?.flow_type ?? "EXPENSE";
+  const [manualName, setManualName] = useState("");
+  const [manualCategory, setManualCategory] = useState("ESSENTIAL_EXPENSE");
+  const manualItemRef = useRef<MonthlyItem | null>(null);
+  const flow = selectedItem?.flow_type ?? selectedPlan?.flow_type ?? flowForCategory(manualCategory);
   const [occurredOn, setOccurredOn] = useState(existing?.occurred_on ?? `${month}-01`);
   const [effect, setEffect] = useState<"INCREASE" | "DECREASE">(existing?.effect ?? "INCREASE");
   const [amount, setAmount] = useState(existing?.amount ?? "");
@@ -311,7 +320,17 @@ function EntryDialog({ month, plans, monthlyItems, fixedItem, existing, onClose,
   const mutation = useMutation({
     mutationFn: async () => {
       let item = selectedItem;
-      if (!item) item = await ensureActualOnlyMonthlyItem({ planItemId: planId, month });
+      if (!item && entryMode === "PLAN_LINKED") {
+        item = await ensureActualOnlyMonthlyItem({ planItemId: planId, month });
+      }
+      if (!item) {
+        manualItemRef.current ??= await createManualMonthlyItem({
+          name: manualName.trim(),
+          month,
+          category: manualCategory,
+        });
+        item = manualItemRef.current;
+      }
       const input = { id: existing?.id, monthlyItemId: item.id, occurredOn, effect, amount, note: note.trim() || undefined };
       return existing ? updateActualEntry({ ...input, id: existing.id }) : createActualEntry(input);
     },
@@ -323,16 +342,30 @@ function EntryDialog({ month, plans, monthlyItems, fixedItem, existing, onClose,
     className="entry-dialog"
     title={existing ? "编辑实际条目" : "添加实际条目"}
     onClose={onClose}
-    footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending || !planId || !/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0} type="button" onClick={() => mutation.mutate()}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
+    footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending || (!fixedItem && entryMode === "MANUAL" ? !manualName.trim() || !manualCategory : !planId) || !/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0} type="button" onClick={() => mutation.mutate()}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
   >
-    {!fixedItem && <label>所属项目<Select ariaLabel="所属项目" value={planId} onChange={setPlanId} placeholder="暂无可选计划" options={plans.map((plan) => ({ value: plan.id, label: plan.name, description: categoryLabel(plan.category) }))} /></label>}
-    {selectedPlan?.end_date && selectedPlan.end_date < `${month}-01` && <div className="notice notice-warning">该长期计划已经结束；本条记录仍可作为迟到退款或冲减归入历史项目。</div>}
+    {!fixedItem && <>
+      <div className="entry-mode-switch" role="group" aria-label="录入方式">
+        <button className={entryMode === "MANUAL" ? "active" : ""} type="button" onClick={() => setEntryMode("MANUAL")}><strong>本月项目</strong><span>直接记录，不需要计划</span></button>
+        <button className={entryMode === "PLAN_LINKED" ? "active" : ""} disabled={plans.length === 0} type="button" onClick={() => setEntryMode("PLAN_LINKED")}><strong>关联长期计划</strong><span>{plans.length === 0 ? "尚未设置，可稍后启用" : "用于计划执行与偏差分析"}</span></button>
+      </div>
+      {entryMode === "MANUAL" ? <>
+        <label>项目名称<input autoFocus data-dialog-initial-focus placeholder="例如：工资、房租、日常餐饮" value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
+        <label>财务类别<Select ariaLabel="财务类别" value={manualCategory} onChange={setManualCategory} options={(contractQuery.data?.categories ?? []).map((category) => ({ value: category.code, label: category.label, description: flowForCategory(category.code) === "INCOME" ? "收入" : "支出" }))} /></label>
+        <div className="notice">这是独立的本月项目，不会自动创建长期计划，也不会产生虚假的计划偏差。</div>
+      </> : <label>所属计划<Select ariaLabel="所属计划" value={planId} onChange={setPlanId} placeholder="选择长期计划" options={plans.map((plan) => ({ value: plan.id, label: plan.name, description: categoryLabel(plan.category) }))} /></label>}
+    </>}
+    {entryMode === "PLAN_LINKED" && selectedPlan?.end_date && selectedPlan.end_date < `${month}-01` && <div className="notice notice-warning">该长期计划已经结束；本条记录仍可作为迟到退款或冲减归入历史项目。</div>}
     <label>日期<input type="date" min={`${month}-01`} max={`${month}-${new Date(Number(month.slice(0,4)), Number(month.slice(5,7)), 0).getDate()}`} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
     <label>类型<Select ariaLabel="类型" value={effect} onChange={(value) => setEffect(value as "INCREASE" | "DECREASE")} options={[{ value: "INCREASE", label: increaseLabel }, { value: "DECREASE", label: decreaseLabel }]} /></label>
-    <label>金额<input autoFocus data-dialog-initial-focus inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
+    <label>金额<input autoFocus={Boolean(fixedItem)} data-dialog-initial-focus={fixedItem ? true : undefined} inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
     <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
     {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
   </Dialog>;
+}
+
+function flowForCategory(category: string): "INCOME" | "EXPENSE" {
+  return ["FIXED_INCOME", "VARIABLE_INCOME"].includes(category) ? "INCOME" : "EXPENSE";
 }
 
 function InitializationDialog({

@@ -24,6 +24,8 @@ pub enum DomainError {
     InvalidRatio,
     #[error("plan item name cannot be empty")]
     EmptyPlanItemName,
+    #[error("monthly item name cannot be empty")]
+    EmptyMonthlyItemName,
     #[error("category code is invalid")]
     InvalidCategory,
     #[error("flow type code is invalid")]
@@ -48,6 +50,8 @@ pub enum DomainError {
     InvalidActualEntryOrigin,
     #[error("monthly item source is invalid")]
     InvalidMonthlyItemSource,
+    #[error("monthly item origin is invalid")]
+    InvalidMonthlyItemOrigin,
     #[error("exchange rate currency pair does not match the requested conversion")]
     CurrencyMismatch,
     #[error("all capacity inputs must use the same base currency")]

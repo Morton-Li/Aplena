@@ -1,6 +1,9 @@
 use std::cmp::Ordering;
 
-use pfcm_domain::{Category, FlowType, MonthlyItem, SavingsRate, SignedAmount, YearMonth};
+use pfcm_domain::{
+    Category, FlowType, MonthlyItem, MonthlyItemOrigin, MonthlyItemSource, SavingsRate,
+    SignedAmount, YearMonth,
+};
 use rust_decimal::{Decimal, RoundingStrategy};
 
 use super::dto::{
@@ -36,6 +39,10 @@ pub fn build_month_analytics(
         .count();
     let any_actual = items.iter().any(|item| item.actual_amount().is_some());
     let total_count = items.len();
+    let planned_count = items
+        .iter()
+        .filter(|item| item.item_source() == MonthlyItemSource::Planned)
+        .count();
     let actual_status = if total_count == 0 || (!any_actual && recorded_count == 0) {
         "EMPTY"
     } else if recorded_count == total_count {
@@ -166,7 +173,9 @@ pub fn build_month_analytics(
                 FlowType::Income => actual_income,
                 FlowType::Expense => actual_expense,
             };
-            let variance = actual.map(|actual| actual - planned);
+            let variance = (item.item_origin() != MonthlyItemOrigin::Manual)
+                .then(|| actual.map(|actual| actual - planned))
+                .flatten();
             ProjectBreakdownDto {
                 monthly_item_id: item.id().to_string(),
                 name: item.item_name().to_owned(),
@@ -208,6 +217,7 @@ pub fn build_month_analytics(
         currency: currency.to_owned(),
         actual_status: actual_status.to_owned(),
         total_item_count: u64::try_from(total_count).unwrap_or(u64::MAX),
+        planned_item_count: u64::try_from(planned_count).unwrap_or(u64::MAX),
         recorded_item_count: u64::try_from(recorded_count).unwrap_or(u64::MAX),
         completeness_percent: (total_count > 0).then(|| {
             format_percent(
@@ -323,7 +333,8 @@ fn format_decimal(mut value: Decimal, scale: u32) -> String {
 #[cfg(test)]
 mod tests {
     use pfcm_domain::{
-        CurrencyCode, MonthlyItem, MonthlyItemSource, RecognitionMode, SignedAmount,
+        CurrencyCode, MonthlyItem, MonthlyItemOrigin, MonthlyItemSource, RecognitionMode,
+        SignedAmount,
     };
     use uuid::Uuid;
 
@@ -339,6 +350,7 @@ mod tests {
             category.flow_type(),
             RecognitionMode::Amortized,
             MonthlyItemSource::Planned,
+            MonthlyItemOrigin::PlanLinked,
             None,
             planned.parse().unwrap(),
             actual.map(|value| SignedAmount::from_decimal(value.parse().unwrap()).unwrap()),
@@ -464,5 +476,39 @@ mod tests {
         assert_eq!(no_actuals.actual_status, "EMPTY");
         assert_eq!(no_actuals.completeness_percent.as_deref(), Some("0.00"));
         assert_eq!(no_actuals.income.actual_to_date, None);
+    }
+
+    #[test]
+    fn manual_items_contribute_actuals_without_creating_plan_variances() {
+        let manual = MonthlyItem::rehydrate(
+            Uuid::new_v4(),
+            None,
+            "本月房租".to_owned(),
+            YearMonth::new(2026, 6).unwrap(),
+            Category::EssentialExpense,
+            FlowType::Expense,
+            RecognitionMode::Amortized,
+            MonthlyItemSource::ActualOnly,
+            MonthlyItemOrigin::Manual,
+            None,
+            "0".parse().unwrap(),
+            Some(SignedAmount::from_decimal("3200".parse().unwrap()).unwrap()),
+            1,
+            Some("2026-07-01T00:00:00Z".to_owned()),
+            CurrencyCode::new("CNY").unwrap(),
+            None,
+        );
+        let analytics = build_month_analytics(
+            YearMonth::new(2026, 6).unwrap(),
+            "CNY",
+            SavingsRate::from_basis_points(2000).unwrap(),
+            &[manual],
+        );
+
+        assert_eq!(analytics.planned_item_count, 0);
+        assert_eq!(analytics.expense.actual_to_date.as_deref(), Some("3200.00"));
+        assert_eq!(analytics.projects[0].variance_amount, None);
+        assert_eq!(analytics.projects[0].variance_effect, "UNKNOWN");
+        assert!(analytics.important_variances.is_empty());
     }
 }

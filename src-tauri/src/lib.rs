@@ -3,8 +3,8 @@ mod infrastructure;
 
 use application::{
     FinanceService, calculate_capacity, confirm_monthly_actuals, confirm_monthly_item,
-    create_actual_entry, create_backup, create_plan_item, delete_actual_entry,
-    delete_exchange_rate, delete_plan_item, ensure_actual_only_monthly_item,
+    create_actual_entry, create_backup, create_manual_monthly_item, create_plan_item,
+    delete_actual_entry, delete_exchange_rate, delete_plan_item, ensure_actual_only_monthly_item,
     ensure_default_settings, export_csv, get_domain_contract, get_financial_capacity,
     get_history_analytics, get_month_analytics, get_month_initialization_status, get_settings,
     get_startup_status, initialize_month, inspect_backup, list_actual_entries, list_exchange_rates,
@@ -85,6 +85,7 @@ pub fn run() {
             delete_plan_item,
             list_monthly_items,
             ensure_actual_only_monthly_item,
+            create_manual_monthly_item,
             list_actual_entries,
             create_actual_entry,
             update_actual_entry,

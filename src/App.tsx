@@ -29,7 +29,7 @@ const SettingsPage = lazy(() =>
 const navigation = [
   { to: "/dashboard", label: "总览", icon: "dashboard" },
   { to: "/monthly", label: "月度执行", icon: "calendar" },
-  { to: "/plans", label: "长期计划", icon: "plans" },
+  { to: "/plans", label: "长期规划 · 可选", icon: "plans" },
   { to: "/history", label: "历史报表", icon: "history" },
   { to: "/analysis", label: "财务分析", icon: "analysis" },
   { to: "/settings", label: "设置", icon: "settings" },

@@ -106,6 +106,7 @@ function monthlyItem(overrides: Partial<MonthlyItem> = {}): MonthlyItem {
     flow_type: "EXPENSE",
     recognition_mode: "AMORTIZED",
     item_source: "PLANNED",
+    item_origin: "PLAN_LINKED",
     scheduled_date: null,
     planned_amount: "300.00",
     actual_amount: null,
@@ -129,6 +130,7 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
     currency: "CNY",
     actual_status: "PARTIAL",
     total_item_count: 3,
+    planned_item_count: 3,
     recorded_item_count: 2,
     completeness_percent: "66.67",
     income: {
@@ -445,6 +447,16 @@ function installHarness(options: HarnessOptions = {}) {
         return [] as T;
       case "ensure_actual_only_monthly_item":
         return monthlyItem({ item_source: "ACTUAL_ONLY", planned_amount: "0.00" }) as T;
+      case "create_manual_monthly_item":
+        return monthlyItem({
+          source_plan_item_id: null,
+          item_name: (args?.input as { name: string }).name,
+          category: (args?.input as { category: string }).category,
+          flow_type: ["FIXED_INCOME", "VARIABLE_INCOME"].includes((args?.input as { category: string }).category) ? "INCOME" : "EXPENSE",
+          item_source: "ACTUAL_ONLY",
+          item_origin: "MANUAL",
+          planned_amount: "0.00",
+        }) as T;
       case "create_actual_entry":
       case "update_actual_entry": {
         const input = args?.input as { id?: string; monthlyItemId: string; occurredOn: string; effect: string; amount: string; note?: string };
@@ -547,7 +559,7 @@ describe("planning workflows", () => {
     installHarness({ settings: null });
     render(<App />);
 
-    expect(await screen.findByRole("link", { name: "长期计划" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "长期规划 · 可选" })).toBeInTheDocument();
     expect(screen.queryByText("建立你的财务基准")).not.toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("ensure_default_settings");
   });
@@ -556,7 +568,7 @@ describe("planning workflows", () => {
     installHarness();
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "长期计划" }));
+    await user.click(await screen.findByRole("link", { name: "长期规划 · 可选" }));
     await user.click(await screen.findByRole("button", { name: "新建计划" }));
     await user.type(screen.getByLabelText("项目名称"), "云服务器");
     await user.type(screen.getByLabelText("计划金额"), "1200");
@@ -577,7 +589,7 @@ describe("planning workflows", () => {
     installHarness();
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "长期计划" }));
+    await user.click(await screen.findByRole("link", { name: "长期规划 · 可选" }));
     await user.click(await screen.findByRole("button", { name: "新建计划" }));
     await user.type(screen.getByLabelText("项目名称"), "年度保险");
     await user.type(screen.getByLabelText("计划金额"), "1200");
@@ -633,6 +645,7 @@ describe("planning workflows", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "添加实际条目" }));
+    await user.click(screen.getByRole("button", { name: /关联长期计划/ }));
     await user.clear(screen.getByLabelText("金额"));
     await user.type(screen.getByLabelText("金额"), "427.25");
     await user.click(screen.getByLabelText("类型"));
@@ -650,6 +663,7 @@ describe("planning workflows", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
+    await user.click(screen.getByRole("button", { name: /关联长期计划/ }));
     await user.type(screen.getByLabelText("金额"), "25.00");
     await user.click(screen.getByLabelText("类型"));
     await user.click(screen.getByRole("option", { name: "退款" }));
@@ -668,6 +682,32 @@ describe("planning workflows", () => {
         amount: "25.00",
       }),
     });
+  });
+
+  it("records a manual monthly item without requiring a long-term plan", async () => {
+    installHarness({ plans: [], monthly: { "2026-08": [] } });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
+    await user.type(screen.getByLabelText("项目名称"), "本月房租");
+    await user.type(screen.getByLabelText("金额"), "3200.00");
+    await user.click(screen.getByRole("button", { name: "保存条目" }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("create_manual_monthly_item", {
+        input: {
+          name: "本月房租",
+          month: "2026-08",
+          category: "ESSENTIAL_EXPENSE",
+        },
+      });
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({ amount: "3200.00", effect: "INCREASE" }),
+    });
+    expect(invokeMock.mock.calls.some(([command]) => command === "ensure_actual_only_monthly_item")).toBe(false);
   });
 
   it("browses future and historical months without writes, then explicitly initializes", async () => {
@@ -798,7 +838,7 @@ describe("dashboard and capacity analytics", () => {
   });
 
   it("labels partial actuals and keeps chart values available in a table", async () => {
-    installHarness();
+    installHarness({ plans: [examplePlan] });
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
@@ -844,6 +884,7 @@ describe("dashboard and capacity analytics", () => {
       analytics: monthAnalytics({
         actual_status: "EMPTY",
         total_item_count: 0,
+        planned_item_count: 0,
         recorded_item_count: 0,
         completeness_percent: null,
         income: emptyComparison,
@@ -865,7 +906,7 @@ describe("dashboard and capacity analytics", () => {
     });
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "添加首个长期计划后，报表与图表会自动生成" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "从本月第一项收入或支出开始" })).toBeInTheDocument();
     expect(screen.queryByText("N/A")).not.toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
@@ -895,7 +936,7 @@ describe("dashboard and capacity analytics", () => {
   });
 
   it("uses backend ranks and excludes missing actuals from the actual ranking", async () => {
-    installHarness();
+    installHarness({ plans: [examplePlan] });
     const user = userEvent.setup();
     render(<App />);
     await user.click(await screen.findByRole("link", { name: "财务分析" }));

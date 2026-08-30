@@ -1722,6 +1722,50 @@ textarea {
   width: min(560px, 100%);
 }
 
+.entry-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.entry-mode-switch button {
+  display: grid;
+  gap: 5px;
+  min-height: 76px;
+  padding: 13px 14px;
+  text-align: left;
+  color: #53645a;
+  background: #fff;
+  border: 1px solid #d7ddd8;
+  border-radius: 11px;
+  cursor: pointer;
+}
+
+.entry-mode-switch button:hover:not(:disabled) {
+  border-color: #91a69a;
+}
+
+.entry-mode-switch button.active {
+  color: #1f3c30;
+  background: #edf4ef;
+  border-color: #668878;
+  box-shadow: 0 0 0 2px rgb(72 112 92 / 10%);
+}
+
+.entry-mode-switch button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.entry-mode-switch strong {
+  font-size: 13px;
+}
+
+.entry-mode-switch span {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .initialization-dialog details {
   color: #526259;
   font-size: 12px;
@@ -2131,6 +2175,14 @@ textarea {
 .capacity-panel {
   margin-top: 18px;
   background: #eef4ff;
+}
+
+.capacity-panel-optional > p {
+  max-width: 720px;
+  margin: 18px 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.7;
 }
 
 .capacity-primary {

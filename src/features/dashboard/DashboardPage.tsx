@@ -7,6 +7,7 @@ import {
   getHistoryAnalytics,
   getMonthAnalytics,
   getSettings,
+  listPlanItems,
   queryKeys,
   type AmountComparison,
   type CategoryBreakdown,
@@ -49,12 +50,14 @@ export function DashboardPage() {
     queryFn: () => getFinancialCapacity(month),
     enabled: Boolean(month),
   });
+  const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
 
   if (
     settingsQuery.isPending ||
     analyticsQuery.isPending ||
     historyQuery.isPending ||
-    capacityQuery.isPending
+    capacityQuery.isPending ||
+    plansQuery.isPending
   ) {
     return <DashboardLoading />;
   }
@@ -62,7 +65,8 @@ export function DashboardPage() {
     settingsQuery.isError ||
     analyticsQuery.isError ||
     historyQuery.isError ||
-    capacityQuery.isError
+    capacityQuery.isError ||
+    plansQuery.isError
   ) {
     return (
       <section className="state-card state-card-error">
@@ -71,7 +75,8 @@ export function DashboardPage() {
             settingsQuery.error ??
               analyticsQuery.error ??
               historyQuery.error ??
-              capacityQuery.error,
+              capacityQuery.error ??
+              plansQuery.error,
           )}
         </span>
       </section>
@@ -84,21 +89,25 @@ export function DashboardPage() {
   const analytics = analyticsQuery.data;
   const capacity = capacityQuery.data;
   const actualQualifier = actualStatusLabel(analytics.actual_status);
+  const hasPlanBaseline = analytics.planned_item_count > 0;
+  const hasLongTermPlans = (plansQuery.data?.length ?? 0) > 0;
 
   return (
     <>
-      <DashboardHeader analytics={analytics} />
+      <DashboardHeader analytics={analytics} hasPlanBaseline={hasPlanBaseline} />
       {analytics.total_item_count === 0 ? (
         <EmptyDashboard month={analytics.month} currency={analytics.currency} />
       ) : (
         <>
-          <KpiGrid analytics={analytics} capacity={capacity} actualQualifier={actualQualifier} />
+          <KpiGrid analytics={analytics} capacity={capacity} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} hasLongTermPlans={hasLongTermPlans} />
           <DashboardCharts
             analytics={analytics}
             capacity={capacity}
             history={historyQuery.data?.months ?? []}
+            hasPlanBaseline={hasPlanBaseline}
+            hasLongTermPlans={hasLongTermPlans}
           />
-          <ExecutionReport analytics={analytics} actualQualifier={actualQualifier} />
+          <ExecutionReport analytics={analytics} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} />
           <VarianceReport analytics={analytics} />
         </>
       )}
@@ -106,13 +115,13 @@ export function DashboardPage() {
   );
 }
 
-function DashboardHeader({ analytics }: { analytics: MonthAnalytics }) {
+function DashboardHeader({ analytics, hasPlanBaseline }: { analytics: MonthAnalytics; hasPlanBaseline: boolean }) {
   return (
     <header className="page-header compact-header dashboard-header">
       <div>
         <p className="eyebrow">财务总览</p>
         <h1>{monthLabel(analytics.month)}</h1>
-        <p>{currencyName(analytics.currency)} · 计划、实际与财务承载能力实时汇总</p>
+        <p>{currencyName(analytics.currency)} · {hasPlanBaseline ? "计划、实际与财务承载能力实时汇总" : "本月实际收支与财务报表实时汇总"}</p>
       </div>
       <div className={`data-status status-${analytics.actual_status.toLowerCase()}`}>
         <span className="data-status-indicator" aria-hidden="true" />
@@ -134,16 +143,16 @@ function EmptyDashboard({ month, currency }: { month: string; currency: string }
       <section className="empty-ledger-header" aria-label="当前财务上下文">
         <div><span>期间</span><strong>{monthLabel(month)}</strong></div>
         <div><span>本位币</span><strong>{currencyName(currency)}</strong></div>
-        <div><span>报表状态</span><strong>等待计划数据</strong></div>
+        <div><span>报表状态</span><strong>等待本月数据</strong></div>
       </section>
       <EmptyState
         eyebrow="财务报表尚未建立"
-        title="添加首个长期计划后，报表与图表会自动生成"
-        description="Aplena 不会用缺失数据伪造 0.00。收入、支出、净结余、分类结构与承载能力将在计划进入当前月份后开始汇总。"
+        title="从本月第一项收入或支出开始"
+        description="直接录入本月实际后，收入、支出、净结余、分类结构与趋势图会自动生成。长期计划仅用于周期基准、偏差和承载能力分析。"
         action={
           <div className="empty-actions">
-            <Link className="button button-primary" to="/plans">添加长期计划</Link>
-            <Link className="button button-secondary" to="/monthly">查看月度执行</Link>
+            <Link className="button button-primary" to="/monthly">录入本月实际</Link>
+            <Link className="button button-secondary" to="/plans">设置长期计划（可选）</Link>
           </div>
         }
       />
@@ -155,10 +164,14 @@ function KpiGrid({
   analytics,
   capacity,
   actualQualifier,
+  hasPlanBaseline,
+  hasLongTermPlans,
 }: {
   analytics: MonthAnalytics;
   capacity: FinancialCapacity;
   actualQualifier: string;
+  hasPlanBaseline: boolean;
+  hasLongTermPlans: boolean;
 }) {
   return (
     <section className="kpi-grid" aria-label="核心财务指标">
@@ -166,39 +179,41 @@ function KpiGrid({
         className="kpi-card-primary"
         label="本月净结余"
         value={formatMoney(analytics.net_balance.actual_to_date, analytics.currency)}
-        supporting={`计划 ${formatMoney(analytics.net_balance.planned, analytics.currency)}`}
-        detail={comparisonDetail(analytics.net_balance, analytics.currency, actualQualifier)}
-        effect={analytics.net_balance.variance_effect}
+        supporting={hasPlanBaseline ? `计划 ${formatMoney(analytics.net_balance.planned, analytics.currency)}` : "未启用计划基准"}
+        detail={hasPlanBaseline ? comparisonDetail(analytics.net_balance, analytics.currency, actualQualifier) : `${actualQualifier}实际净额`}
+        effect={hasPlanBaseline ? analytics.net_balance.variance_effect : "UNKNOWN"}
       />
       <KpiCard
         label="总收入"
         value={formatMoney(analytics.income.actual_to_date, analytics.currency)}
-        supporting={`计划 ${formatMoney(analytics.income.planned, analytics.currency)}`}
-        detail={completionDetail(analytics.income, actualQualifier)}
-        effect={analytics.income.variance_effect}
+        supporting={hasPlanBaseline ? `计划 ${formatMoney(analytics.income.planned, analytics.currency)}` : "按实际条目汇总"}
+        detail={hasPlanBaseline ? completionDetail(analytics.income, actualQualifier) : `${actualQualifier}实际收入`}
+        effect={hasPlanBaseline ? analytics.income.variance_effect : "UNKNOWN"}
       />
       <KpiCard
         label="总支出"
         value={formatMoney(analytics.expense.actual_to_date, analytics.currency)}
-        supporting={`计划 ${formatMoney(analytics.expense.planned, analytics.currency)}`}
-        detail={comparisonDetail(analytics.expense, analytics.currency, actualQualifier)}
-        effect={analytics.expense.variance_effect}
+        supporting={hasPlanBaseline ? `计划 ${formatMoney(analytics.expense.planned, analytics.currency)}` : "按实际条目汇总"}
+        detail={hasPlanBaseline ? comparisonDetail(analytics.expense, analytics.currency, actualQualifier) : `${actualQualifier}实际支出`}
+        effect={hasPlanBaseline ? analytics.expense.variance_effect : "UNKNOWN"}
       />
       <KpiCard
         label="储蓄率"
         value={formatPercent(analytics.actual_savings_rate_percent)}
-        supporting={`计划 ${formatPercent(analytics.planned_savings_rate_percent)} · 目标 ${analytics.minimum_savings_rate_percent}%`}
+        supporting={hasPlanBaseline ? `计划 ${formatPercent(analytics.planned_savings_rate_percent)} · 目标 ${analytics.minimum_savings_rate_percent}%` : `最低储蓄目标 ${analytics.minimum_savings_rate_percent}%`}
         detail={
-          analytics.savings_rate_target_completion_percent
-            ? `目标完成 ${analytics.savings_rate_target_completion_percent}%`
+          !hasPlanBaseline
+            ? analytics.actual_savings_rate_percent ? "基于当前实际收入与净结余" : `${actualQualifier}尚不可计算`
+            : analytics.savings_rate_target_completion_percent
+            ? `${hasPlanBaseline ? "计划" : "目标"}完成 ${analytics.savings_rate_target_completion_percent}%`
             : `${actualQualifier}尚不可计算`
         }
       />
       <KpiCard
         label="可承载长期支出"
-        value={formatMoney(capacity.preserved_capacity, capacity.base_currency)}
-        supporting="保留当前自主预算"
-        detail={`极限 ${formatMoney(capacity.maximum_capacity, capacity.base_currency)}`}
+        value={hasLongTermPlans ? formatMoney(capacity.preserved_capacity, capacity.base_currency) : "—"}
+        supporting={hasLongTermPlans ? "保留当前自主预算" : "可选增强项"}
+        detail={hasLongTermPlans ? `极限 ${formatMoney(capacity.maximum_capacity, capacity.base_currency)}` : "设置长期计划后计算"}
       />
     </section>
   );
@@ -233,17 +248,21 @@ function DashboardCharts({
   analytics,
   capacity,
   history,
+  hasPlanBaseline,
+  hasLongTermPlans,
 }: {
   analytics: MonthAnalytics;
   capacity: FinancialCapacity;
   history: MonthAnalytics[];
+  hasPlanBaseline: boolean;
+  hasLongTermPlans: boolean;
 }) {
   const recentHistory = useMemo(() => history.slice(-8), [history]);
   const trendOption = useMemo(
     () => financialTrendOption(recentHistory, analytics.currency),
     [analytics.currency, recentHistory],
   );
-  const comparisonOption = useMemo(() => planActualOption(analytics), [analytics]);
+  const comparisonOption = useMemo(() => planActualOption(analytics, hasPlanBaseline), [analytics, hasPlanBaseline]);
   const expenses = useMemo(
     () =>
       analytics.categories.filter(
@@ -254,8 +273,8 @@ function DashboardCharts({
     [analytics.categories],
   );
   const expenseOption = useMemo(
-    () => expenseStructureOption(expenses, analytics.currency),
-    [analytics.currency, expenses],
+    () => expenseStructureOption(expenses, analytics.currency, hasPlanBaseline),
+    [analytics.currency, expenses, hasPlanBaseline],
   );
   const capacityOption = useMemo(() => capacityWaterfallOption(capacity), [capacity]);
 
@@ -272,25 +291,24 @@ function DashboardCharts({
             <ChartEmpty message="至少录入一个月份的实际数据后显示趋势图。" />
           )}
         </ReportCard>
-        <ReportCard eyebrow="本月执行" title="计划与实际">
-          <AnalyticsChart option={comparisonOption} label={`${analytics.month}收入、支出与净结余计划实际分组柱状图`} height={300} />
-          <p className="chart-note">灰蓝代表计划，蓝色代表当前实际；缺失实际不会按 0 绘制。</p>
+        <ReportCard eyebrow="本月执行" title={hasPlanBaseline ? "计划与实际" : "实际收支概览"}>
+          <AnalyticsChart option={comparisonOption} label={`${analytics.month}收入、支出与净结余${hasPlanBaseline ? "计划实际分组" : "实际"}柱状图`} height={300} />
+          <p className="chart-note">{hasPlanBaseline ? "灰蓝代表计划，蓝色代表当前实际；缺失实际不会按 0 绘制。" : "当前仅展示实际数据；启用长期计划后可增加计划对比。"}</p>
         </ReportCard>
       </div>
       <div className="dashboard-chart-grid">
         <ReportCard eyebrow="支出结构" title="分类金额与占比">
           {expenses.length > 0 ? (
             <>
-              <AnalyticsChart option={expenseOption} label={`${analytics.month}支出分类计划与实际横向条形图`} height={Math.max(260, expenses.length * 54)} />
-              <CategoryDataTable categories={expenses} currency={analytics.currency} />
+              <AnalyticsChart option={expenseOption} label={`${analytics.month}支出分类${hasPlanBaseline ? "计划与实际" : "实际"}横向条形图`} height={Math.max(260, expenses.length * 54)} />
+              <CategoryDataTable categories={expenses} currency={analytics.currency} hasPlanBaseline={hasPlanBaseline} />
             </>
           ) : (
             <ChartEmpty message="当前月份没有可绘制的支出分类。" />
           )}
         </ReportCard>
         <ReportCard eyebrow="财务承载能力" title="稳定收入的分配路径">
-          <AnalyticsChart option={capacityOption} label="稳定收入扣除必要支出、固定承诺、最低储蓄和自主预算后的剩余承载能力瀑布图" height={300} />
-          <CapacityDataTable capacity={capacity} />
+          {hasLongTermPlans ? <><AnalyticsChart option={capacityOption} label="稳定收入扣除必要支出、固定承诺、最低储蓄和自主预算后的剩余承载能力瀑布图" height={300} /><CapacityDataTable capacity={capacity} /></> : <ChartEmpty message="承载能力是可选的规划分析；设置长期收入与支出后显示。" />}
         </ReportCard>
       </div>
     </section>
@@ -306,7 +324,7 @@ function ReportCard({ eyebrow, title, children }: { eyebrow: string; title: stri
   );
 }
 
-function ExecutionReport({ analytics, actualQualifier }: { analytics: MonthAnalytics; actualQualifier: string }) {
+function ExecutionReport({ analytics, actualQualifier, hasPlanBaseline }: { analytics: MonthAnalytics; actualQualifier: string; hasPlanBaseline: boolean }) {
   const rows: Array<[string, AmountComparison]> = [
     ["总收入", analytics.income],
     ["总支出", analytics.expense],
@@ -315,7 +333,7 @@ function ExecutionReport({ analytics, actualQualifier }: { analytics: MonthAnaly
   return (
     <section className="report-card dashboard-table-card">
       <header>
-        <div><p className="section-label">月度报表</p><h2>本月计划执行表</h2></div>
+        <div><p className="section-label">月度报表</p><h2>{hasPlanBaseline ? "本月计划执行表" : "本月实际收支表"}</h2></div>
         <span className="report-context">{actualQualifier}</span>
       </header>
       <div className="table-scroll">
@@ -326,16 +344,16 @@ function ExecutionReport({ analytics, actualQualifier }: { analytics: MonthAnaly
             {rows.map(([label, comparison]) => (
               <tr key={label}>
                 <th>{label}</th>
-                <td>{formatMoney(comparison.planned, analytics.currency)}</td>
+                <td>{hasPlanBaseline ? formatMoney(comparison.planned, analytics.currency) : "—"}</td>
                 <td>{formatMoney(comparison.actual_to_date, analytics.currency)}</td>
-                <td>{formatMoney(comparison.variance, analytics.currency)}</td>
-                <td>{formatPercent(comparison.completion_percent)}</td>
-                <td><VarianceBadge comparison={comparison} /></td>
+                <td>{hasPlanBaseline ? formatMoney(comparison.variance, analytics.currency) : "—"}</td>
+                <td>{hasPlanBaseline ? formatPercent(comparison.completion_percent) : "—"}</td>
+                <td>{hasPlanBaseline ? <VarianceBadge comparison={comparison} /> : <span className="status-badge status-neutral">仅实际</span>}</td>
               </tr>
             ))}
             <tr>
               <th>储蓄率</th>
-              <td>{formatPercent(analytics.planned_savings_rate_percent)}</td>
+              <td>{hasPlanBaseline ? formatPercent(analytics.planned_savings_rate_percent) : "—"}</td>
               <td>{formatPercent(analytics.actual_savings_rate_percent)}</td>
               <td>{formatPercentagePoints(analytics.savings_rate_percentage_point_variance)}</td>
               <td>{formatPercent(analytics.savings_rate_target_completion_percent)}</td>
@@ -385,9 +403,9 @@ function TrendDataTable({ months, currency }: { months: MonthAnalytics[]; curren
   );
 }
 
-function CategoryDataTable({ categories, currency }: { categories: CategoryBreakdown[]; currency: string }) {
+function CategoryDataTable({ categories, currency, hasPlanBaseline }: { categories: CategoryBreakdown[]; currency: string; hasPlanBaseline: boolean }) {
   return (
-    <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><thead><tr><th>分类</th><th>计划</th><th>实际</th><th>实际占比</th></tr></thead><tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{formatMoney(item.planned_amount, currency)}</td><td>{formatMoney(item.actual_to_date, currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody></table></div></details>
+    <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><thead><tr><th>分类</th><th>计划</th><th>实际</th><th>实际占比</th></tr></thead><tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, currency) : "—"}</td><td>{formatMoney(item.actual_to_date, currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody></table></div></details>
   );
 }
 
@@ -420,24 +438,26 @@ function financialTrendOption(months: MonthAnalytics[], currency: string) {
   };
 }
 
-function planActualOption(analytics: MonthAnalytics) {
+function planActualOption(analytics: MonthAnalytics, hasPlanBaseline: boolean) {
+  const actualSeries = { name: "实际", type: "bar", barMaxWidth: 34, data: [analytics.income.actual_to_date, analytics.expense.actual_to_date, analytics.net_balance.actual_to_date].map(decimalValue), itemStyle: { color: "#2563eb", borderRadius: [3, 3, 0, 0] } };
   return {
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: number | string) => formatMoney(String(value), analytics.currency) },
-    legend: { top: 0, data: ["计划", "实际"], textStyle: chartText },
+    legend: { top: 0, data: hasPlanBaseline ? ["计划", "实际"] : ["实际"], textStyle: chartText },
     grid: { left: 70, right: 16, top: 48, bottom: 36 },
     xAxis: { type: "category", data: ["收入", "支出", "净结余"], axisLabel: chartText, axisLine },
     yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => compactMoney(value, analytics.currency) }, splitLine },
-    series: [
+    series: hasPlanBaseline ? [
       { name: "计划", type: "bar", barMaxWidth: 34, data: [analytics.income.planned, analytics.expense.planned, analytics.net_balance.planned].map(decimalValue), itemStyle: { color: "#94a3b8", borderRadius: [3, 3, 0, 0] } },
-      { name: "实际", type: "bar", barMaxWidth: 34, data: [analytics.income.actual_to_date, analytics.expense.actual_to_date, analytics.net_balance.actual_to_date].map(decimalValue), itemStyle: { color: "#2563eb", borderRadius: [3, 3, 0, 0] } },
-    ],
+      actualSeries,
+    ] : [actualSeries],
   };
 }
 
-function expenseStructureOption(categories: CategoryBreakdown[], currency: string) {
+function expenseStructureOption(categories: CategoryBreakdown[], currency: string, hasPlanBaseline: boolean) {
+  const actualSeries = { name: "实际", type: "bar", barMaxWidth: 18, data: categories.map((item) => decimalValue(item.actual_to_date)), itemStyle: { color: "#2563eb", borderRadius: [0, 3, 3, 0] } };
   return {
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: number | string) => formatMoney(String(value), currency) },
-    legend: { top: 0, data: ["计划", "实际"], textStyle: chartText },
+    legend: { top: 0, data: hasPlanBaseline ? ["计划", "实际"] : ["实际"], textStyle: chartText },
     grid: { left: 92, right: 28, top: 48, bottom: 24 },
     xAxis: {
       type: "value",
@@ -450,10 +470,10 @@ function expenseStructureOption(categories: CategoryBreakdown[], currency: strin
       splitLine,
     },
     yAxis: { type: "category", data: categories.map((item) => categoryLabel(item.category)), axisLabel: chartText, axisLine },
-    series: [
+    series: hasPlanBaseline ? [
       { name: "计划", type: "bar", barMaxWidth: 18, data: categories.map((item) => decimalValue(item.planned_amount)), itemStyle: { color: "#94a3b8", borderRadius: [0, 3, 3, 0] } },
-      { name: "实际", type: "bar", barMaxWidth: 18, data: categories.map((item) => decimalValue(item.actual_to_date)), itemStyle: { color: "#2563eb", borderRadius: [0, 3, 3, 0] } },
-    ],
+      actualSeries,
+    ] : [actualSeries],
   };
 }
 

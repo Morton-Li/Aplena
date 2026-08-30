@@ -9,8 +9,8 @@ use crate::infrastructure::{create_version_two_fixture, open_database, open_memo
 use super::{
     dto::{
         ActualEntryInputDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto,
-        EnsureActualOnlyInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto, PlanItemInputDto,
-        RateOverrideDto, SettingsInputDto,
+        EnsureActualOnlyInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto,
+        ManualMonthlyItemInputDto, PlanItemInputDto, RateOverrideDto, SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -521,6 +521,50 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
         .await
         .unwrap_err();
     assert_eq!(error.error_code, "DELETED_PLAN_CANNOT_ACCEPT_ENTRY");
+}
+
+#[tokio::test]
+async fn manual_monthly_item_accepts_actual_entries_without_a_plan() {
+    let service = test_service().await;
+    let current = current_month();
+    let item = service
+        .create_manual_monthly_item(ManualMonthlyItemInputDto {
+            name: "  本月房租  ".to_owned(),
+            month: current.to_string(),
+            category: "ESSENTIAL_EXPENSE".to_owned(),
+            note: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(item.source_plan_item_id, None);
+    assert_eq!(item.item_name, "本月房租");
+    assert_eq!(item.item_source, "ACTUAL_ONLY");
+    assert_eq!(item.item_origin, "MANUAL");
+    assert_eq!(item.variance_effect, "UNKNOWN");
+
+    service
+        .create_actual_entry(ActualEntryInputDto {
+            id: None,
+            monthly_item_id: item.id.clone(),
+            occurred_on: format!("{current}-02"),
+            effect: "INCREASE".to_owned(),
+            amount: "3200.00".to_owned(),
+            note: Some("月租".to_owned()),
+        })
+        .await
+        .unwrap();
+
+    let refreshed = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|candidate| candidate.id == item.id)
+        .unwrap();
+    assert_eq!(refreshed.actual_amount.as_deref(), Some("3200.00"));
+    assert_eq!(refreshed.variance_amount, None);
+    assert_eq!(refreshed.variance_effect, "UNKNOWN");
 }
 
 #[tokio::test]

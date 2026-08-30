@@ -135,6 +135,34 @@ pub enum MonthlyItemSource {
     ActualOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MonthlyItemOrigin {
+    PlanLinked,
+    Manual,
+}
+
+impl MonthlyItemOrigin {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::PlanLinked => "PLAN_LINKED",
+            Self::Manual => "MANUAL",
+        }
+    }
+}
+
+impl FromStr for MonthlyItemOrigin {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "PLAN_LINKED" => Ok(Self::PlanLinked),
+            "MANUAL" => Ok(Self::Manual),
+            _ => Err(DomainError::InvalidMonthlyItemOrigin),
+        }
+    }
+}
+
 impl MonthlyItemSource {
     pub const fn code(self) -> &'static str {
         match self {

@@ -264,7 +264,7 @@ impl Store {
         let next_month = month.next_month()?;
         let rows = sqlx::query(
             "SELECT m.id, m.source_plan_item_id, m.month, m.snapshot_name, m.category, m.flow_type, \
-                    m.recognition_mode, m.item_source, m.scheduled_date, m.planned_amount_scaled, \
+                    m.recognition_mode, m.item_source, m.item_origin, m.scheduled_date, m.planned_amount_scaled, \
                     CASE WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL \
                       THEN COALESCE(SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END), 0) \
                       ELSE NULL END AS derived_actual_amount_scaled, \
@@ -388,20 +388,19 @@ impl Store {
         // it before the follow-up aggregate read so this method cannot deadlock
         // while waiting for another lease from the same pool.
         drop(connection);
-        self.get_monthly_item_by_source_month(
-            monthly_item
-                .source_plan_item_id()
-                .ok_or(StoreError::InvalidUuid)?,
-            monthly_item.month(),
-        )
-        .await?
-        .ok_or(StoreError::Database(sqlx::Error::RowNotFound))
+        match monthly_item.source_plan_item_id() {
+            Some(source_plan_item_id) => self
+                .get_monthly_item_by_source_month(source_plan_item_id, monthly_item.month())
+                .await?
+                .ok_or(StoreError::Database(sqlx::Error::RowNotFound)),
+            None => self.get_monthly_item(monthly_item.id()).await,
+        }
     }
 
     pub async fn get_monthly_item(&self, id: Uuid) -> Result<StoredMonthlyItem, StoreError> {
         let row = sqlx::query(
             "SELECT m.id, m.source_plan_item_id, m.month, m.snapshot_name, m.category, m.flow_type, \
-                    m.recognition_mode, m.item_source, m.scheduled_date, m.planned_amount_scaled, \
+                    m.recognition_mode, m.item_source, m.item_origin, m.scheduled_date, m.planned_amount_scaled, \
                     CASE WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL \
                       THEN COALESCE(SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END), 0) \
                       ELSE NULL END AS derived_actual_amount_scaled, \
@@ -604,13 +603,13 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let result = sqlx::query(
             "INSERT INTO monthly_items (id, source_plan_item_id, month, snapshot_name, category, \
-                    flow_type, recognition_mode, item_source, scheduled_date, planned_amount_scaled, \
+                    flow_type, recognition_mode, item_source, item_origin, scheduled_date, planned_amount_scaled, \
                     actual_confirmed_at, currency_code, note, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(source_plan_item_id, month) DO UPDATE SET \
                snapshot_name = excluded.snapshot_name, category = excluded.category, \
                flow_type = excluded.flow_type, recognition_mode = excluded.recognition_mode, \
-               item_source = excluded.item_source, scheduled_date = excluded.scheduled_date, \
+               item_source = excluded.item_source, item_origin = excluded.item_origin, scheduled_date = excluded.scheduled_date, \
                planned_amount_scaled = excluded.planned_amount_scaled, \
                currency_code = excluded.currency_code, note = excluded.note, updated_at = excluded.updated_at \
              WHERE monthly_items.item_source = 'ACTUAL_ONLY' AND excluded.item_source = 'PLANNED'",
@@ -623,6 +622,7 @@ impl Store {
         .bind(monthly_item.flow_type().code())
         .bind(monthly_item.recognition_mode().code())
         .bind(monthly_item.item_source().code())
+        .bind(monthly_item.item_origin().code())
         .bind(monthly_item.scheduled_date().map(|date| date.to_string()))
         .bind(monthly_item.planned_amount().scaled_i64())
         .bind(monthly_item.actual_confirmed_at())
@@ -736,6 +736,9 @@ fn monthly_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredMonthlyI
             flow_type,
             RecognitionMode::from_str(row.try_get::<String, _>("recognition_mode")?.as_str())?,
             MonthlyItemSource::from_str(row.try_get::<String, _>("item_source")?.as_str())?,
+            pfcm_domain::MonthlyItemOrigin::from_str(
+                row.try_get::<String, _>("item_origin")?.as_str(),
+            )?,
             row.try_get::<Option<String>, _>("scheduled_date")?
                 .as_deref()
                 .map(CalendarDate::from_str)
