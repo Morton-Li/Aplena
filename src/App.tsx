@@ -70,7 +70,7 @@ export class ApplicationErrorBoundary extends Component<
         <ApplicationFrameState
           tone="error"
           title="界面资源加载失败"
-          detail="请完全退出并重新打开 Aplena；如果问题持续，请保留当前数据库并使用已验证的备份恢复。"
+          detail="请完全退出并重新打开 Aplena；如果问题持续，请保留当前数据库文件并停止继续操作。"
         />
       );
     }

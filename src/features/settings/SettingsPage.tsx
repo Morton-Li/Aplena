@@ -5,23 +5,17 @@ import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 
 import {
-  createBackup,
   deleteExchangeRate,
-  exportCsv,
   getSettings,
-  inspectBackup,
   listExchangeRates,
   queryKeys,
-  restoreBackup,
   saveSettings,
   upsertExchangeRate,
-  type DataSummary,
-  type RestoreInspection,
   type Settings,
 } from "../../shared/api/finance";
+import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
 import { currencyName } from "../../shared/formatting/finance";
-import { Select } from "../../shared/components/Select";
 
 const settingsSchema = z.object({
   baseCurrency: z.string().length(3),
@@ -45,246 +39,19 @@ export function SettingsPage() {
         <div>
           <p className="eyebrow">本地配置</p>
           <h1>系统设置</h1>
-          <p>管理本位币、储蓄目标、汇率与本地数据保护。</p>
+          <p>管理本位币、储蓄目标与汇率。</p>
         </div>
       </header>
       {(settingsQuery.isPending || ratesQuery.isPending) && <section className="state-card">正在读取设置…</section>}
       {(settingsQuery.isError || ratesQuery.isError) && (
         <section className="state-card"><span role="alert">{describeError(settingsQuery.error ?? ratesQuery.error)}</span></section>
       )}
-      {settingsQuery.data && ratesQuery.data && (
-        <>
-          <div className="settings-grid">
-            <GeneralSettings settings={settingsQuery.data} currencies={Array.from(new Set(["CNY", "USD", "EUR", "HKD", "JPY", "GBP", ...ratesQuery.data.map((rate) => rate.currency)]))} />
-            <RateSettings baseCurrency={settingsQuery.data.base_currency} />
-          </div>
-          <DataProtectionPanel />
-        </>
-      )}
+      {settingsQuery.data && ratesQuery.data && <div className="settings-grid">
+        <GeneralSettings settings={settingsQuery.data} currencies={Array.from(new Set(["CNY", "USD", "EUR", "HKD", "JPY", "GBP", ...ratesQuery.data.map((rate) => rate.currency)]))} />
+        <RateSettings baseCurrency={settingsQuery.data.base_currency} />
+      </div>}
     </>
   );
-}
-
-function DataProtectionPanel() {
-  const queryClient = useQueryClient();
-  const [inspection, setInspection] = useState<RestoreInspection | null>(null);
-  const [understood, setUnderstood] = useState(false);
-  const [phrase, setPhrase] = useState("");
-  const backupMutation = useMutation({ mutationFn: () => createBackup() });
-  const csvMutation = useMutation({ mutationFn: () => exportCsv() });
-  const inspectMutation = useMutation({
-    mutationFn: () => inspectBackup(),
-    onSuccess: (result) => {
-      setInspection(result.status === "READY" ? result : null);
-      setUnderstood(false);
-      setPhrase("");
-    },
-  });
-  const restoreMutation = useMutation({
-    mutationFn: () => {
-      if (!inspection?.token) {
-        throw new Error("尚未检查可恢复的备份");
-      }
-      return restoreBackup({
-        token: inspection.token,
-        confirmed: understood,
-        confirmationPhrase: phrase,
-      });
-    },
-    onSuccess: async () => {
-      setInspection(null);
-      setUnderstood(false);
-      setPhrase("");
-      await queryClient.cancelQueries();
-      await queryClient.invalidateQueries();
-    },
-  });
-  const operationError =
-    backupMutation.error ?? csvMutation.error ?? inspectMutation.error ?? restoreMutation.error;
-
-  return (
-    <section className="settings-card data-protection-card" aria-labelledby="data-protection-title">
-      <header className="data-protection-heading">
-        <div>
-          <p className="section-label">Data Protection</p>
-          <h2 id="data-protection-title">备份、恢复与可读导出</h2>
-        </div>
-        <span className="context-chip">本地文件 · Rust 受控路径</span>
-      </header>
-      <p className="card-copy">
-        完整备份用于灾难恢复，包含五张核心表、版本清单与 SHA-256 校验和；CSV 用于人工查阅，不能用于恢复。
-      </p>
-      <div className="notice notice-warning">
-        当前本地候选版数据库与备份尚未加密。请把 <code>.aplena</code> 和 CSV 文件保存在受信任、已加密的磁盘位置。
-      </div>
-      <div className="protection-actions">
-        <button
-          className="button button-primary"
-          disabled={backupMutation.isPending}
-          type="button"
-          onClick={() => backupMutation.mutate()}
-        >
-          {backupMutation.isPending ? "正在创建一致快照…" : "创建完整备份"}
-        </button>
-        <button
-          className="button button-secondary"
-          disabled={csvMutation.isPending}
-          type="button"
-          onClick={() => csvMutation.mutate()}
-        >
-          {csvMutation.isPending ? "正在导出…" : "导出五表 CSV"}
-        </button>
-        <button
-          className="button button-quiet"
-          disabled={inspectMutation.isPending || restoreMutation.isPending}
-          type="button"
-          onClick={() => inspectMutation.mutate()}
-        >
-          {inspectMutation.isPending ? "正在安全检查…" : "选择并检查备份"}
-        </button>
-      </div>
-
-      {backupMutation.data?.status === "CREATED" && (
-        <div className="inline-success" role="status">
-          已创建 {backupMutation.data.file_name}。校验清单与数据库快照已写入同一备份。
-        </div>
-      )}
-      {csvMutation.data?.status === "CREATED" && (
-        <div className="inline-success" role="status">
-          已在 {csvMutation.data.folder_name} 中导出 {csvMutation.data.file_count} 个 CSV 文件。
-        </div>
-      )}
-      {operationError && <div className="inline-error" role="alert">{describeError(operationError)}</div>}
-
-      {inspection?.status === "READY" && inspection.summary && (
-        <section className="restore-preview" aria-labelledby="restore-preview-title">
-          <header>
-            <div>
-              <p className="section-label">Restore Preview</p>
-              <h3 id="restore-preview-title">恢复前只读检查已通过</h3>
-            </div>
-            <strong>{inspection.file_name}</strong>
-          </header>
-          <dl className="restore-metadata">
-            <div><dt>备份创建时间</dt><dd>{inspection.backup_created_at}</dd></div>
-            <div><dt>应用版本</dt><dd>{inspection.backup_app_version}</dd></div>
-            <div><dt>数据库版本</dt><dd>schema {inspection.schema_version}</dd></div>
-            <div><dt>临时迁移</dt><dd>{inspection.migrations_applied ? "已在临时副本验证升级" : "无需迁移"}</dd></div>
-          </dl>
-          {inspection.current_summary ? (
-            <DataSummaryComparison current={inspection.current_summary} backup={inspection.summary} />
-          ) : (
-            <DataSummaryView summary={inspection.summary} />
-          )}
-          <div className="notice notice-danger">
-            恢复会用此备份替换当前数据库。Aplena 会先自动创建当前数据库恢复点；任何检查或替换失败都会保留当前数据。
-          </div>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={understood}
-              onChange={(event) => setUnderstood(event.target.checked)}
-            />
-            我已核对月份、设置和记录数量，并理解当前数据将被替换。
-          </label>
-          <label className="restore-phrase">
-            输入“恢复”进行第二次确认
-            <input
-              autoComplete="off"
-              value={phrase}
-              onChange={(event) => setPhrase(event.target.value)}
-            />
-          </label>
-          <button
-            className="button button-danger"
-            disabled={!understood || phrase.trim() !== "恢复" || restoreMutation.isPending}
-            type="button"
-            onClick={() => restoreMutation.mutate()}
-          >
-            {restoreMutation.isPending ? "正在创建恢复点并替换…" : "确认恢复此备份"}
-          </button>
-        </section>
-      )}
-      {restoreMutation.data?.restored && (
-        <div className="inline-success" role="status">
-          恢复完成；替换前恢复点为 {restoreMutation.data.recovery_point_name}。所有页面数据已重新读取。
-        </div>
-      )}
-    </section>
-  );
-}
-
-function DataSummaryView({ summary }: { summary: DataSummary }) {
-  return (
-    <div className="data-summary" aria-label="备份数据摘要">
-      <div><span>设置</span><strong>{summary.settings_count}</strong></div>
-      <div><span>汇率</span><strong>{summary.exchange_rate_count}</strong></div>
-      <div><span>周期规则</span><strong>{summary.plan_item_count}</strong></div>
-      <div><span>月度快照</span><strong>{summary.monthly_item_count}</strong></div>
-      <div><span>实际条目</span><strong>{summary.actual_entry_count}</strong></div>
-      <div><span>月份范围</span><strong>{summary.first_month && summary.last_month ? `${summary.first_month} — ${summary.last_month}` : "暂无月度快照"}</strong></div>
-      <div><span>目标月份 / 本位币</span><strong>{summary.settings ? `${summary.settings.target_month} / ${summary.settings.base_currency}` : "尚未设置"}</strong></div>
-    </div>
-  );
-}
-
-function DataSummaryComparison({ current, backup }: { current: DataSummary; backup: DataSummary }) {
-  const rows = [
-    comparisonRow("设置", settingsSummary(current), settingsSummary(backup)),
-    countComparisonRow("汇率", current.exchange_rate_count, backup.exchange_rate_count),
-    countComparisonRow("周期规则", current.plan_item_count, backup.plan_item_count),
-    countComparisonRow("月度快照", current.monthly_item_count, backup.monthly_item_count),
-    countComparisonRow("实际条目", current.actual_entry_count, backup.actual_entry_count),
-    comparisonRow("月份范围", monthRange(current), monthRange(backup)),
-  ];
-  return (
-    <div className="restore-comparison">
-      <h4>当前数据与备份差异</h4>
-      <div className="table-scroll">
-        <table className="restore-comparison-table" aria-label="恢复数据差异">
-          <thead><tr><th>指标</th><th>当前</th><th>备份</th><th>变化</th></tr></thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.label}>
-                <th scope="row">{row.label}</th>
-                <td>{row.current}</td>
-                <td>{row.backup}</td>
-                <td>{row.change}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function countComparisonRow(label: string, current: number, backup: number) {
-  const difference = backup - current;
-  return {
-    label,
-    current: current.toString(),
-    backup: backup.toString(),
-    change: difference === 0 ? "不变" : `${difference > 0 ? "+" : ""}${difference}`,
-  };
-}
-
-function comparisonRow(label: string, current: string, backup: string) {
-  return { label, current, backup, change: current === backup ? "不变" : "将更改" };
-}
-
-function settingsSummary(summary: DataSummary): string {
-  if (!summary.settings) {
-    return "尚未设置";
-  }
-  const rate = (summary.settings.minimum_savings_rate_basis_points / 100).toFixed(2);
-  return `${summary.settings.target_month} / ${summary.settings.base_currency} / ${rate}%`;
-}
-
-function monthRange(summary: DataSummary): string {
-  return summary.first_month && summary.last_month
-    ? `${summary.first_month} — ${summary.last_month}`
-    : "暂无月度快照";
 }
 
 function GeneralSettings({ settings, currencies }: { settings: Settings; currencies: string[] }) {

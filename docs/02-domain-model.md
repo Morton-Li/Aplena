@@ -267,7 +267,6 @@ FINAL --编辑/删除/添加--> IN_PROGRESS 或 MISSING
 - `create_manual_monthly_item`；
 - `list/create/update/delete_actual_entry`；
 - `confirm_monthly_item`、`confirm_monthly_actuals`；
-- 月度、历史与承载能力查询；
-- 备份、检查、确认恢复与 CSV 导出。
+- 月度、历史与承载能力查询。
 
 所有金额跨 IPC 使用字符串，错误返回稳定错误码、可选字段名和本地化消息键。

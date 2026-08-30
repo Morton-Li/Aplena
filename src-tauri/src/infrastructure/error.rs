@@ -13,8 +13,6 @@ pub enum StoreError {
     Domain(#[from] DomainError),
     #[error("persisted UUID is invalid")]
     InvalidUuid,
-    #[error("database migration protection failed")]
-    MigrationProtection,
     #[error("database schema is newer than this application")]
     FutureSchema,
     #[error("database storage permissions could not be secured")]

@@ -11,7 +11,6 @@ import type {
   MonthPreview,
   MonthlyItem,
   PlanItem,
-  RestoreInspection,
   Settings,
 } from "./shared/api/finance";
 
@@ -297,7 +296,6 @@ interface HarnessOptions {
   analytics?: MonthAnalytics;
   history?: MonthAnalytics[];
   capacity?: FinancialCapacity;
-  restoreInspection?: RestoreInspection;
 }
 
 function installHarness(options: HarnessOptions = {}) {
@@ -474,74 +472,6 @@ function installHarness(options: HarnessOptions = {}) {
         return undefined as T;
       case "stop_plan_item":
         return examplePlan as T;
-      case "create_backup":
-        return {
-          status: "CREATED",
-          file_name: "Aplena-test.aplena",
-          created_at: "2026-08-23T00:00:00Z",
-          summary: null,
-        } as T;
-      case "export_csv":
-        return {
-          status: "CREATED",
-          folder_name: "Aplena-CSV-test",
-          created_at: "2026-08-23T00:00:00Z",
-          file_count: 5,
-        } as T;
-      case "inspect_backup":
-        return (options.restoreInspection ?? {
-          status: "READY",
-          token: "restore-token",
-          file_name: "Aplena-test.aplena",
-          backup_created_at: "2026-08-22T00:00:00Z",
-          backup_app_version: "0.1.0",
-          schema_version: 3,
-          migrations_applied: false,
-          summary: {
-            settings: {
-              target_month: "2026-08",
-              base_currency: "CNY",
-              minimum_savings_rate_basis_points: 2000,
-            },
-            settings_count: 1,
-            exchange_rate_count: 1,
-            plan_item_count: 2,
-            monthly_item_count: 3,
-            actual_entry_count: 4,
-            first_month: "2026-07",
-            last_month: "2026-08",
-          },
-          current_summary: {
-            settings: {
-              target_month: "2026-08",
-              base_currency: "CNY",
-              minimum_savings_rate_basis_points: 2000,
-            },
-            settings_count: 1,
-            exchange_rate_count: 1,
-            plan_item_count: 1,
-            monthly_item_count: 1,
-            actual_entry_count: 1,
-            first_month: "2026-08",
-            last_month: "2026-08",
-          },
-        }) as T;
-      case "restore_backup":
-        return {
-          restored: true,
-          recovery_point_name: "before-restore-test.aplena",
-          restored_at: "2026-08-23T00:00:00Z",
-          summary: {
-            settings: null,
-            settings_count: 1,
-            exchange_rate_count: 1,
-            plan_item_count: 2,
-            monthly_item_count: 3,
-            actual_entry_count: 4,
-            first_month: "2026-07",
-            last_month: "2026-08",
-          },
-        } as T;
       default:
         throw new Error("Unhandled command in test: " + command);
     }
@@ -571,6 +501,17 @@ describe("planning workflows", () => {
     expect(screen.queryByRole("link", { name: "财务分析" })).not.toBeInTheDocument();
     expect(screen.queryByText("建立你的财务基准")).not.toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("ensure_default_settings");
+  });
+
+  it("keeps settings limited to financial configuration", async () => {
+    installHarness();
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "系统设置" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "财务基准" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "当前汇率" })).toBeInTheDocument();
+    expect(document.querySelectorAll(".settings-card")).toHaveLength(2);
   });
 
   it("previews and creates an AMORTIZED plan without frontend financial arithmetic", async () => {
@@ -780,55 +721,6 @@ describe("planning workflows", () => {
     expect((await screen.findAllByText("已有月度数据，本位币已锁定。")).length).toBeGreaterThan(0);
   });
 
-  it("keeps backup paths in Rust and requires two explicit restore confirmations", async () => {
-    installHarness();
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(await screen.findByRole("link", { name: "设置" }));
-    await screen.findByRole("heading", { name: "备份、恢复与可读导出" });
-
-    await user.click(screen.getByRole("button", { name: "创建完整备份" }));
-    expect(await screen.findByText(/已创建 Aplena-test\.aplena/)).toBeInTheDocument();
-    expect(invokeMock).toHaveBeenCalledWith("create_backup");
-
-    await user.click(screen.getByRole("button", { name: "导出五表 CSV" }));
-    expect(await screen.findByText(/Aplena-CSV-test 中导出 5 个 CSV/)).toBeInTheDocument();
-    expect(invokeMock).toHaveBeenCalledWith("export_csv");
-
-    await user.click(screen.getByRole("button", { name: "选择并检查备份" }));
-    expect(await screen.findByRole("heading", { name: "恢复前只读检查已通过" })).toBeInTheDocument();
-    const comparison = screen.getByRole("table", { name: "恢复数据差异" });
-    expect(within(comparison).getByRole("row", { name: "实际条目 1 4 +3" })).toBeInTheDocument();
-    expect(within(comparison).getByText("2026-07 — 2026-08")).toBeInTheDocument();
-    expect(within(comparison).getByText("+2")).toBeInTheDocument();
-    const restore = screen.getByRole("button", { name: "确认恢复此备份" });
-    expect(restore).toBeDisabled();
-    await user.click(screen.getByLabelText(/我已核对月份/));
-    await user.type(screen.getByLabelText("输入“恢复”进行第二次确认"), "恢复");
-    expect(restore).toBeEnabled();
-    await user.click(restore);
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("restore_backup", {
-        input: { token: "restore-token", confirmed: true, confirmationPhrase: "恢复" },
-      }),
-    );
-    expect(await screen.findByText(/替换前恢复点为 before-restore-test\.aplena/)).toBeInTheDocument();
-  });
-
-  it("renders a safe structured backup validation error", async () => {
-    installHarness({
-      rejectCommand: {
-        command: "inspect_backup",
-        error: { error_code: "BACKUP_CHECKSUM_MISMATCH", message_key: "error.backup_checksum_mismatch" },
-      },
-    });
-    const user = userEvent.setup();
-    render(<App />);
-    await user.click(await screen.findByRole("link", { name: "设置" }));
-    await screen.findByRole("heading", { name: "备份、恢复与可读导出" });
-    await user.click(screen.getByRole("button", { name: "选择并检查备份" }));
-    expect(await screen.findByText(/备份内容与校验清单不一致/)).toBeInTheDocument();
-  });
 });
 
 describe("dashboard and capacity analytics", () => {
