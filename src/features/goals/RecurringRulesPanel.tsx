@@ -18,7 +18,6 @@ import {
   type ExchangeRate,
   type PlanItem,
   type PlanItemInput,
-  type PlanMutationResult,
   type PlanPreview,
   type Settings,
 } from "../../shared/api/finance";
@@ -60,15 +59,7 @@ const planSchema = z
 
 type PlanValues = z.infer<typeof planSchema>;
 
-export function RecurringRulesPanel({
-  currentMonth,
-  open,
-  onOpenChange,
-}: {
-  currentMonth: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
+export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
   const queryClient = useQueryClient();
   const contractQuery = useQuery({ queryKey: queryKeys.domain, queryFn: () => getDomainContract() });
   const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
@@ -92,33 +83,24 @@ export function RecurringRulesPanel({
     );
   }, [category, plansQuery.data, search]);
 
-  const refreshPlans = async (snapshotMonth?: string) => {
-    const invalidations = [
+  const refreshPlans = async () => {
+    await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.plans }),
       queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
-      queryClient.invalidateQueries({ queryKey: ["financial-capacity"] }),
-    ];
-    if (snapshotMonth) {
-      invalidations.push(
-        queryClient.invalidateQueries({ queryKey: queryKeys.monthly(snapshotMonth) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.existingMonths }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.monthAnalytics(snapshotMonth) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
-      );
-    }
-    await Promise.all(invalidations);
+      queryClient.invalidateQueries({ queryKey: queryKeys.capacity }),
+    ]);
   };
 
   return (
-    <details className="recurring-rules-panel" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
-      <summary>
+    <section className="recurring-rules-panel recurring-rules-panel-open">
+      <header className="recurring-rules-summary-static">
         <div>
           <p className="eyebrow">可选增强</p>
           <h2>周期规则</h2>
-          <p>需要时自动生成后续月份的计划基准；不会影响本月实际录入。</p>
+          <p>按需定义可复用的收入与支出规则，用于预估 {targetMonth}；保存不会改动本月或历史月。</p>
         </div>
         <span className="recurring-rules-summary">{plansQuery.data?.length ?? 0} 项规则</span>
-      </summary>
+      </header>
 
       <div className="recurring-rules-body">
         <header className="recurring-rules-heading">
@@ -195,15 +177,15 @@ export function RecurringRulesPanel({
       {editor && contractQuery.data && settingsQuery.data && ratesQuery.data && (
         <PlanEditor
           contract={contractQuery.data}
-          currentMonth={currentMonth}
+          targetMonth={targetMonth}
           existing={editor === "new" ? null : editor}
           rates={ratesQuery.data}
           settings={settingsQuery.data}
           onClose={() => setEditor(null)}
-          onSaved={async (message, snapshotMonth) => {
+          onSaved={async (message) => {
             setEditor(null);
             setFeedback(message);
-            await refreshPlans(snapshotMonth);
+            await refreshPlans();
           }}
         />
       )}
@@ -230,13 +212,13 @@ export function RecurringRulesPanel({
         />
       )}
       </div>
-    </details>
+    </section>
   );
 }
 
 function PlanEditor({
   contract,
-  currentMonth,
+  targetMonth,
   existing,
   rates,
   settings,
@@ -244,12 +226,12 @@ function PlanEditor({
   onSaved,
 }: {
   contract: DomainContract;
-  currentMonth: string;
+  targetMonth: string;
   existing: PlanItem | null;
   rates: ExchangeRate[];
   settings: Settings;
   onClose: () => void;
-  onSaved: (message: string, snapshotMonth?: string) => Promise<void>;
+  onSaved: (message: string) => Promise<void>;
 }) {
   const defaults: PlanValues = existing
     ? {
@@ -269,7 +251,7 @@ function PlanEditor({
         plannedAmount: "",
         currency: settings.base_currency,
         periodMonths: 1,
-        startDate: currentMonth + "-01",
+        startDate: targetMonth + "-01",
         endDate: "",
         recognitionMode: "AMORTIZED",
         note: "",
@@ -293,22 +275,13 @@ function PlanEditor({
   });
   const previewMutation = useMutation({
     mutationFn: (value: PlanValues) =>
-      previewPlanItem(contract, settings, rates, currentMonth, toInput(value)),
+      previewPlanItem(contract, settings, rates, targetMonth, toInput(value)),
     onSuccess: (data) => setPreview({ signature, data }),
   });
-  const saveMutation = useMutation<PlanMutationResult | PlanItem, Error, PlanValues>({
+  const saveMutation = useMutation<PlanItem, Error, PlanValues>({
     mutationFn: (value: PlanValues) =>
       existing ? updatePlanItem(toInput(value)) : createPlanItem(toInput(value)),
-    onSuccess: async (result) => {
-      const initialization = "current_month_initialization" in result ? result.current_month_initialization : null;
-      const detail = initialization?.created_count
-        ? `并已为当前月新增 ${initialization.created_count} 个快照。`
-        : "当前月快照未被覆盖。";
-      await onSaved(
-        `周期规则已保存，${detail}`,
-        initialization?.created_count ? initialization.month : undefined,
-      );
-    },
+    onSuccess: async () => onSaved("周期规则已保存，仅用于下月预估；本月与历史快照未作修改。"),
   });
   const category = contract.categories.find((item) => item.code === values.category);
   const derivedFlow = ["FIXED_INCOME", "VARIABLE_INCOME"].includes(values.category ?? "")
@@ -351,7 +324,7 @@ function PlanEditor({
 
           {previewIsCurrent && preview && (
             <div className="preview-card" aria-live="polite">
-              <div><span>预览月份</span><strong>{currentMonth}</strong></div>
+              <div><span>预览月份</span><strong>{targetMonth}</strong></div>
               <div><span>生效状态</span><strong>{preview.data.effective ? "有效" : "未生效"}</strong></div>
               <div><span>生成月度项目</span><strong>{preview.data.recognized_in_target_month ? "会" : "不会"}</strong></div>
               <div><span>月度等价金额</span><strong>{formatMoney(preview.data.monthly_equivalent, preview.data.base_currency)}</strong></div>

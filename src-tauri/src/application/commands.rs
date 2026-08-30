@@ -17,8 +17,9 @@ use super::{
         ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
         InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
         MonthInitializationStatusDto, MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto,
-        PlanItemDto, PlanItemInputDto, PlanMutationDto, PlanPreviewDto, PlanPreviewRequestDto,
-        SettingsDto, SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
+        NextMonthGoalDto, NextMonthGoalInputDto, PlanItemDto, PlanItemInputDto, PlanPreviewDto,
+        PlanPreviewRequestDto, SettingsDto, SettingsInputDto, StartupStatusDto,
+        StopPlanItemRequestDto,
     },
     error::AppError,
     service::FinanceService,
@@ -51,6 +52,21 @@ pub async fn save_settings(
     input: SettingsInputDto,
 ) -> Result<SettingsDto, AppError> {
     service.save_settings(input).await
+}
+
+#[tauri::command]
+pub async fn get_next_month_goal(
+    service: State<'_, FinanceService>,
+) -> Result<NextMonthGoalDto, AppError> {
+    service.get_next_month_goal().await
+}
+
+#[tauri::command]
+pub async fn save_next_month_goal(
+    service: State<'_, FinanceService>,
+    input: NextMonthGoalInputDto,
+) -> Result<NextMonthGoalDto, AppError> {
+    service.save_next_month_goal(input).await
 }
 
 #[tauri::command]
@@ -87,7 +103,7 @@ pub async fn list_plan_items(
 pub async fn create_plan_item(
     service: State<'_, FinanceService>,
     input: PlanItemInputDto,
-) -> Result<PlanMutationDto, AppError> {
+) -> Result<PlanItemDto, AppError> {
     service.create_plan_item(input).await
 }
 
@@ -244,9 +260,8 @@ pub async fn get_history_analytics(
 #[tauri::command]
 pub async fn get_financial_capacity(
     service: State<'_, FinanceService>,
-    target_month: Option<String>,
 ) -> Result<FinancialCapacityDto, AppError> {
-    service.financial_capacity(target_month).await
+    service.financial_capacity().await
 }
 
 #[tauri::command]

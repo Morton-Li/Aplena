@@ -63,10 +63,11 @@ Rust 后端是金额、日期计入、偏差、比例和承载能力的唯一权
 
 ## 4. 持久化与派生数据
 
-持久化五张核心业务表：
+持久化六张核心业务表：
 
 ```text
 settings
+next_month_goal
 exchange_rates
 plan_items
 monthly_items
@@ -81,7 +82,7 @@ actual_entries
 
 ### 5.1 自动边界
 
-启动时只自动初始化当前自然月。创建或更新计划后也只自动补齐当前自然月。读取历史或未来月份绝不隐式写入。
+启动时只自动初始化当前自然月。创建或更新周期规则不会自动回填当前月；用户若确需补齐符合本月的规则，必须在月度执行中显式初始化。读取历史或未来月份绝不隐式写入。
 
 ### 5.2 显式边界
 
@@ -111,10 +112,10 @@ actual_entries
 
 前端 Query Key 至少区分：
 
-- 设置、汇率、计划；
+- 设置、下月目标、汇率、周期规则；
 - 月份预览与月度项目；
 - 某月度项目的实际条目；
-- 目标月分析、历史分析、承载能力；
+- 月度分析、历史分析、仅下月承载能力；
 - 现有月份列表和启动状态。
 
 条目 CRUD 或确认后同时失效月度项目、该项目条目、目标月分析、历史分析和月份列表。计划变更还失效预览及承载能力。
@@ -125,6 +126,7 @@ actual_entries
 
 ```text
 settings / exchange rates / plan items
+get_next_month_goal / save_next_month_goal
 preview_plan_item / get_financial_capacity
 preview_month / initialize_month / get_startup_status
 list_monthly_items / update_monthly_note
@@ -149,7 +151,7 @@ DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `fiel
 5. 启用 foreign keys、WAL 和同步策略；
 6. 启动当前自然月自动初始化。
 
-本项目不修改已经发布的迁移。schema 3 通过重建表完成日级日期、分精度和实际条目转换；schema 4 追加 `item_origin`，把手动月度项目与计划关联或计划删除后脱离的快照明确区分。
+本项目不修改已经发布的迁移。schema 3 通过重建表完成日级日期、分精度和实际条目转换；schema 4 追加 `item_origin`；schema 5 将旧设置中的储蓄率迁入独立 `next_month_goal`，并从 `settings` 移除目标月份与储蓄率字段。
 
 ## 10. 安全边界
 

@@ -18,6 +18,9 @@ const DashboardPage = lazy(() =>
 const HistoryPage = lazy(() =>
   import("./features/history/HistoryPage").then((module) => ({ default: module.HistoryPage })),
 );
+const GoalsPage = lazy(() =>
+  import("./features/goals/GoalsPage").then((module) => ({ default: module.GoalsPage })),
+);
 const MonthlyPage = lazy(() =>
   import("./features/monthly/MonthlyPage").then((module) => ({ default: module.MonthlyPage })),
 );
@@ -29,6 +32,7 @@ const navigation = [
   { to: "/dashboard", label: "总览", icon: "dashboard" },
   { to: "/monthly", label: "月度执行", icon: "calendar" },
   { to: "/history", label: "历史报表", icon: "history" },
+  { to: "/goals", label: "目标", icon: "target" },
   { to: "/settings", label: "设置", icon: "settings" },
 ] as const;
 
@@ -116,7 +120,8 @@ function AppBootstrap() {
         <Route path="monthly" element={<MonthlyPage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="history/:month" element={<HistoryPage />} />
-        <Route path="plans" element={<Navigate replace to="/monthly?panel=rules" />} />
+        <Route path="goals" element={<GoalsPage />} />
+        <Route path="plans" element={<Navigate replace to="/goals" />} />
         <Route path="analysis" element={<Navigate replace to={`/history/${startupQuery.data.current_month}`} />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate replace to="/dashboard" />} />
@@ -235,6 +240,7 @@ function NavigationIcon({ name }: { name: (typeof navigation)[number]["icon"] })
     dashboard: "M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z",
     calendar: "M5 3v3m14-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z",
     history: "M4 12a8 8 0 1 0 2.34-5.66L4 8m0-5v5h5m3-1v5l3 2",
+    target: "M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5m-5-1 9-8m0 0v5m0-5h-5",
     settings: "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7.4-3.5a7.6 7.6 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L15 3.5h-4l-.4 2.6a8 8 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.5a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.4 2.6h4l.4-2.6a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5a7.6 7.6 0 0 0 .1-1Z",
   } as const;
   return (

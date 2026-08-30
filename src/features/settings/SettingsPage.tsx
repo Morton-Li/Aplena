@@ -19,7 +19,6 @@ import { currencyName } from "../../shared/formatting/finance";
 
 const settingsSchema = z.object({
   baseCurrency: z.string().length(3),
-  savingsRatePercent: z.number().min(0).max(100),
 });
 type SettingsValues = z.infer<typeof settingsSchema>;
 
@@ -39,7 +38,7 @@ export function SettingsPage() {
         <div>
           <p className="eyebrow">本地配置</p>
           <h1>系统设置</h1>
-          <p>管理本位币、储蓄目标与汇率。</p>
+          <p>管理本位币与当前汇率；下月目标请前往“目标”页设置。</p>
         </div>
       </header>
       {(settingsQuery.isPending || ratesQuery.isPending) && <section className="state-card">正在读取设置…</section>}
@@ -60,15 +59,12 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
     resolver: zodResolver(settingsSchema),
     defaultValues: {
       baseCurrency: settings.base_currency,
-      savingsRatePercent: settings.minimum_savings_rate_basis_points / 100,
     },
   });
   const mutation = useMutation({
     mutationFn: (values: SettingsValues) =>
       saveSettings({
         baseCurrency: values.baseCurrency,
-        targetMonth: settings.target_month,
-        minimumSavingsRateBasisPoints: Math.round(values.savingsRatePercent * 100),
       }),
     onSuccess: async (updated) => {
       queryClient.setQueryData(queryKeys.settings, updated);
@@ -76,7 +72,7 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
         queryClient.invalidateQueries({ queryKey: ["monthly-items"] }),
         queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.rates }),
-        queryClient.invalidateQueries({ queryKey: ["financial-capacity"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.capacity }),
         queryClient.invalidateQueries({ queryKey: ["month-analytics"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
       ]);
@@ -84,13 +80,12 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
   });
   return (
     <form className="settings-card" onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
-      <div><p className="section-label">全局设置</p><h2>财务基准</h2></div>
+      <div><p className="section-label">系统基准</p><h2>本位币</h2></div>
       <label>本位币<Controller control={form.control} name="baseCurrency" render={({ field, fieldState }) => <Select ariaLabel="本位币" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={currencies.map((currency) => ({ value: currency, label: currencyName(currency), description: currency }))} />} /></label>
       <div className="notice notice-warning">尚无月度快照时可以直接切换。已有快照后将保持锁定，避免历史报表混入不同计算基准；后续更换需要使用保留逐月币种基准的受控迁移，而不是静默重算历史。</div>
-      <label>目标储蓄率<span className="input-with-suffix"><input type="number" min="0" max="100" step="0.01" {...form.register("savingsRatePercent", { valueAsNumber: true })} /><span>%</span></span></label>
       {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
       {mutation.isSuccess && <div className="inline-success" role="status">设置已保存。</div>}
-      <button className="button button-primary" disabled={mutation.isPending} type="submit">{mutation.isPending ? "保存中…" : "保存全局设置"}</button>
+      <button className="button button-primary" disabled={mutation.isPending} type="submit">{mutation.isPending ? "保存中…" : "保存本位币设置"}</button>
     </form>
   );
 }
@@ -107,7 +102,7 @@ function RateSettings({ baseCurrency }: { baseCurrency: string }) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.rates }),
       queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
-      queryClient.invalidateQueries({ queryKey: ["financial-capacity"] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.capacity }),
     ]);
   };
   const saveMutation = useMutation({

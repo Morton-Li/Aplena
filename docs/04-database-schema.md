@@ -1,6 +1,6 @@
 # Aplena 数据库 Schema
 
-当前 schema：4
+当前 schema：5
 数据库：SQLite STRICT tables + foreign keys + WAL
 
 ## 1. 存储约定
@@ -18,7 +18,7 @@ RATE_SCALE   = 100_000_000
 - UUID 存为 36 字符文本；
 - `NULL` 确认时间与确认零有不同含义。
 
-五张核心业务表以外，SQLx 自有迁移表不属于业务模型。
+六张核心业务表以外，SQLx 自有迁移表不属于业务模型。
 
 ## 2. `settings`
 
@@ -27,12 +27,23 @@ RATE_SCALE   = 100_000_000
 | 字段 | 类型 | 约束 |
 |---|---|---|
 | `id` | INTEGER | 固定 1 |
-| `target_month` | TEXT | 合法月初 |
 | `base_currency_code` | TEXT | 外键到汇率 |
-| `minimum_savings_rate_bp` | INTEGER | 0–10000 |
 | `created_at` / `updated_at` | TEXT | 非空 |
 
 触发器保证本位币汇率为 1，并在已有月度项目后禁止切换本位币。
+
+## 2.1 `next_month_goal`
+
+单行前瞻目标：
+
+| 字段 | 类型 | 约束 |
+|---|---|---|
+| `id` | INTEGER | 固定 1 |
+| `target_month` | TEXT | 合法月初，由后端固定为下一个自然月 |
+| `minimum_savings_rate_bp` | INTEGER | 0–10000 |
+| `created_at` / `updated_at` | TEXT | 非空 |
+
+该表不与 `monthly_items` 建外键，也不参与月度和历史分析；它只为下月承载力提供输入。
 
 ## 3. `exchange_rates`
 
@@ -157,6 +168,7 @@ END AS derived_actual_amount_scaled
 - `0002_monthly_source_index.sql`：月度来源查询索引；
 - `0003_actual_entries_daily_dates_cents.sql`：五表、日级日期、分精度与实际条目模型；
 - `0004_manual_monthly_items.sql`：增加月度项目创建来源和手动项目约束。
+- `0005_next_month_goals.sql`：从设置中迁移储蓄率，新增独立下月目标，并精简设置表。
 
 已发布迁移不可编辑，只能追加。
 

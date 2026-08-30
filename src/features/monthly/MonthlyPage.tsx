@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 import {
   confirmMonthlyActuals,
@@ -9,7 +9,6 @@ import {
   createManualMonthlyItem,
   deleteActualEntry,
   ensureActualOnlyMonthlyItem,
-  getSettings,
   getStartupStatus,
   initializeMonth,
   listActualEntries,
@@ -38,17 +37,13 @@ import {
   flowLabel,
   recognitionLabel,
 } from "../../shared/formatting/labels";
-import { RecurringRulesPanel } from "./RecurringRulesPanel";
-
 export function MonthlyPage() {
   const queryClient = useQueryClient();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
   const startupQuery = useQuery({ queryKey: queryKeys.startup, queryFn: () => getStartupStatus() });
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
   const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
   const [previewOverrides, setPreviewOverrides] = useState<RateOverrideInput[]>([]);
-  const month = startupQuery.data?.current_month ?? settingsQuery.data?.target_month ?? "";
+  const month = startupQuery.data?.current_month ?? "";
   const itemsQuery = useQuery({
     queryKey: queryKeys.monthly(month),
     queryFn: () => listMonthlyItems(month),
@@ -62,15 +57,6 @@ export function MonthlyPage() {
   const [initializing, setInitializing] = useState(false);
   const [batchCategory, setBatchCategory] = useState("ALL");
   const [addingEntry, setAddingEntry] = useState(false);
-  const [rulesOpen, setRulesOpenState] = useState(searchParams.get("panel") === "rules");
-
-  const setRulesOpen = (open: boolean) => {
-    setRulesOpenState(open);
-    const next = new URLSearchParams(searchParams);
-    if (open) next.set("panel", "rules");
-    else next.delete("panel");
-    setSearchParams(next, { replace: true });
-  };
 
   const invalidateMonth = async () => {
     await Promise.all([
@@ -164,10 +150,8 @@ export function MonthlyPage() {
       )}
 
       {itemsQuery.data?.length === 0 && previewQuery.data?.candidate_count === 0 && previewQuery.data.missing_currencies.length === 0 && (
-        <EmptyState eyebrow="本月还没有数据" title="直接记录第一项收入或支出" description="本月实际可以独立录入。周期规则仅用于自动生成后续月份基准，不是开始使用 Aplena 的前置条件。" action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>录入本月实际</button><button className="button button-secondary" type="button" onClick={() => setRulesOpen(true)}>配置周期规则（可选）</button></div>} />
+        <EmptyState eyebrow="本月还没有数据" title="直接记录第一项收入或支出" description="本月实际可以独立录入。下月目标与周期规则不是开始使用 Aplena 的前置条件。" action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>录入本月实际</button><Link className="button button-secondary" to="/goals">设置下月目标（可选）</Link></div>} />
       )}
-
-      {month && <RecurringRulesPanel currentMonth={month} open={rulesOpen} onOpenChange={setRulesOpen} />}
 
       {initializing && previewQuery.data && ratesQuery.data && (
         <InitializationDialog
@@ -199,7 +183,7 @@ function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPrevi
   const canInitialize = preview.candidate_count > 0 || preview.missing_currencies.length > 0;
   return (
     <section className="month-context context-current">
-      <div><span className="section-label">当前自然月</span><strong>系统会在启动和新增周期规则后补齐本月缺失快照。</strong></div>
+      <div><span className="section-label">当前自然月</span><strong>本月计划快照在生成后保持冻结，不随下月目标变化。</strong></div>
       <dl>
         <div><dt>已存在</dt><dd>{preview.existing_count}</dd></div>
         <div><dt>可新增</dt><dd>{preview.candidate_count}</dd></div>
@@ -208,7 +192,7 @@ function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPrevi
       {preview.missing_currencies.length > 0 && <p className="warning-text">缺少汇率：{preview.missing_currencies.join("、")}</p>}
       {canInitialize && (
         <button className="button button-primary" type="button" onClick={onInitialize}>
-          {hasItems ? "补齐本月新增规则" : "初始化本月"}
+          {hasItems ? "补齐符合本月的规则" : "初始化本月"}
         </button>
       )}
     </section>

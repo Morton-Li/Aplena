@@ -8,7 +8,7 @@ ExchangeRate ──> MonthInitialization ──> MonthlyItem
 PlanItem ─┘                                │
                                           └── ActualEntry
 
-PlanItem ──> FinancialCapacity
+NextMonthGoal + PlanItem ──> FinancialCapacity
 MonthlyItem + ActualEntry ──> Analytics
 ```
 
@@ -84,13 +84,20 @@ MonthlyItem + ActualEntry ──> Analytics
 
 | 字段 | 约束 |
 |---|---|
-| `target_month` | 合法月份 |
 | `base_currency` | 已定义币种，汇率为 1 |
-| `minimum_savings_rate_bp` | 0–10000 基点 |
 
 存在任何月度快照后不能切换本位币。
 
-### 4.2 `PlanItem`
+### 4.2 `NextMonthGoal`
+
+| 字段 | 约束 |
+|---|---|
+| `target_month` | 后端计算的下一个自然月，客户端不可指定 |
+| `minimum_savings_rate_bp` | 0–10000 基点 |
+
+它只用于下月承载力投影。跨月后旧目标不转为本月报表口径，系统为新的下一个自然月建立默认目标。
+
+### 4.3 `PlanItem`
 
 | 字段 | 约束 |
 |---|---|
@@ -105,7 +112,7 @@ MonthlyItem + ActualEntry ──> Analytics
 | `recognition_mode` | `AMORTIZED` / `PAYMENT` |
 | `note` | 可空 |
 
-### 4.3 `MonthlyItem`
+### 4.4 `MonthlyItem`
 
 | 字段 | 语义 |
 |---|---|
@@ -122,7 +129,7 @@ MonthlyItem + ActualEntry ──> Analytics
 
 `actual_amount`、条目数、偏差、完成率和数据状态是查询投影，不是持久化字段。
 
-### 4.4 `ActualEntry`
+### 4.5 `ActualEntry`
 
 | 字段 | 约束 |
 |---|---|

@@ -3,17 +3,20 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppError, DomainContract, Invoke } from "./domain";
 
 export interface Settings {
-  target_month: string;
   base_currency: string;
-  minimum_savings_rate_basis_points: number;
   created_at: string;
   updated_at: string;
 }
 
 export interface SettingsInput {
-  targetMonth: string;
   baseCurrency: string;
-  minimumSavingsRateBasisPoints: number;
+}
+
+export interface NextMonthGoal {
+  target_month: string;
+  minimum_savings_rate_basis_points: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ExchangeRate {
@@ -151,11 +154,6 @@ export interface InitializeMonthResult {
   warnings: string[];
 }
 
-export interface PlanMutationResult {
-  plan_item: PlanItem;
-  current_month_initialization: InitializeMonthResult | null;
-}
-
 export interface StartupStatus {
   current_month: string;
   initialization: InitializeMonthResult | null;
@@ -209,9 +207,7 @@ export interface MonthAnalytics {
   planned_savings_rate_percent: string | null;
   actual_savings_rate_percent: string | null;
   savings_rate_percentage_point_variance: string | null;
-  savings_rate_target_completion_percent: string | null;
-  savings_rate_relative_deviation_percent: string | null;
-  minimum_savings_rate_percent: string;
+  savings_rate_plan_completion_percent: string | null;
   categories: CategoryBreakdown[];
   projects: ProjectBreakdown[];
   important_variances: ProjectBreakdown[];
@@ -240,6 +236,7 @@ export interface FinancialCapacity {
 export const queryKeys = {
   domain: ["domain-contract"] as const,
   settings: ["settings"] as const,
+  nextMonthGoal: ["next-month-goal"] as const,
   startup: ["startup-status"] as const,
   rates: ["exchange-rates"] as const,
   plans: ["plan-items"] as const,
@@ -248,7 +245,7 @@ export const queryKeys = {
   actualEntries: (monthlyItemId: string) => ["actual-entries", monthlyItemId] as const,
   monthAnalytics: (month: string) => ["month-analytics", month] as const,
   historyAnalytics: ["history-analytics"] as const,
-  capacity: (month: string) => ["financial-capacity", month] as const,
+  capacity: ["financial-capacity"] as const,
   monthPreview: (month: string, overrides: RateOverrideInput[] = []) =>
     ["month-preview", month, overrides] as const,
 };
@@ -266,6 +263,19 @@ export function saveSettings(
   invokeCommand: Invoke = invoke,
 ): Promise<Settings> {
   return invokeCommand<Settings>("save_settings", { input });
+}
+
+export function getNextMonthGoal(invokeCommand: Invoke = invoke): Promise<NextMonthGoal> {
+  return invokeCommand<NextMonthGoal>("get_next_month_goal");
+}
+
+export function saveNextMonthGoal(
+  minimumSavingsRateBasisPoints: number,
+  invokeCommand: Invoke = invoke,
+): Promise<NextMonthGoal> {
+  return invokeCommand<NextMonthGoal>("save_next_month_goal", {
+    input: { minimumSavingsRateBasisPoints },
+  });
 }
 
 export function getStartupStatus(invokeCommand: Invoke = invoke): Promise<StartupStatus> {
@@ -297,8 +307,8 @@ export function listPlanItems(invokeCommand: Invoke = invoke): Promise<PlanItem[
 export function createPlanItem(
   input: PlanItemInput,
   invokeCommand: Invoke = invoke,
-): Promise<PlanMutationResult> {
-  return invokeCommand<PlanMutationResult>("create_plan_item", { input });
+): Promise<PlanItem> {
+  return invokeCommand<PlanItem>("create_plan_item", { input });
 }
 
 export function updatePlanItem(
@@ -468,8 +478,7 @@ export function getHistoryAnalytics(invokeCommand: Invoke = invoke): Promise<His
 }
 
 export function getFinancialCapacity(
-  targetMonth: string,
   invokeCommand: Invoke = invoke,
 ): Promise<FinancialCapacity> {
-  return invokeCommand<FinancialCapacity>("get_financial_capacity", { targetMonth });
+  return invokeCommand<FinancialCapacity>("get_financial_capacity");
 }

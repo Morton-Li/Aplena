@@ -3,15 +3,12 @@ import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import {
-  getFinancialCapacity,
   getHistoryAnalytics,
   getMonthAnalytics,
   getStartupStatus,
-  listPlanItems,
   queryKeys,
   type AmountComparison,
   type CategoryBreakdown,
-  type FinancialCapacity,
   type MonthAnalytics,
   type ProjectBreakdown,
 } from "../../shared/api/finance";
@@ -45,28 +42,17 @@ export function DashboardPage() {
     queryKey: queryKeys.historyAnalytics,
     queryFn: () => getHistoryAnalytics(),
   });
-  const capacityQuery = useQuery({
-    queryKey: queryKeys.capacity(month),
-    queryFn: () => getFinancialCapacity(month),
-    enabled: Boolean(month),
-  });
-  const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
-
   if (
     startupQuery.isPending ||
     analyticsQuery.isPending ||
-    historyQuery.isPending ||
-    capacityQuery.isPending ||
-    plansQuery.isPending
+    historyQuery.isPending
   ) {
     return <DashboardLoading />;
   }
   if (
     startupQuery.isError ||
     analyticsQuery.isError ||
-    historyQuery.isError ||
-    capacityQuery.isError ||
-    plansQuery.isError
+    historyQuery.isError
   ) {
     return (
       <section className="state-card state-card-error">
@@ -74,23 +60,19 @@ export function DashboardPage() {
           {describeError(
             startupQuery.error ??
               analyticsQuery.error ??
-              historyQuery.error ??
-              capacityQuery.error ??
-              plansQuery.error,
+              historyQuery.error,
           )}
         </span>
       </section>
     );
   }
-  if (!startupQuery.data || !analyticsQuery.data || !capacityQuery.data) {
+  if (!startupQuery.data || !analyticsQuery.data) {
     return <section className="state-card">当前月份的财务数据尚未完成初始化。</section>;
   }
 
   const analytics = analyticsQuery.data;
-  const capacity = capacityQuery.data;
   const actualQualifier = actualStatusLabel(analytics.actual_status);
   const hasPlanBaseline = analytics.planned_item_count > 0;
-  const hasRecurringRules = (plansQuery.data?.length ?? 0) > 0;
 
   return (
     <>
@@ -99,13 +81,11 @@ export function DashboardPage() {
         <EmptyDashboard month={analytics.month} currency={analytics.currency} />
       ) : (
         <>
-          <KpiGrid analytics={analytics} capacity={capacity} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} hasRecurringRules={hasRecurringRules} />
+          <KpiGrid analytics={analytics} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} />
           <DashboardCharts
             analytics={analytics}
-            capacity={capacity}
             history={historyQuery.data?.months ?? []}
             hasPlanBaseline={hasPlanBaseline}
-            hasRecurringRules={hasRecurringRules}
           />
           <ExecutionReport analytics={analytics} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} />
           <VarianceReport analytics={analytics} />
@@ -121,7 +101,7 @@ function DashboardHeader({ analytics, hasPlanBaseline }: { analytics: MonthAnaly
       <div>
         <p className="eyebrow">财务总览</p>
         <h1>{monthLabel(analytics.month)}</h1>
-        <p>{currencyName(analytics.currency)} · {hasPlanBaseline ? "计划、实际与财务承载能力实时汇总" : "本月实际收支与财务报表实时汇总"}</p>
+        <p>{currencyName(analytics.currency)} · {hasPlanBaseline ? "本月冻结计划与实际数据汇总" : "本月实际收支与财务报表汇总"}</p>
       </div>
       <div className={`data-status status-${analytics.actual_status.toLowerCase()}`}>
         <span className="data-status-indicator" aria-hidden="true" />
@@ -152,7 +132,7 @@ function EmptyDashboard({ month, currency }: { month: string; currency: string }
         action={
           <div className="empty-actions">
             <Link className="button button-primary" to="/monthly">录入本月实际</Link>
-            <Link className="button button-secondary" to="/monthly?panel=rules">配置周期规则（可选）</Link>
+            <Link className="button button-secondary" to="/goals">设置下月目标（可选）</Link>
           </div>
         }
       />
@@ -162,16 +142,12 @@ function EmptyDashboard({ month, currency }: { month: string; currency: string }
 
 function KpiGrid({
   analytics,
-  capacity,
   actualQualifier,
   hasPlanBaseline,
-  hasRecurringRules,
 }: {
   analytics: MonthAnalytics;
-  capacity: FinancialCapacity;
   actualQualifier: string;
   hasPlanBaseline: boolean;
-  hasRecurringRules: boolean;
 }) {
   return (
     <section className="kpi-grid" aria-label="核心财务指标">
@@ -200,20 +176,14 @@ function KpiGrid({
       <KpiCard
         label="储蓄率"
         value={formatPercent(analytics.actual_savings_rate_percent)}
-        supporting={hasPlanBaseline ? `计划 ${formatPercent(analytics.planned_savings_rate_percent)} · 目标 ${analytics.minimum_savings_rate_percent}%` : `最低储蓄目标 ${analytics.minimum_savings_rate_percent}%`}
+        supporting={hasPlanBaseline ? `计划 ${formatPercent(analytics.planned_savings_rate_percent)}` : "按本月实际计算"}
         detail={
           !hasPlanBaseline
             ? analytics.actual_savings_rate_percent ? "基于当前实际收入与净结余" : `${actualQualifier}尚不可计算`
-            : analytics.savings_rate_target_completion_percent
-            ? `${hasPlanBaseline ? "计划" : "目标"}完成 ${analytics.savings_rate_target_completion_percent}%`
+            : analytics.savings_rate_plan_completion_percent
+            ? `计划完成 ${analytics.savings_rate_plan_completion_percent}%`
             : `${actualQualifier}尚不可计算`
         }
-      />
-      <KpiCard
-        label="周期负担承载力"
-        value={hasRecurringRules ? formatMoney(capacity.preserved_capacity, capacity.base_currency) : "—"}
-        supporting={hasRecurringRules ? "保留当前自主预算" : "可选增强项"}
-        detail={hasRecurringRules ? `极限 ${formatMoney(capacity.maximum_capacity, capacity.base_currency)}` : "配置周期规则后计算"}
       />
     </section>
   );
@@ -246,16 +216,12 @@ function KpiCard({
 
 function DashboardCharts({
   analytics,
-  capacity,
   history,
   hasPlanBaseline,
-  hasRecurringRules,
 }: {
   analytics: MonthAnalytics;
-  capacity: FinancialCapacity;
   history: MonthAnalytics[];
   hasPlanBaseline: boolean;
-  hasRecurringRules: boolean;
 }) {
   const recentHistory = useMemo(() => history.slice(-8), [history]);
   const trendOption = useMemo(
@@ -276,7 +242,6 @@ function DashboardCharts({
     () => expenseStructureOption(expenses, analytics.currency, hasPlanBaseline),
     [analytics.currency, expenses, hasPlanBaseline],
   );
-  const capacityOption = useMemo(() => capacityWaterfallOption(capacity), [capacity]);
 
   return (
     <section className="dashboard-chart-section" aria-label="财务图表">
@@ -306,9 +271,6 @@ function DashboardCharts({
           ) : (
             <ChartEmpty message="当前月份没有可绘制的支出分类。" />
           )}
-        </ReportCard>
-        <ReportCard eyebrow="财务承载能力" title="稳定收入的分配路径">
-          {hasRecurringRules ? <><AnalyticsChart option={capacityOption} label="稳定收入扣除必要支出、固定承诺、最低储蓄和自主预算后的剩余承载能力瀑布图" height={300} /><CapacityDataTable capacity={capacity} /></> : <ChartEmpty message="承载能力是可选增强；配置周期性收入与支出规则后显示。" />}
         </ReportCard>
       </div>
     </section>
@@ -356,8 +318,8 @@ function ExecutionReport({ analytics, actualQualifier, hasPlanBaseline }: { anal
               <td>{hasPlanBaseline ? formatPercent(analytics.planned_savings_rate_percent) : "—"}</td>
               <td>{formatPercent(analytics.actual_savings_rate_percent)}</td>
               <td>{formatPercentagePoints(analytics.savings_rate_percentage_point_variance)}</td>
-              <td>{formatPercent(analytics.savings_rate_target_completion_percent)}</td>
-              <td><span className="status-badge status-neutral">目标 {analytics.minimum_savings_rate_percent}%</span></td>
+              <td>{formatPercent(analytics.savings_rate_plan_completion_percent)}</td>
+              <td><span className="status-badge status-neutral">对比本月计划</span></td>
             </tr>
           </tbody>
         </table>
@@ -407,11 +369,6 @@ function CategoryDataTable({ categories, currency, hasPlanBaseline }: { categori
   return (
     <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><thead><tr><th>分类</th><th>计划</th><th>实际</th><th>实际占比</th></tr></thead><tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, currency) : "—"}</td><td>{formatMoney(item.actual_to_date, currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody></table></div></details>
   );
-}
-
-function CapacityDataTable({ capacity }: { capacity: FinancialCapacity }) {
-  const rows = [["稳定收入", capacity.stable_income], ["必要支出", capacity.essential_expenses], ["固定承诺", capacity.fixed_commitments], ["最低储蓄", capacity.minimum_savings_amount], ["自主预算", capacity.discretionary_budget], ["剩余承载能力", capacity.preserved_capacity]];
-  return <details className="chart-data-details"><summary>查看计算明细</summary><table className="data-table"><tbody>{rows.map(([label, value]) => <tr key={label}><th>{label}</th><td>{formatMoney(value, capacity.base_currency)}</td></tr>)}</tbody></table></details>;
 }
 
 function ChartEmpty({ message }: { message: string }) {
@@ -474,32 +431,6 @@ function expenseStructureOption(categories: CategoryBreakdown[], currency: strin
       { name: "计划", type: "bar", barMaxWidth: 18, data: categories.map((item) => decimalValue(item.planned_amount)), itemStyle: { color: "#94a3b8", borderRadius: [0, 3, 3, 0] } },
       actualSeries,
     ] : [actualSeries],
-  };
-}
-
-function capacityWaterfallOption(capacity: FinancialCapacity) {
-  const values = [decimalValue(capacity.stable_income) ?? 0, -(decimalValue(capacity.essential_expenses) ?? 0), -(decimalValue(capacity.fixed_commitments) ?? 0), -(decimalValue(capacity.minimum_savings_amount) ?? 0), -(decimalValue(capacity.discretionary_budget) ?? 0)];
-  const base: number[] = [];
-  const visible: number[] = [];
-  let running = 0;
-  values.forEach((value, index) => {
-    if (index === 0) { base.push(0); visible.push(value); running = value; return; }
-    const next = Math.max(0, running + value);
-    base.push(next);
-    visible.push(running - next);
-    running = next;
-  });
-  base.push(0);
-  visible.push(decimalValue(capacity.preserved_capacity) ?? running);
-  return {
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: number | string) => formatMoney(String(value), capacity.base_currency) },
-    grid: { left: 70, right: 16, top: 24, bottom: 48 },
-    xAxis: { type: "category", data: ["稳定收入", "必要支出", "固定承诺", "最低储蓄", "自主预算", "剩余能力"], axisLabel: { ...chartText, interval: 0, rotate: 20 }, axisLine },
-    yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => compactMoney(value, capacity.base_currency) }, splitLine },
-    series: [
-      { name: "辅助", type: "bar", stack: "capacity", silent: true, data: base, itemStyle: { color: "transparent" }, emphasis: { itemStyle: { color: "transparent" } } },
-      { name: "金额", type: "bar", stack: "capacity", barMaxWidth: 34, data: visible, itemStyle: { color: (params: { dataIndex: number }) => params.dataIndex === 0 ? "#2563eb" : params.dataIndex === 5 ? "#4f46e5" : "#94a3b8", borderRadius: [3, 3, 0, 0] } },
-    ],
   };
 }
 
