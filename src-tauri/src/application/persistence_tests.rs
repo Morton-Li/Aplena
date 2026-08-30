@@ -297,6 +297,33 @@ async fn startup_automatically_initializes_only_the_current_natural_month() {
 }
 
 #[tokio::test]
+async fn startup_creates_default_cny_settings_idempotently() {
+    let service = FinanceService::new(open_memory_database().await.unwrap()).unwrap();
+
+    service.initialize_on_startup().await;
+    service.initialize_on_startup().await;
+
+    let settings = service.get_settings().await.unwrap().unwrap();
+    assert_eq!(settings.target_month, current_month().to_string());
+    assert_eq!(settings.base_currency, "CNY");
+    assert_eq!(settings.minimum_savings_rate_basis_points, 2_000);
+    assert!(service.startup_status().await.error.is_none());
+
+    let store = service.test_store().await;
+    let settings_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    let base_rate: i64 =
+        sqlx::query_scalar("SELECT rate_scaled FROM exchange_rates WHERE currency_code = 'CNY'")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+    assert_eq!(settings_count, 1);
+    assert_eq!(base_rate, 100_000_000);
+}
+
+#[tokio::test]
 async fn plan_names_are_normalized_unique_and_currency_is_validated() {
     let service = test_service().await;
     let current = current_month();

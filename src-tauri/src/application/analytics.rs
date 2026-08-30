@@ -259,6 +259,9 @@ fn comparison(
     greater_is_favorable: bool,
 ) -> AmountComparisonDto {
     let variance = actual.map(|actual| actual - planned);
+    let completion_percent = (planned > Decimal::ZERO)
+        .then(|| actual.map(|actual| format_percent(actual / planned * Decimal::ONE_HUNDRED)))
+        .flatten();
     let variance_effect = match variance {
         None => "UNKNOWN",
         Some(variance) if variance.is_zero() => "ON_PLAN",
@@ -274,6 +277,7 @@ fn comparison(
         planned: format_amount(planned),
         actual_to_date: actual.map(format_amount),
         variance: variance.map(format_amount),
+        completion_percent,
         variance_effect: variance_effect.to_owned(),
     }
 }
@@ -362,6 +366,10 @@ mod tests {
 
         assert_eq!(analytics.income.planned, "11000.00");
         assert_eq!(analytics.income.actual_to_date.as_deref(), Some("11000.00"));
+        assert_eq!(
+            analytics.income.completion_percent.as_deref(),
+            Some("100.00")
+        );
         assert_eq!(analytics.expense.planned, "3500.00");
         assert_eq!(analytics.expense.actual_to_date.as_deref(), Some("3600.00"));
         assert_eq!(analytics.net_balance.planned, "7500.00");
@@ -434,6 +442,7 @@ mod tests {
         assert_eq!(analytics.actual_savings_rate_percent, None);
         assert_eq!(analytics.projects[0].planned_share_percent, None);
         assert_eq!(analytics.projects[0].actual_share_percent, None);
+        assert_eq!(analytics.income.completion_percent, None);
 
         let empty = build_month_analytics(
             YearMonth::new(2026, 7).unwrap(),

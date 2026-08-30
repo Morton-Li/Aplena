@@ -41,6 +41,13 @@ pub async fn get_settings(
 }
 
 #[tauri::command]
+pub async fn ensure_default_settings(
+    service: State<'_, FinanceService>,
+) -> Result<SettingsDto, AppError> {
+    service.ensure_default_settings().await
+}
+
+#[tauri::command]
 pub async fn save_settings(
     service: State<'_, FinanceService>,
     input: SettingsInputDto,

@@ -165,6 +165,7 @@ export interface AmountComparison {
   planned: string;
   actual_to_date: string | null;
   variance: string | null;
+  completion_percent: string | null;
   variance_effect: "UNKNOWN" | "ON_PLAN" | "FAVORABLE" | "UNFAVORABLE";
 }
 
@@ -227,6 +228,7 @@ export interface FinancialCapacity {
   essential_expenses: string;
   fixed_commitments: string;
   discretionary_budget: string;
+  minimum_savings_amount: string;
   preserved_capacity: string;
   maximum_capacity: string;
   fixed_commitment_ratio_percent: string | null;
@@ -299,6 +301,10 @@ export const queryKeys = {
 
 export function getSettings(invokeCommand: Invoke = invoke): Promise<Settings | null> {
   return invokeCommand<Settings | null>("get_settings");
+}
+
+export function ensureDefaultSettings(invokeCommand: Invoke = invoke): Promise<Settings> {
+  return invokeCommand<Settings>("ensure_default_settings");
 }
 
 export function saveSettings(

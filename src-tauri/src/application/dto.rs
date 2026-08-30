@@ -221,6 +221,7 @@ pub struct AmountComparisonDto {
     pub planned: String,
     pub actual_to_date: Option<String>,
     pub variance: Option<String>,
+    pub completion_percent: Option<String>,
     pub variance_effect: String,
 }
 
@@ -288,6 +289,7 @@ pub struct FinancialCapacityDto {
     pub essential_expenses: String,
     pub fixed_commitments: String,
     pub discretionary_budget: String,
+    pub minimum_savings_amount: String,
     pub preserved_capacity: String,
     pub maximum_capacity: String,
     pub fixed_commitment_ratio_percent: Option<String>,

@@ -76,18 +76,16 @@ impl FinanceService {
 
     pub async fn initialize_on_startup(&self) {
         let _operation = self.operation_gate.read().await;
-        let result = match self.current_store().await.get_settings().await {
-            Ok(Some(_)) => {
-                self.ensure_month_initialized(
-                    current_natural_month().expect("local calendar month must be valid"),
-                    InitializationTrigger::AppStartup,
-                    Vec::new(),
-                )
-                .await
-            }
-            Ok(None) => Ok(None),
-            Err(error) => Err(AppError::from(error)),
-        };
+        let result = async {
+            self.ensure_default_settings_unlocked().await?;
+            self.ensure_month_initialized(
+                current_natural_month().expect("local calendar month must be valid"),
+                InitializationTrigger::AppStartup,
+                Vec::new(),
+            )
+            .await
+        }
+        .await;
 
         let mut status = self.startup_status.write().await;
         match result {
@@ -114,6 +112,32 @@ impl FinanceService {
             .await
             .map_err(AppError::from)
             .map(|value| value.map(settings_dto))
+    }
+
+    pub async fn ensure_default_settings(&self) -> Result<SettingsDto, AppError> {
+        let _operation = self.operation_gate.read().await;
+        self.ensure_default_settings_unlocked()
+            .await
+            .map(settings_dto)
+    }
+
+    async fn ensure_default_settings_unlocked(&self) -> Result<StoredSettings, AppError> {
+        let store = self.current_store().await;
+        if let Some(settings) = store.get_settings().await.map_err(AppError::from)? {
+            return Ok(settings);
+        }
+
+        let settings = Settings::new(
+            current_natural_month()?,
+            CurrencyCode::new("CNY")
+                .map_err(|error| AppError::from_domain(error, Some("baseCurrency")))?,
+            2_000,
+        )
+        .map_err(|error| AppError::from_domain(error, None))?;
+        store
+            .create_settings(&settings, &timestamp())
+            .await
+            .map_err(AppError::from)
     }
 
     pub async fn save_settings(&self, input: SettingsInputDto) -> Result<SettingsDto, AppError> {
@@ -602,6 +626,7 @@ impl FinanceService {
             essential_expenses: result.essential_expenses().decimal_string(),
             fixed_commitments: result.fixed_commitments().decimal_string(),
             discretionary_budget: result.discretionary_budget().decimal_string(),
+            minimum_savings_amount: result.minimum_savings_amount().decimal_string(),
             preserved_capacity: result.preserved_capacity().decimal_string(),
             maximum_capacity: result.maximum_capacity().decimal_string(),
             fixed_commitment_ratio_percent: result
