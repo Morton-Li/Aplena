@@ -20,6 +20,7 @@ import {
   type Settings,
 } from "../../shared/api/finance";
 import { describeError } from "../../shared/formatting/errors";
+import { currencyName } from "../../shared/formatting/finance";
 import { Select } from "../../shared/components/Select";
 
 const settingsSchema = z.object({
@@ -43,9 +44,9 @@ export function SettingsPage() {
     <>
       <header className="page-header">
         <div>
-          <p className="eyebrow">设置</p>
-          <h1>共同尺度与计划上下文。</h1>
-          <p>汇率只在创建月度快照时读取；更新汇率不会回算历史。</p>
+          <p className="eyebrow">本地配置</p>
+          <h1>系统设置</h1>
+          <p>管理本位币、目标月份、汇率与本地数据保护。</p>
         </div>
       </header>
       {(settingsQuery.isPending || ratesQuery.isPending) && <section className="state-card">正在读取设置…</section>}
@@ -55,7 +56,7 @@ export function SettingsPage() {
       {settingsQuery.data && ratesQuery.data && (
         <>
           <div className="settings-grid">
-            <GeneralSettings settings={settingsQuery.data} currencies={ratesQuery.data.map((rate) => rate.currency)} />
+            <GeneralSettings settings={settingsQuery.data} currencies={Array.from(new Set(["CNY", "USD", "EUR", "HKD", "JPY", "GBP", ...ratesQuery.data.map((rate) => rate.currency)]))} />
             <RateSettings baseCurrency={settingsQuery.data.base_currency} />
           </div>
           <DataProtectionPanel />
@@ -319,8 +320,8 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
   return (
     <form className="settings-card" onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
       <div><p className="section-label">全局设置</p><h2>计划基准</h2></div>
-      <label>本位币<Controller control={form.control} name="baseCurrency" render={({ field, fieldState }) => <Select ariaLabel="本位币" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={currencies.map((currency) => ({ value: currency, label: currency }))} />} /></label>
-      <div className="notice notice-warning">一旦存在任何月度快照，本位币会被锁定，避免历史趋势混入不同币种。已有数据时修改会由 Rust 拒绝。</div>
+      <label>本位币<Controller control={form.control} name="baseCurrency" render={({ field, fieldState }) => <Select ariaLabel="本位币" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={currencies.map((currency) => ({ value: currency, label: currencyName(currency), description: currency }))} />} /></label>
+      <div className="notice notice-warning">尚无月度快照时可以直接切换。已有快照后将保持锁定，避免历史报表混入不同计算基准；后续更换需要使用保留逐月币种基准的受控迁移，而不是静默重算历史。</div>
       <label>目标月份<input type="month" {...form.register("targetMonth")} /></label>
       <label>目标储蓄率<span className="input-with-suffix"><input type="number" min="0" max="100" step="0.01" {...form.register("savingsRatePercent", { valueAsNumber: true })} /><span>%</span></span></label>
       {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}

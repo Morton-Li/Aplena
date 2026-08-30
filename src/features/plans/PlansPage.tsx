@@ -23,6 +23,7 @@ import {
   type Settings,
 } from "../../shared/api/finance";
 import { describeError } from "../../shared/formatting/errors";
+import { formatMoney } from "../../shared/formatting/finance";
 import { Dialog } from "../../shared/components/Dialog";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { Select } from "../../shared/components/Select";
@@ -103,9 +104,9 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
     <>
       <header className="page-header">
         <div>
-          <p className="eyebrow">长期财务计划</p>
-          <h1>维护未来，而不是补录流水。</h1>
-          <p>这里的修改只影响尚未生成的月份；已有月度快照保持原样。</p>
+          <p className="eyebrow">规划基准</p>
+          <h1>长期计划</h1>
+          <p>管理周期性收入与支出；修改只影响尚未生成的月份。</p>
         </div>
         <button className="button button-primary" type="button" onClick={() => setEditor("new")}>
           新建计划
@@ -164,7 +165,7 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
                 {item.note && <small>{item.note}</small>}
               </div>
               <dl className="plan-facts">
-                <div><dt>原币金额</dt><dd>{item.planned_amount} {item.currency}</dd></div>
+                <div><dt>原币金额</dt><dd>{formatMoney(item.planned_amount, item.currency)}</dd></div>
                 <div><dt>周期</dt><dd>{item.period_months} 个月</dd></div>
                 <div><dt>历史快照</dt><dd>{item.history_month_count} 个月</dd></div>
               </dl>
@@ -336,9 +337,9 @@ function PlanEditor({
               <div><span>目标月份</span><strong>{settings.target_month}</strong></div>
               <div><span>生效状态</span><strong>{preview.data.effective ? "有效" : "未生效"}</strong></div>
               <div><span>生成月度项目</span><strong>{preview.data.recognized_in_target_month ? "会" : "不会"}</strong></div>
-              <div><span>月度等价金额</span><strong>{preview.data.monthly_equivalent ?? "N/A"} {preview.data.base_currency}</strong></div>
-              <div><span>当月确认金额</span><strong>{preview.data.recognized_amount ?? "N/A"} {preview.data.base_currency}</strong></div>
-              <div><span>计划支付日</span><strong>{preview.data.scheduled_date ?? "N/A"}</strong></div>
+              <div><span>月度等价金额</span><strong>{formatMoney(preview.data.monthly_equivalent, preview.data.base_currency)}</strong></div>
+              <div><span>当月确认金额</span><strong>{formatMoney(preview.data.recognized_amount, preview.data.base_currency)}</strong></div>
+              <div><span>计划支付日</span><strong>{preview.data.scheduled_date ?? "—"}</strong></div>
             </div>
           )}
           {(previewMutation.isError || saveMutation.isError) && (

@@ -135,18 +135,21 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
       planned: "30000.00",
       actual_to_date: "28700.00",
       variance: "-1300.00",
+      completion_percent: "95.67",
       variance_effect: "UNFAVORABLE",
     },
     expense: {
       planned: "9300.00",
       actual_to_date: "8427.00",
       variance: "-873.00",
+      completion_percent: "90.61",
       variance_effect: "FAVORABLE",
     },
     net_balance: {
       planned: "20700.00",
       actual_to_date: "20273.00",
       variance: "-427.00",
+      completion_percent: "97.94",
       variance_effect: "UNFAVORABLE",
     },
     planned_savings_rate_percent: "69.00",
@@ -275,6 +278,7 @@ const capacity: FinancialCapacity = {
   essential_expenses: "6000.00",
   fixed_commitments: "3000.00",
   discretionary_budget: "2000.00",
+  minimum_savings_amount: "6000.00",
   preserved_capacity: "13000.00",
   maximum_capacity: "15000.00",
   fixed_commitment_ratio_percent: "10.00",
@@ -308,6 +312,18 @@ function installHarness(options: HarnessOptions = {}) {
         return contract as T;
       case "get_settings":
         return storedSettings as T;
+      case "ensure_default_settings": {
+        if (!storedSettings) {
+          storedSettings = {
+            target_month: "2026-08",
+            base_currency: "CNY",
+            minimum_savings_rate_basis_points: 2000,
+            created_at: "2026-08-01T00:00:00Z",
+            updated_at: "2026-08-01T00:00:00Z",
+          };
+        }
+        return storedSettings as T;
+      }
       case "save_settings": {
         const input = args?.input as {
           targetMonth: string;
@@ -527,27 +543,13 @@ describe("planning workflows", () => {
     window.location.hash = "";
   });
 
-  it("completes first setup entirely by keyboard and creates the base currency", async () => {
+  it("creates the default CNY baseline and opens the dashboard without a setup screen", async () => {
     installHarness({ settings: null });
-    const user = userEvent.setup();
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "建立你的财务基准" })).toBeInTheDocument();
-    await user.tab();
-    expect(screen.getByRole("combobox", { name: /本位币/ })).toHaveFocus();
-    await user.tab();
-    await user.tab();
-    await user.tab();
-    expect(screen.getByRole("button", { name: "完成设置并进入 Aplena" })).toHaveFocus();
-    await user.keyboard("{Enter}");
-
     expect(await screen.findByRole("link", { name: "长期计划" })).toBeInTheDocument();
-    expect(invokeMock).toHaveBeenCalledWith("save_settings", {
-      input: expect.objectContaining({
-        baseCurrency: "CNY",
-        minimumSavingsRateBasisPoints: 2000,
-      }),
-    });
+    expect(screen.queryByText("建立你的财务基准")).not.toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("ensure_default_settings");
   });
 
   it("previews and creates an AMORTIZED plan without frontend financial arithmetic", async () => {
@@ -560,7 +562,7 @@ describe("planning workflows", () => {
     await user.type(screen.getByLabelText("计划金额"), "1200");
     await user.click(screen.getByRole("button", { name: "预览并检查" }));
 
-    expect((await screen.findAllByText("100.00 CNY")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("¥ 100.00")).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "确认保存" }));
     expect(await screen.findByText(/计划已保存/)).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith(
@@ -623,8 +625,8 @@ describe("planning workflows", () => {
 
     expect(await screen.findByText(/当前月已自动检查：新增 2 项/)).toBeInTheDocument();
     expect(screen.getByText("尚无条目")).toBeInTheDocument();
-    expect(screen.getAllByText("0.00").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("300.00 CNY").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("¥ 0.00").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("¥ 300.00").length).toBeGreaterThan(0);
     await user.click(screen.getAllByRole("button", { name: "确认项目已完成" })[0]);
     expect(invokeMock).toHaveBeenCalledWith("confirm_monthly_item", {
       input: expect.objectContaining({ id: expect.any(String) }),
@@ -727,7 +729,7 @@ describe("planning workflows", () => {
   it("displays stable Rust structured errors instead of raw transport details", async () => {
     installHarness({
       rejectCommand: {
-        command: "get_settings",
+        command: "ensure_default_settings",
         error: {
           error_code: "BASE_CURRENCY_LOCKED",
           message_key: "error.base_currency_locked",
@@ -735,7 +737,7 @@ describe("planning workflows", () => {
       },
     });
     render(<App />);
-    expect(await screen.findByText("已有月度数据，本位币已锁定。")).toBeInTheDocument();
+    expect((await screen.findAllByText("已有月度数据，本位币已锁定。")).length).toBeGreaterThan(0);
   });
 
   it("keeps backup paths in Rust and requires two explicit restore confirmations", async () => {
@@ -799,19 +801,19 @@ describe("dashboard and capacity analytics", () => {
     installHarness();
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "本月计划执行到哪里了？" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
     expect(screen.getByText("66.67%")).toBeInTheDocument();
     expect(screen.getAllByText("当前已录").length).toBeGreaterThan(0);
     expect(
       screen.getByRole("img", {
-        name: "2026-08 计划与当前实际的收入、支出和净结余柱状图",
+        name: "2026-08收入、支出与净结余计划实际分组柱状图",
       }),
     ).toBeInTheDocument();
-    const comparisonTable = screen.getByRole("table", { name: "图表对应数值" });
-    expect(within(comparisonTable).getByText("28700.00")).toBeInTheDocument();
-    expect(within(comparisonTable).getByText("8427.00")).toBeInTheDocument();
-    expect(screen.getByText("超支")).toBeInTheDocument();
-    expect(screen.getByText("13000.00 CNY")).toBeInTheDocument();
+    const comparisonTable = screen.getByRole("table", { name: "本月计划执行表" });
+    expect(within(comparisonTable).getByText("¥ 28,700.00")).toBeInTheDocument();
+    expect(within(comparisonTable).getByText("¥ 8,427.00")).toBeInTheDocument();
+    expect(screen.getAllByText("需关注").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("¥ 13,000.00").length).toBeGreaterThan(0);
   });
 
   it("does not present an unknown variance as a currency-only amount", async () => {
@@ -826,15 +828,16 @@ describe("dashboard and capacity analytics", () => {
     });
     render(<App />);
 
-    expect(await screen.findByText("尚不可比较")).toBeInTheDocument();
-    expect(screen.getByText("尚未录入")).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "重要偏差与待处理项目" })).toBeInTheDocument();
+    expect(screen.getByText("待录入")).toBeInTheDocument();
   });
 
-  it("shows N/A for empty actuals and zero-denominator rates", async () => {
+  it("uses a truthful empty report state instead of zero cards and N/A charts", async () => {
     const emptyComparison = {
       planned: "0.00",
       actual_to_date: null,
       variance: null,
+      completion_percent: null,
       variance_effect: "UNKNOWN" as const,
     };
     installHarness({
@@ -862,9 +865,9 @@ describe("dashboard and capacity analytics", () => {
     });
     render(<App />);
 
-    expect((await screen.findAllByText("暂无实际")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("N/A").length).toBeGreaterThan(3);
-    expect(screen.getByText("N/A（稳定收入为 0）")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "添加首个长期计划后，报表与图表会自动生成" })).toBeInTheDocument();
+    expect(screen.queryByText("N/A")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
   it("renders historical trends with numerical tables and explicit actual status", async () => {
@@ -881,9 +884,9 @@ describe("dashboard and capacity analytics", () => {
     });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "历史" }));
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
 
-    expect(await screen.findByRole("heading", { name: "计划与结果如何随时间变化？" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "历史报表" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /各月计划与实际收入/ })).toBeInTheDocument();
     const trendTable = screen.getByRole("table", { name: "财务趋势图对应数值" });
     expect(within(trendTable).getByText("2026-07")).toBeInTheDocument();
@@ -895,9 +898,9 @@ describe("dashboard and capacity analytics", () => {
     installHarness();
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "分析" }));
+    await user.click(await screen.findByRole("link", { name: "财务分析" }));
 
-    expect(await screen.findByRole("heading", { name: "钱的结构与长期负担健康吗？" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "结构与承载能力" })).toBeInTheDocument();
     expect(screen.getAllByText("固定承诺支出").length).toBeGreaterThan(0);
     expect(screen.getByText("房租")).toBeInTheDocument();
     await user.click(screen.getByLabelText("排名依据"));
@@ -905,7 +908,7 @@ describe("dashboard and capacity analytics", () => {
     expect(screen.queryByText("房租")).not.toBeInTheDocument();
     const rankingTable = screen.getByRole("table", { name: "项目排名图对应数值" });
     expect(within(rankingTable).getByText("电费")).toBeInTheDocument();
-    expect(within(rankingTable).getByText("427.00")).toBeInTheDocument();
+    expect(within(rankingTable).getByText("¥ 427.00")).toBeInTheDocument();
     expect(screen.getByText(/PAYMENT 项目在非支付月份仍计入/)).toBeInTheDocument();
   });
 
@@ -913,17 +916,17 @@ describe("dashboard and capacity analytics", () => {
     installHarness({ monthly: { "2026-08": [monthlyItem()] } });
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByRole("heading", { name: "本月计划执行到哪里了？" });
+    await screen.findByRole("heading", { name: "2026 年 8 月" });
     const analyticsCallCount = () =>
       invokeMock.mock.calls.filter(([command]) => command === "get_month_analytics").length;
     expect(analyticsCallCount()).toBe(1);
 
-    await user.click(screen.getByRole("link", { name: "月度计划" }));
+    await user.click(screen.getByRole("link", { name: "月度执行" }));
     await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
     await user.type(screen.getByLabelText("金额"), "427");
     await user.click(screen.getByRole("button", { name: "保存条目" }));
     await user.click(screen.getByRole("link", { name: "总览" }));
-    await screen.findByRole("heading", { name: "本月计划执行到哪里了？" });
+    await screen.findByRole("heading", { name: "2026 年 8 月" });
     await waitFor(() => expect(analyticsCallCount()).toBe(2));
   });
 });

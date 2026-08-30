@@ -89,7 +89,10 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
     const placement = below >= MIN_MENU_HEIGHT || below >= above ? "bottom" : "top";
     const available = Math.max(MIN_MENU_HEIGHT, placement === "bottom" ? below : above);
     const maxHeight = Math.min(PREFERRED_MENU_HEIGHT, available);
-    const width = Math.min(rect.width, window.innerWidth - viewportPadding * 2);
+    const width = Math.min(
+      Math.max(rect.width, 220),
+      window.innerWidth - viewportPadding * 2,
+    );
     const left = Math.min(
       Math.max(viewportPadding, rect.left),
       window.innerWidth - viewportPadding - width,
@@ -117,6 +120,10 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
       ? selectedIndex
       : enabledIndexes[0];
     setActiveIndex(preferredIndex ?? fallback);
+    // Establish the portal anchor in the same interaction as the open state. WebKit can defer a
+    // nested portal's layout effect while a modal is locking body scroll, which would otherwise
+    // leave an expanded trigger without a visible listbox for one or more frames.
+    updatePosition();
     setOpen(true);
   };
 
@@ -261,45 +268,48 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
         </svg>
       </button>
       {open && position && createPortal(
-        <div
-          className={`select-popover select-popover-${position.placement}`}
-          ref={menuRef}
-          style={menuStyle}
-        >
-          <div aria-label={ariaLabel} className="select-listbox" id={listboxId} role="listbox">
-            {options.map((option, index) => {
-              const selected = option.value === value;
-              const active = index === activeIndex;
-              return (
-                <div
-                  aria-disabled={option.disabled || undefined}
-                  aria-selected={selected}
-                  className={[
-                    "select-option",
-                    active ? "select-option-active" : "",
-                    selected ? "select-option-selected" : "",
-                    option.disabled ? "select-option-disabled" : "",
-                  ].filter(Boolean).join(" ")}
-                  id={`${listboxId}-option-${index}`}
-                  key={option.value}
-                  onClick={() => selectIndex(index)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onMouseEnter={() => !option.disabled && setActiveIndex(index)}
-                  role="option"
-                >
-                  <span>
-                    <strong>{option.label}</strong>
-                    {option.description && <small>{option.description}</small>}
-                  </span>
-                  <svg aria-hidden="true" className="select-check" viewBox="0 0 16 16">
-                    <path d="m3 8 3 3 7-7" />
-                  </svg>
-                </div>
-              );
-            })}
+        <div className="select-portal-layer">
+          <div
+            className={`select-popover select-popover-${position.placement}`}
+            data-placement={position.placement}
+            ref={menuRef}
+            style={menuStyle}
+          >
+            <div aria-label={ariaLabel} className="select-listbox" id={listboxId} role="listbox">
+              {options.map((option, index) => {
+                const selected = option.value === value;
+                const active = index === activeIndex;
+                return (
+                  <div
+                    aria-disabled={option.disabled || undefined}
+                    aria-selected={selected}
+                    className={[
+                      "select-option",
+                      active ? "select-option-active" : "",
+                      selected ? "select-option-selected" : "",
+                      option.disabled ? "select-option-disabled" : "",
+                    ].filter(Boolean).join(" ")}
+                    id={`${listboxId}-option-${index}`}
+                    key={option.value}
+                    onClick={() => selectIndex(index)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => !option.disabled && setActiveIndex(index)}
+                    role="option"
+                  >
+                    <span>
+                      <strong>{option.label}</strong>
+                      {option.description && <small>{option.description}</small>}
+                    </span>
+                    <svg aria-hidden="true" className="select-check" viewBox="0 0 16 16">
+                      <path d="m3 8 3 3 7-7" />
+                    </svg>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>,
-        document.body,
+        document.getElementById("select-portal-root") ?? document.body,
       )}
     </div>
   );

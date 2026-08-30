@@ -1,4 +1,5 @@
 import type { FinancialCapacity } from "../../shared/api/finance";
+import { formatMoney, formatPercent } from "../../shared/formatting/finance";
 
 export function CapacityPanel({ capacity }: { capacity: FinancialCapacity }) {
   return (
@@ -13,23 +14,24 @@ export function CapacityPanel({ capacity }: { capacity: FinancialCapacity }) {
       <div className="capacity-primary">
         <article>
           <span>保留现有自主预算</span>
-          <strong>{capacity.preserved_capacity} {capacity.base_currency}</strong>
+          <strong>{formatMoney(capacity.preserved_capacity, capacity.base_currency)}</strong>
           <small>在最低储蓄率 {capacity.minimum_savings_rate_percent}% 之后</small>
         </article>
         <article>
           <span>压缩自主预算后的极限</span>
-          <strong>{capacity.maximum_capacity} {capacity.base_currency}</strong>
+          <strong>{formatMoney(capacity.maximum_capacity, capacity.base_currency)}</strong>
           <small>不把浮动收入作为固定承诺支撑</small>
         </article>
       </div>
       <dl className="capacity-breakdown">
-        <div><dt>稳定收入</dt><dd>{capacity.stable_income}</dd></div>
-        <div><dt>浮动收入上行</dt><dd>{capacity.variable_income}</dd></div>
-        <div><dt>必要支出</dt><dd>{capacity.essential_expenses}</dd></div>
-        <div><dt>固定承诺</dt><dd>{capacity.fixed_commitments}</dd></div>
-        <div><dt>自主性预算</dt><dd>{capacity.discretionary_budget}</dd></div>
-        <div><dt>固定承诺率</dt><dd>{capacity.fixed_commitment_ratio_percent ? capacity.fixed_commitment_ratio_percent + "%" : "N/A（稳定收入为 0）"}</dd></div>
-        <div><dt>稳定收入责任覆盖</dt><dd>{capacity.stable_income_coverage_ratio ? capacity.stable_income_coverage_ratio + " 倍" : "N/A（基础责任为 0）"}</dd></div>
+        <div><dt>稳定收入</dt><dd>{formatMoney(capacity.stable_income, capacity.base_currency)}</dd></div>
+        <div><dt>浮动收入上行</dt><dd>{formatMoney(capacity.variable_income, capacity.base_currency)}</dd></div>
+        <div><dt>必要支出</dt><dd>{formatMoney(capacity.essential_expenses, capacity.base_currency)}</dd></div>
+        <div><dt>固定承诺</dt><dd>{formatMoney(capacity.fixed_commitments, capacity.base_currency)}</dd></div>
+        <div><dt>最低储蓄</dt><dd>{formatMoney(capacity.minimum_savings_amount, capacity.base_currency)}</dd></div>
+        <div><dt>自主性预算</dt><dd>{formatMoney(capacity.discretionary_budget, capacity.base_currency)}</dd></div>
+        <div><dt>固定承诺率</dt><dd>{formatPercent(capacity.fixed_commitment_ratio_percent)}</dd></div>
+        <div><dt>稳定收入责任覆盖</dt><dd>{capacity.stable_income_coverage_ratio ? capacity.stable_income_coverage_ratio + " 倍" : "—"}</dd></div>
       </dl>
       <details className="explanation">
         <summary>为什么 PAYMENT 项目在非支付月份仍计入？</summary>

@@ -35,26 +35,34 @@ export function AnalyticsChart({
       return;
     }
     const chart = init(container.current, undefined, { renderer: "canvas" });
-    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     chart.setOption({
-      animation: !reduceMotion,
+      // Dense financial charts should be immediately readable. Disabling entrance animation also
+      // avoids WebKit resize notifications repeatedly resetting a series to its zero frame.
+      animation: false,
       textStyle: {
-        color: "#526159",
+        color: "#64748b",
         fontFamily:
-          'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+          '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
         fontSize: 11,
       },
       ...option,
       aria: {
         enabled: true,
         description: label,
-        decal: { show: true },
+        decal: { show: false },
       },
     });
+    let width = container.current.clientWidth;
+    let height = container.current.clientHeight;
     const observer =
       typeof ResizeObserver === "undefined"
         ? null
-        : new ResizeObserver(() => {
+        : new ResizeObserver(([entry]) => {
+            const nextWidth = Math.round(entry.contentRect.width);
+            const nextHeight = Math.round(entry.contentRect.height);
+            if (nextWidth === width && nextHeight === height) return;
+            width = nextWidth;
+            height = nextHeight;
             chart.resize();
           });
     observer?.observe(container.current);

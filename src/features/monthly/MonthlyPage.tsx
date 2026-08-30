@@ -28,6 +28,7 @@ import {
   type RateOverrideInput,
 } from "../../shared/api/finance";
 import { describeError } from "../../shared/formatting/errors";
+import { formatMoney, formatPercent } from "../../shared/formatting/finance";
 import { Dialog } from "../../shared/components/Dialog";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { Select } from "../../shared/components/Select";
@@ -88,9 +89,9 @@ export function MonthlyPage() {
     <>
       <header className="page-header">
         <div>
-          <p className="eyebrow">月度计划</p>
-          <h1>{month || "选择月份"} 的计划执行</h1>
-          <p>逐笔记录项目实际结果；计划金额和月度净额均为只读事实。</p>
+          <p className="eyebrow">月度执行</p>
+          <h1>{month || "选择月份"}</h1>
+          <p>核对本月计划、实际记录与最终确认状态。</p>
         </div>
         <div className="header-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>添加实际条目</button><label className="month-picker">
           查看月份
@@ -252,10 +253,10 @@ function MonthlyRow({ item, onSaved }: { item: MonthlyItem; onSaved: () => Promi
         <span className={"variance-badge variance-" + item.variance_effect.toLowerCase()}>{varianceCopy}</span>
       </header>
       <div className="monthly-facts">
-        <div><span>计划金额</span><strong>{item.planned_amount} {item.currency}</strong></div>
-        <div><span>实际净额（条目汇总）</span><strong>{item.actual_amount ?? "尚无条目"} {item.actual_amount ? item.currency : ""}</strong></div>
-        <div><span>偏差</span><strong>{item.variance_amount ?? "N/A"}</strong></div>
-        <div><span>完成率</span><strong>{item.completion_rate_percent ? item.completion_rate_percent + "%" : "N/A"}</strong></div>
+        <div><span>计划金额</span><strong>{formatMoney(item.planned_amount, item.currency)}</strong></div>
+        <div><span>实际净额（条目汇总）</span><strong>{formatMoney(item.actual_amount, item.currency, "尚无条目")}</strong></div>
+        <div><span>偏差</span><strong>{formatMoney(item.variance_amount, item.currency)}</strong></div>
+        <div><span>完成率</span><strong>{formatPercent(item.completion_rate_percent)}</strong></div>
       </div>
       <div className="monthly-meta">{categoryLabel(item.category)} · {flowLabel(item.flow_type)} · {recognitionLabel(item.recognition_mode)}{item.scheduled_date ? ` · 计划支付 ${item.scheduled_date}` : ""} · {statusLabel(item.data_status)} · {item.actual_entry_count} 条</div>
       <div className="monthly-actions">
@@ -289,7 +290,7 @@ function EntryList({ item, entries, pending, error, onSaved }: { item: MonthlyIt
   return <div className="entry-list">
     {entries.length === 0 && <p>还没有实际条目；最终确认为零时无需创建虚假条目。</p>}
     {entries.map((entry) => <div className="entry-row" key={entry.id}>
-      <span>{entry.occurred_on}</span><strong>{entry.effect === "INCREASE" ? "+" : "−"}{entry.amount} {item.currency}</strong>
+      <span>{entry.occurred_on}</span><strong>{formatMoney(`${entry.effect === "INCREASE" ? "+" : "-"}${entry.amount}`, item.currency)}</strong>
       <span>{entry.note ?? (entry.origin === "MIGRATED_AGGREGATE" ? "旧版实际总额迁移" : "无备注")}</span>
       {entry.origin === "USER" && <><button className="button button-quiet" type="button" onClick={() => setEditing(entry)}>编辑</button><button className="button button-danger-quiet" type="button" onClick={() => { if (window.confirm("删除这条实际记录？项目会重新变为待确认。")) deleteMutation.mutate(entry.id); }}>删除</button></>}
     </div>)}

@@ -19,17 +19,23 @@ function Harness() {
 describe("Select", () => {
   it("opens in a portal and selects an option with pointer input", async () => {
     const user = userEvent.setup();
+    const portalHost = document.createElement("div");
+    portalHost.id = "select-portal-root";
+    document.body.append(portalHost);
     render(<Harness />);
     const trigger = screen.getByRole("combobox", { name: "Test select" });
 
     await user.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("listbox", { name: "Test select" })).toBeInTheDocument();
+    const listbox = screen.getByRole("listbox", { name: "Test select" });
+    expect(listbox).toBeInTheDocument();
+    expect(listbox.closest(".select-portal-layer")?.parentElement).toBe(portalHost);
     await user.click(screen.getByRole("option", { name: /Beta/ }));
 
     expect(trigger).toHaveTextContent("Beta");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(trigger).toHaveFocus();
+    portalHost.remove();
   });
 
   it("supports arrows, Enter, typeahead and Escape while retaining focus", async () => {
@@ -82,6 +88,7 @@ describe("Select", () => {
     await user.click(trigger);
     const popover = screen.getByRole("listbox", { name: "Test select" }).parentElement;
     expect(popover).toHaveClass("select-popover-top");
+    expect(popover).toHaveAttribute("data-placement", "top");
     expect(popover).toHaveStyle({ bottom: "47px" });
 
     Object.defineProperty(window, "innerHeight", { configurable: true, value: originalInnerHeight });

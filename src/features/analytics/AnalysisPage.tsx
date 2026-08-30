@@ -14,6 +14,7 @@ import {
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
 import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
+import { formatMoney, formatPercent } from "../../shared/formatting/finance";
 import { categoryLabel, flowLabel } from "../../shared/formatting/labels";
 import { CapacityPanel } from "./CapacityPanel";
 
@@ -73,9 +74,9 @@ export function AnalysisPage() {
     <>
       <header className="page-header">
         <div>
-          <p className="eyebrow">Analysis · {analyticsQuery.data.month}</p>
-          <h1>钱的结构与长期负担健康吗？</h1>
-          <p>分类、占比、排名和承载能力均由原始计划与月度快照实时派生，不保存统计副本。</p>
+          <p className="eyebrow">财务分析 · {analyticsQuery.data.month}</p>
+          <h1>结构与承载能力</h1>
+          <p>分类、占比、项目排名和承载能力均由月度快照实时派生。</p>
         </div>
         <span className="context-chip">
           实际完整度 {percent(analyticsQuery.data.completeness_percent)}
@@ -139,7 +140,7 @@ function StructureSection({
             option={structureOption}
             label={`${analytics.month}${flowLabel(flow)}分类计划与实际占比柱状图`}
           />
-          <CategoryTable categories={categories} actualLabel={actualLabel} />
+          <CategoryTable categories={categories} actualLabel={actualLabel} currency={analytics.currency} />
         </section>
         <section className="analysis-card">
           <header>
@@ -234,18 +235,18 @@ function ProjectRanking({ analytics }: { analytics: MonthAnalytics }) {
                     <td>{mode === "PLANNED" ? project.planned_rank : project.actual_rank}</td>
                     <th>{project.name}</th>
                     <td>{categoryLabel(project.category)}</td>
-                    <td>{mode === "PLANNED" ? project.planned_amount : project.actual_amount}</td>
+                    <td>{formatMoney(mode === "PLANNED" ? project.planned_amount : project.actual_amount, analytics.currency)}</td>
                     <td>
                       {(mode === "PLANNED"
                         ? project.planned_share_percent
-                        : project.actual_share_percent) ?? "N/A"}
+                        : project.actual_share_percent) ?? "—"}
                       {(mode === "PLANNED"
                         ? project.planned_share_percent
                         : project.actual_share_percent) === null
                         ? ""
                         : "%"}
                     </td>
-                    <td>{project.variance_amount ?? "N/A"}</td>
+                    <td>{formatMoney(project.variance_amount, analytics.currency)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -260,9 +261,11 @@ function ProjectRanking({ analytics }: { analytics: MonthAnalytics }) {
 function CategoryTable({
   categories,
   actualLabel,
+  currency,
 }: {
   categories: CategoryBreakdown[];
   actualLabel: string;
+  currency: string;
 }) {
   return (
     <table className="data-table">
@@ -280,9 +283,9 @@ function CategoryTable({
         {categories.map((item) => (
           <tr key={item.category}>
             <th>{categoryLabel(item.category)}</th>
-            <td>{item.planned_amount}</td>
+            <td>{formatMoney(item.planned_amount, currency)}</td>
             <td>{percent(item.planned_share_percent)}</td>
-            <td>{item.actual_to_date ?? "N/A"}</td>
+            <td>{formatMoney(item.actual_to_date, currency)}</td>
             <td>{percent(item.actual_share_percent)}</td>
           </tr>
         ))}
@@ -316,7 +319,7 @@ function CategoryHistoryTable({
             <th>{month.month}</th>
             {categoryCodes.map((category) => (
               <td key={category}>
-                {month.categories.find((item) => item.category === category)?.planned_amount ?? "0.00"}
+                {formatMoney(month.categories.find((item) => item.category === category)?.planned_amount ?? null, month.currency)}
               </td>
             ))}
           </tr>
@@ -342,13 +345,13 @@ function categoryStructureOption(categories: CategoryBreakdown[]) {
         name: "计划占比",
         type: "bar",
         data: categories.map((item) => item.planned_share_percent),
-        itemStyle: { color: "#8ca795" },
+        itemStyle: { color: "#94a3b8" },
       },
       {
         name: "实际占比",
         type: "bar",
         data: categories.map((item) => item.actual_share_percent),
-        itemStyle: { color: "#c79c58" },
+        itemStyle: { color: "#2563eb" },
       },
     ],
   };
@@ -358,7 +361,7 @@ function categoryHistoryOption(history: MonthAnalytics[], flow: FlowFilter) {
   const categories = flow === "INCOME"
     ? ["FIXED_INCOME", "VARIABLE_INCOME"]
     : ["ESSENTIAL_EXPENSE", "FIXED_COMMITMENT_EXPENSE", "DISCRETIONARY_BUDGET"];
-  const colors = ["#426c58", "#88a392", "#c49a5d"];
+  const colors = ["#2563eb", "#4f46e5", "#64748b"];
   return {
     tooltip: { trigger: "axis" },
     legend: { type: "scroll", top: 0, left: 0, right: 0, data: categories.map(categoryLabel), textStyle: chartLegendText },
@@ -383,7 +386,7 @@ function categoryHistoryOption(history: MonthAnalytics[], flow: FlowFilter) {
   };
 }
 
-const chartLegendText = { color: "#596961", fontSize: 11 };
+const chartLegendText = { color: "#64748b", fontSize: 11 };
 
 function compactMonthLabels(count: number) {
   return {
@@ -410,12 +413,12 @@ function projectRankingOption(projects: ProjectBreakdown[], mode: RankingMode) {
         data: projects.map((item) =>
           mode === "PLANNED" ? item.planned_amount : item.actual_amount,
         ),
-        itemStyle: { color: mode === "PLANNED" ? "#6f917b" : "#c79c58" },
+        itemStyle: { color: mode === "PLANNED" ? "#94a3b8" : "#2563eb" },
       },
     ],
   };
 }
 
 function percent(value: string | null) {
-  return value === null ? "N/A" : value + "%";
+  return formatPercent(value);
 }
