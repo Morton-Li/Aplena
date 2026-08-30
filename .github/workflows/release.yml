@@ -1,0 +1,318 @@
+name: Package and release macOS
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+concurrency:
+  group: macos-package-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  APPLE_SIGNING_IDENTITY: Morton Li
+  APP_BUNDLE_IDENTIFIER: li.morton.aplena
+  CODESIGN_CERTIFICATE_SHA256: FEEE897C91F36CAFE6AE34CD4AD50F701C89D688DF68DD22D09E0FFD77635FEB
+
+jobs:
+  metadata:
+    name: Resolve build metadata
+    runs-on: macos-15
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.version.outputs.build }}
+      release: ${{ steps.version.outputs.release }}
+      display_version: ${{ steps.version.outputs.display_version }}
+      manifest_version: ${{ steps.version.outputs.manifest_version }}
+    steps:
+      - name: Resolve trigger and version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          short_sha="${GITHUB_SHA:0:7}"
+          build=false
+          release=false
+          display_version=""
+          manifest_version=""
+
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            build=true
+            display_version="dev-$short_sha"
+            manifest_version="0.0.0"
+          elif [[ "$GITHUB_REF_TYPE" == "branch" && "$GITHUB_REF_NAME" == "main" ]]; then
+            build=true
+            display_version="dev-$short_sha"
+            manifest_version="0.0.0"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            build=true
+            release=true
+            display_version="$GITHUB_REF_NAME"
+            manifest_version="${GITHUB_REF_NAME#v}"
+          else
+            echo "::notice::Ignoring non-release tag $GITHUB_REF_NAME. Expected vMAJOR.MINOR.PATCH."
+          fi
+
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "display_version=$display_version" >> "$GITHUB_OUTPUT"
+          echo "manifest_version=$manifest_version" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: macOS ${{ matrix.name }} package
+    needs: metadata
+    if: needs.metadata.outputs.build == 'true'
+    runs-on: ${{ matrix.runner }}
+    environment: codesign
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+            architecture: arm64
+            artifact_arch: arm64
+          - name: Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            architecture: x86_64
+            artifact_arch: x86_64
+    env:
+      APLENA_BUILD_VERSION: ${{ needs.metadata.outputs.display_version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag commit
+        if: needs.metadata.outputs.release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"; then
+            echo "::error::Release tags must point to a commit in the main branch history."
+            exit 1
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build data
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Write build version
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/set-build-version.mjs "${{ needs.metadata.outputs.manifest_version }}"
+          echo "Build version: $APLENA_BUILD_VERSION"
+
+      - name: Run release gates
+        if: needs.metadata.outputs.release == 'true'
+        run: |
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm build
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --locked
+
+      - name: Import self-signed certificate
+        shell: bash
+        env:
+          CODESIGN_CERTIFICATE_P12_BASE64: ${{ secrets.CODESIGN_CERTIFICATE_P12_BASE64 }}
+          CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.CODESIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$CODESIGN_CERTIFICATE_P12_BASE64" || -z "$CODESIGN_CERTIFICATE_PASSWORD" ]]; then
+            echo "::error::CODESIGN_CERTIFICATE_P12_BASE64 and CODESIGN_CERTIFICATE_PASSWORD are required."
+            exit 1
+          fi
+
+          certificate_path="$RUNNER_TEMP/aplena-signing.p12"
+          keychain_path="$RUNNER_TEMP/aplena-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+
+          echo "::add-mask::$keychain_password"
+          echo "APLENA_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+          printf '%s' "$CODESIGN_CERTIFICATE_P12_BASE64" | openssl base64 -d -A -out "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security default-keychain -s "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$CODESIGN_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -t cert \
+            -f pkcs12 >/dev/null
+          security list-keychains -d user -s "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+
+          imported_certificate="$(security find-certificate \
+            -c "$APPLE_SIGNING_IDENTITY" \
+            -p \
+            "$keychain_path")"
+          imported_fingerprint="$(openssl x509 \
+            -noout \
+            -fingerprint \
+            -sha256 <<< "$imported_certificate" | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          if [[ "$imported_fingerprint" != "$CODESIGN_CERTIFICATE_SHA256" ]]; then
+            echo "::error::Unexpected imported signing certificate fingerprint: $imported_fingerprint"
+            exit 1
+          fi
+
+          identity_sha1="$(openssl x509 \
+            -noout \
+            -fingerprint \
+            -sha1 <<< "$imported_certificate" | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          signing_identities="$(security find-identity -p codesigning "$keychain_path")"
+          echo "$signing_identities"
+          if ! grep -Fq "$identity_sha1" <<< "$signing_identities"; then
+            echo "::error::The expected certificate was imported without an accessible private-key identity."
+            exit 1
+          fi
+
+          echo "APPLE_SIGNING_IDENTITY=$identity_sha1" >> "$GITHUB_ENV"
+
+      - name: Build and package macOS app
+        uses: tauri-apps/tauri-action@v1
+        with:
+          args: --target ${{ matrix.target }} --bundles app,dmg
+
+      - name: Verify and name package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_path="target/${{ matrix.target }}/release/bundle/macos/Aplena.app"
+          test -d "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
+          signature_info="$(codesign -dv --verbose=4 "$app_path" 2>&1)"
+          echo "$signature_info"
+          if ! grep -q '^Authority=Morton Li$' <<< "$signature_info"; then
+            echo "::error::Aplena.app was not signed with the expected Morton Li certificate."
+            exit 1
+          fi
+
+          certificate_prefix="$RUNNER_TEMP/aplena-embedded-certificate"
+          codesign -d --extract-certificates="$certificate_prefix" "$app_path"
+          actual_fingerprint="$(openssl x509 \
+            -inform DER \
+            -in "${certificate_prefix}0" \
+            -noout \
+            -fingerprint \
+            -sha256 | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          if [[ "$actual_fingerprint" != "$CODESIGN_CERTIFICATE_SHA256" ]]; then
+            echo "::error::Unexpected signing certificate fingerprint: $actual_fingerprint"
+            exit 1
+          fi
+
+          executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")"
+          bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
+          if [[ "$bundle_identifier" != "$APP_BUNDLE_IDENTIFIER" ]]; then
+            echo "::error::Expected bundle identifier $APP_BUNDLE_IDENTIFIER, found: $bundle_identifier"
+            exit 1
+          fi
+          if [[ "$bundle_version" != "${{ needs.metadata.outputs.manifest_version }}" ]]; then
+            echo "::error::Expected bundle version ${{ needs.metadata.outputs.manifest_version }}, found: $bundle_version"
+            exit 1
+          fi
+          architectures="$(lipo -archs "$app_path/Contents/MacOS/$executable_name")"
+          if [[ "$architectures" != "${{ matrix.architecture }}" ]]; then
+            echo "::error::Expected ${{ matrix.architecture }} executable, found: $architectures"
+            exit 1
+          fi
+
+          shopt -s nullglob
+          dmg_paths=(target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          if [[ "${#dmg_paths[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one ${{ matrix.artifact_arch }} DMG, found ${#dmg_paths[@]}."
+            exit 1
+          fi
+          hdiutil verify "${dmg_paths[0]}"
+
+          mkdir -p release
+          cp "${dmg_paths[0]}" "release/Aplena-${APLENA_BUILD_VERSION}-macos-${{ matrix.artifact_arch }}.dmg"
+
+      - name: Upload verified package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aplena-${{ needs.metadata.outputs.display_version }}-macos-${{ matrix.artifact_arch }}
+          path: release/*.dmg
+          if-no-files-found: error
+
+      - name: Remove temporary signing keychain
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${APLENA_KEYCHAIN_PATH:-}" ]]; then
+            security delete-keychain "$APLENA_KEYCHAIN_PATH" || true
+          fi
+          rm -f "$RUNNER_TEMP/aplena-signing.p12" "$RUNNER_TEMP"/aplena-embedded-certificate*
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - metadata
+      - package
+    if: needs.metadata.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ needs.metadata.outputs.display_version }}
+          tag_name: ${{ needs.metadata.outputs.display_version }}
+          files: release/*.dmg
+          fail_on_unmatched_files: true
+          generate_release_notes: true

@@ -15,7 +15,11 @@ import {
   upsertExchangeRate,
   type Settings,
 } from "../../shared/api/finance";
-import { fetchEcbReferenceRates } from "../../shared/api/referenceRates";
+import {
+  fetchEcbReferenceRates,
+  isReferenceRateStale,
+  SUPPORTED_CURRENCIES,
+} from "../../shared/api/referenceRates";
 import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
 import { currencyName } from "../../shared/formatting/finance";
@@ -49,7 +53,7 @@ export function SettingsPage() {
         <section className="state-card"><span role="alert">{describeError(settingsQuery.error ?? ratesQuery.error)}</span></section>
       )}
       {settingsQuery.data && ratesQuery.data && <div className="settings-grid">
-        <GeneralSettings settings={settingsQuery.data} currencies={Array.from(new Set(["CNY", "USD", "EUR", "HKD", "JPY", "GBP", ...ratesQuery.data.map((rate) => rate.currency)]))} />
+        <GeneralSettings settings={settingsQuery.data} currencies={Array.from(new Set([...SUPPORTED_CURRENCIES, ...ratesQuery.data.map((rate) => rate.currency)]))} />
         <RateSettings baseCurrency={settingsQuery.data.base_currency} />
       </div>}
     </>
@@ -131,12 +135,20 @@ function RateSettings({ baseCurrency }: { baseCurrency: string }) {
       const observations = await fetchEcbReferenceRates();
       const coveredCurrencies = new Set(observations.map((observation) => observation.currency));
       const currencies = Array.from(new Set([
+        ...SUPPORTED_CURRENCIES,
         ...(ratesQuery.data ?? []).map((rate) => rate.currency),
         ...(plansQuery.data ?? []).map((plan) => plan.currency),
       ])).filter((currency) => currency !== baseCurrency && coveredCurrencies.has(currency));
-      return importReferenceRates({ observations, currencies });
+      const rates = await importReferenceRates({ observations, currencies });
+      const updated = rates.filter((rate) => currencies.includes(rate.currency) && rate.source === "ECB_REFERENCE");
+      if (updated.length === 0) throw new Error("官方参考汇率没有返回可更新的支持币种。");
+      return {
+        rates,
+        updatedCount: updated.length,
+        observedOn: updated.map((rate) => rate.observed_on ?? "").sort().at(-1) ?? "",
+      };
     },
-    onSuccess: async (rates) => {
+    onSuccess: async ({ rates }) => {
       queryClient.setQueryData(queryKeys.rates, rates);
       await refresh();
     },
@@ -156,7 +168,7 @@ function RateSettings({ baseCurrency }: { baseCurrency: string }) {
       <div className="rate-list">
         {ratesQuery.data?.map((rate) => (
           <div className="rate-row" key={rate.currency}>
-            <div><strong>{rate.currency}</strong><small>{rate.is_base_currency ? "本位币 · 固定" : `${rate.source === "ECB_REFERENCE" ? `欧洲央行每日参考汇率 · ${rate.observed_on ?? "日期未知"}` : `备用手动汇率 · ${rate.observed_on ?? "日期未知"}`} · ${rate.plan_reference_count} 个计划引用`}</small></div>
+            <div><strong>{rate.currency}</strong><small>{rate.is_base_currency ? "本位币 · 固定" : `${rate.source === "ECB_REFERENCE" ? `欧洲央行每日参考汇率 · ${rate.observed_on ?? "日期未知"}${rate.observed_on && isReferenceRateStale(rate.observed_on) ? " · 数据日期较早" : ""}` : `备用手动汇率 · ${rate.observed_on ?? "日期未知"}`} · ${rate.plan_reference_count} 个计划引用`}</small></div>
             <code>{rate.rate}</code>
             <div>
               <button className="text-button" disabled={rate.is_base_currency} type="button" onClick={() => startEdit(rate.currency, rate.rate)}>编辑</button>
@@ -165,7 +177,7 @@ function RateSettings({ baseCurrency }: { baseCurrency: string }) {
           </div>
         ))}
       </div>
-      {syncMutation.isSuccess && <div className="inline-success" role="status">欧洲央行每日参考汇率已更新，既有费用的汇率快照未作修改。</div>}
+      {syncMutation.isSuccess && <div className="inline-success" role="status">已更新 {syncMutation.data.updatedCount} 个币种的欧洲央行每日参考汇率{syncMutation.data.observedOn ? `（参考日期 ${syncMutation.data.observedOn}）` : ""}，既有费用的汇率快照未作修改。</div>}
       <form className="rate-form" onSubmit={form.handleSubmit((values) => saveMutation.mutate({ currency: values.currency.toUpperCase(), rate: values.rate }))}>
         <label>币种<input aria-label="汇率币种" disabled={editing !== null} placeholder="USD" maxLength={3} {...form.register("currency")} />{form.formState.errors.currency && <em>{form.formState.errors.currency.message}</em>}</label>
         <label>汇率<input aria-label="汇率值" inputMode="decimal" placeholder="7.25000000" {...form.register("rate")} />{form.formState.errors.rate && <em>{form.formState.errors.rate.message}</em>}</label>

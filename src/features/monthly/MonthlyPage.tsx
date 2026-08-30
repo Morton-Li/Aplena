@@ -23,7 +23,12 @@ import {
   type PlanItem,
   type RateOverrideInput,
 } from "../../shared/api/finance";
-import { deriveReferenceRate, fetchEcbReferenceRates } from "../../shared/api/referenceRates";
+import {
+  deriveReferenceRate,
+  fetchEcbReferenceRates,
+  isReferenceRateStale,
+  SUPPORTED_CURRENCIES,
+} from "../../shared/api/referenceRates";
 import { getDomainContract } from "../../shared/api/domain";
 import { describeError } from "../../shared/formatting/errors";
 import { currencyName, monthLabel } from "../../shared/formatting/finance";
@@ -213,12 +218,18 @@ function EntryDialog({ month, plans, monthlyItems, rates, fixedItem, existing, o
   const [entryMode, setEntryMode] = useState<"MANUAL" | "PLAN_LINKED">("MANUAL");
   const defaultPlanId = fixedItem?.source_plan_item_id ?? plans[0]?.id ?? "";
   const [planId, setPlanId] = useState(defaultPlanId);
-  const selectedItem = fixedItem ?? monthlyItems.find((item) => item.source_plan_item_id === planId);
-  const selectedPlan = plans.find((plan) => plan.id === planId);
+  const selectedItem = fixedItem ?? (entryMode === "PLAN_LINKED"
+    ? monthlyItems.find((item) => item.source_plan_item_id === planId)
+    : undefined);
+  const selectedPlan = entryMode === "PLAN_LINKED"
+    ? plans.find((plan) => plan.id === planId)
+    : undefined;
   const [manualName, setManualName] = useState("");
   const [manualCategory, setManualCategory] = useState("ESSENTIAL_EXPENSE");
   const manualItemRef = useRef<MonthlyItem | null>(null);
-  const flow = selectedItem?.flow_type ?? selectedPlan?.flow_type ?? flowForCategory(manualCategory);
+  const flow = fixedItem?.flow_type
+    ?? (entryMode === "PLAN_LINKED" ? selectedItem?.flow_type ?? selectedPlan?.flow_type : undefined)
+    ?? flowForCategory(manualCategory);
   const [occurredOn, setOccurredOn] = useState(existing?.occurred_on ?? `${month}-01`);
   const [effect, setEffect] = useState<"INCREASE" | "DECREASE">(existing?.effect ?? "INCREASE");
   const baseCurrency = rates.find((rate) => rate.is_base_currency)?.currency ?? fixedItem?.currency ?? "CNY";
@@ -248,9 +259,16 @@ function EntryDialog({ month, plans, monthlyItems, rates, fixedItem, existing, o
           : null;
   const currencyOptions = useMemo(() => Array.from(new Set([
     baseCurrency,
+    ...SUPPORTED_CURRENCIES,
     ...rates.map((rate) => rate.currency),
     ...(referenceQuery.data ?? []).map((rate) => rate.currency),
   ])).sort().map((code) => ({ value: code, label: currencyName(code), description: code })), [baseCurrency, rates, referenceQuery.data]);
+  const contextIsInvalid = fixedItem
+    ? false
+    : entryMode === "MANUAL"
+      ? !manualName.trim() || !manualCategory
+      : !planId;
+  const amountIsInvalid = !/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0;
   const mutation = useMutation({
     mutationFn: async () => {
       let item = selectedItem;
@@ -303,7 +321,7 @@ function EntryDialog({ month, plans, monthlyItems, rates, fixedItem, existing, o
     className="entry-dialog"
     title={existing ? "编辑实际条目" : "添加实际条目"}
     onClose={onClose}
-    footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending || (!fixedItem && entryMode === "MANUAL" ? !manualName.trim() || !manualCategory : !planId) || !/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0 || !ratePreview || (!existing && currency !== baseCurrency && referenceQuery.isFetching)} type="button" onClick={() => mutation.mutate()}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
+    footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending || contextIsInvalid || amountIsInvalid || !ratePreview || (!existing && currency !== baseCurrency && referenceQuery.isFetching)} type="button" onClick={() => mutation.mutate()}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
   >
     {!fixedItem && <>
       <div className="entry-mode-switch" role="group" aria-label="录入方式">
@@ -326,7 +344,7 @@ function EntryDialog({ month, plans, monthlyItems, rates, fixedItem, existing, o
     </div>
     <div className="entry-rate-snapshot" aria-live="polite">
       <span>本次换算基准</span>
-      {ratePreview ? <><strong>1 {currency} = {ratePreview.rate} {baseCurrency}</strong><small>{ratePreview.source === "ECB_REFERENCE" ? `欧洲央行每日参考汇率 · ${ratePreview.observedOn}` : ratePreview.source === "MANUAL" ? `备用手动汇率 · ${ratePreview.observedOn}` : "本位币 1:1"}{existing ? " · 编辑仍沿用原快照" : " · 保存后固定"}</small></> : <><strong>{referenceQuery.isPending ? "正在获取欧洲央行每日参考汇率…" : "暂无可用汇率"}</strong><small>无法获取时可使用设置页中已经保存的备用汇率。</small></>}
+      {ratePreview ? <><strong>1 {currency} = {ratePreview.rate} {baseCurrency}</strong><small>{ratePreview.source === "ECB_REFERENCE" ? `欧洲央行每日参考汇率 · ${ratePreview.observedOn}${isReferenceRateStale(ratePreview.observedOn) ? " · 数据日期较早" : ""}` : ratePreview.source === "MANUAL" ? `备用手动汇率 · ${ratePreview.observedOn}` : "本位币 1:1"}{existing ? " · 编辑仍沿用原快照" : " · 保存后固定"}</small></> : <><strong>{referenceQuery.isPending ? "正在获取欧洲央行每日参考汇率…" : "暂无可用汇率"}</strong><small>无法获取时可使用设置页中已经保存的备用汇率。</small></>}
     </div>
     <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
     {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}

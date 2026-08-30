@@ -192,7 +192,7 @@ export interface CategoryBreakdown {
   actual_to_date: string | null;
   planned_share_percent: string | null;
   actual_share_percent: string | null;
-  missing_actual_count: number;
+  unconfirmed_item_count: number;
 }
 
 export interface ProjectBreakdown {
@@ -216,8 +216,7 @@ export interface MonthAnalytics {
   actual_status: "EMPTY" | "PARTIAL" | "COMPLETE";
   total_item_count: number;
   planned_item_count: number;
-  recorded_item_count: number;
-  completeness_percent: string | null;
+  confirmed_item_count: number;
   income: AmountComparison;
   expense: AmountComparison;
   net_balance: AmountComparison;

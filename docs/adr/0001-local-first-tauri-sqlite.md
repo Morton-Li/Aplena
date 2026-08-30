@@ -44,7 +44,7 @@ Aplena MVP 是单用户个人财务规划软件，没有协作、账户或跨设
 
 - Rust 和各平台 WebView 增加工程技能要求；
 - 同步、协作和移动端未来需要新的架构决策；
-- SQLCipher、签名和 Windows 安装必须做真实平台验证；
+- 未来若引入 SQLCipher 或 Windows 正式安装包，必须分别做真实平台验证；
 - 数据库迁移和崩溃恢复必须正确处理 WAL。
 
 ## 被拒绝的方案
@@ -54,15 +54,17 @@ Aplena MVP 是单用户个人财务规划软件，没有协作、账户或跨设
 - React 直接使用 SQL 插件：权限过宽，容易绕过或复制领域规则。
 - 原生 SwiftUI：macOS 体验优秀，但会显著提高后续 Windows 重写成本。
 
-## 发布门禁
+## 首版发布证据
 
 本决策不把“可构建”当成“可发布”。公开发布前必须分别证明：
 
-- macOS 签名与公证；
-- Windows 构建与安装；
-- 数据库静态加密；
+- macOS 本地 ad-hoc 构建与隔离真实应用冒烟；
+- CI 自签名身份、固定证书指纹、Bundle ID、目标架构和 DMG 完整性；
+- 严格标签版本同步，且正式标签位于 `main` 历史；
 - 数据库迁移与崩溃恢复；
 - 最小 capabilities 与 CSP。
+
+首版不要求 Developer ID、Hardened Runtime、公证或 stapling；CI 自签名也不代表 Apple 信任链。首版接受未静态加密但受本机用户权限保护的 SQLite，边界见 ADR 0006。Windows 是后续平台目标，不阻断当前 macOS 首版。
 
 ## 参考
 

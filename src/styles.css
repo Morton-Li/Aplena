@@ -2045,28 +2045,6 @@ textarea {
   white-space: nowrap;
 }
 
-.completeness-card {
-  display: grid;
-  min-width: 210px;
-  gap: 5px;
-  padding: 17px 19px;
-  background: rgb(255 255 255 / 58%);
-  border: 1px solid rgb(42 67 55 / 10%);
-  border-radius: 16px;
-}
-
-.completeness-card span,
-.completeness-card small {
-  color: #6f7d75;
-  font-size: 11px;
-}
-
-.completeness-card strong {
-  font-family: inherit;
-  font-size: 27px;
-  font-weight: 500;
-}
-
 .status-complete {
   border-color: #b9d2bf;
 }
@@ -4279,6 +4257,42 @@ textarea:focus,
   padding: 7px 11px;
   font-size: 10px;
   white-space: nowrap;
+}
+
+.delete-entry-dialog .dialog-body > p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.delete-entry-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 16px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.delete-entry-summary div {
+  min-width: 0;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.delete-entry-summary div + div {
+  border-left: 1px solid var(--border);
+}
+
+.delete-entry-summary dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.delete-entry-summary dd {
+  margin: 5px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .recurring-rules-panel {
