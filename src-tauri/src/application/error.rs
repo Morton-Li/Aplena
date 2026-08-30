@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use pfcm_domain::DomainError;
 use serde::Serialize;
 
-use crate::infrastructure::{StoreError, protection::ProtectionError};
+use crate::infrastructure::StoreError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AppError {
@@ -133,10 +133,6 @@ impl AppError {
                 "DATABASE_MIGRATION_FAILED",
                 "error.database_migration_failed",
             ),
-            StoreError::MigrationProtection => Self::business(
-                "DATABASE_MIGRATION_PROTECTION_FAILED",
-                "error.database_migration_protection_failed",
-            ),
             StoreError::FutureSchema => {
                 Self::business("DATABASE_SCHEMA_TOO_NEW", "error.database_schema_too_new")
             }
@@ -175,52 +171,6 @@ impl AppError {
             StoreError::Database(_) => Self::business(
                 "DATABASE_OPERATION_FAILED",
                 "error.database_operation_failed",
-            ),
-        }
-    }
-
-    pub fn from_protection(error: ProtectionError) -> Self {
-        match error {
-            ProtectionError::InvalidArchive | ProtectionError::Manifest(_) => {
-                Self::business("BACKUP_INVALID", "error.backup_invalid")
-            }
-            ProtectionError::FutureFormat | ProtectionError::FutureSchema => {
-                Self::business("BACKUP_VERSION_TOO_NEW", "error.backup_version_too_new")
-            }
-            ProtectionError::ChecksumMismatch => {
-                Self::business("BACKUP_CHECKSUM_MISMATCH", "error.backup_checksum_mismatch")
-            }
-            ProtectionError::IntegrityFailed => {
-                Self::business("BACKUP_INTEGRITY_FAILED", "error.backup_integrity_failed")
-            }
-            ProtectionError::InvariantFailed => Self::business(
-                "BACKUP_DOMAIN_VALIDATION_FAILED",
-                "error.backup_domain_validation_failed",
-            ),
-            ProtectionError::SizeLimitExceeded => Self::business(
-                "BACKUP_SIZE_LIMIT_EXCEEDED",
-                "error.backup_size_limit_exceeded",
-            ),
-            ProtectionError::DestinationExists => Self::business(
-                "EXPORT_DESTINATION_EXISTS",
-                "error.export_destination_exists",
-            ),
-            ProtectionError::FileDatabaseRequired => {
-                Self::business("FILE_DATABASE_REQUIRED", "error.file_database_required")
-            }
-            ProtectionError::Store(StoreError::FutureSchema) => {
-                Self::business("BACKUP_VERSION_TOO_NEW", "error.backup_version_too_new")
-            }
-            ProtectionError::Store(StoreError::Migration(_)) => {
-                Self::business("BACKUP_MIGRATION_FAILED", "error.backup_migration_failed")
-            }
-            ProtectionError::Archive(_)
-            | ProtectionError::Io(_)
-            | ProtectionError::Csv(_)
-            | ProtectionError::Database(_)
-            | ProtectionError::Store(_) => Self::business(
-                "DATA_PROTECTION_OPERATION_FAILED",
-                "error.data_protection_failed",
             ),
         }
     }

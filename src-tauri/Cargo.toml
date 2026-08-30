@@ -13,17 +13,13 @@ tauri-build.workspace = true
 
 [dependencies]
 chrono.workspace = true
-csv.workspace = true
 pfcm-domain = { path = "../crates/pfcm-domain" }
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 sqlx.workspace = true
 tauri.workspace = true
-tauri-plugin-dialog.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
-zip.workspace = true

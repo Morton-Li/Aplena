@@ -237,54 +237,6 @@ export interface FinancialCapacity {
   stable_income_coverage_ratio: string | null;
 }
 
-export interface DataSummary {
-  settings: {
-    target_month: string;
-    base_currency: string;
-    minimum_savings_rate_basis_points: number;
-  } | null;
-  settings_count: number;
-  exchange_rate_count: number;
-  plan_item_count: number;
-  monthly_item_count: number;
-  actual_entry_count: number;
-  first_month: string | null;
-  last_month: string | null;
-}
-
-export interface BackupResult {
-  status: "CREATED" | "CANCELLED";
-  file_name: string | null;
-  created_at: string | null;
-  summary: DataSummary | null;
-}
-
-export interface RestoreInspection {
-  status: "READY" | "CANCELLED";
-  token: string | null;
-  file_name: string | null;
-  backup_created_at: string | null;
-  backup_app_version: string | null;
-  schema_version: number | null;
-  migrations_applied: boolean;
-  summary: DataSummary | null;
-  current_summary: DataSummary | null;
-}
-
-export interface RestoreResult {
-  restored: boolean;
-  recovery_point_name: string;
-  restored_at: string;
-  summary: DataSummary;
-}
-
-export interface CsvExportResult {
-  status: "CREATED" | "CANCELLED";
-  folder_name: string | null;
-  created_at: string | null;
-  file_count: number;
-}
-
 export const queryKeys = {
   domain: ["domain-contract"] as const,
   settings: ["settings"] as const,
@@ -520,23 +472,4 @@ export function getFinancialCapacity(
   invokeCommand: Invoke = invoke,
 ): Promise<FinancialCapacity> {
   return invokeCommand<FinancialCapacity>("get_financial_capacity", { targetMonth });
-}
-
-export function createBackup(invokeCommand: Invoke = invoke): Promise<BackupResult> {
-  return invokeCommand<BackupResult>("create_backup");
-}
-
-export function inspectBackup(invokeCommand: Invoke = invoke): Promise<RestoreInspection> {
-  return invokeCommand<RestoreInspection>("inspect_backup");
-}
-
-export function restoreBackup(
-  input: { token: string; confirmed: boolean; confirmationPhrase: string },
-  invokeCommand: Invoke = invoke,
-): Promise<RestoreResult> {
-  return invokeCommand<RestoreResult>("restore_backup", { input });
-}
-
-export function exportCsv(invokeCommand: Invoke = invoke): Promise<CsvExportResult> {
-  return invokeCommand<CsvExportResult>("export_csv");
 }

@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::str::FromStr;
 
 use pfcm_domain::{
     ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, Category,
@@ -19,25 +16,19 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: SqlitePool,
-    database_path: Option<PathBuf>,
 }
 
 impl Store {
-    pub fn new(pool: SqlitePool, database_path: Option<PathBuf>) -> Self {
-        Self {
-            pool,
-            database_path,
-        }
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
+    #[cfg(test)]
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
 
-    pub(crate) fn database_path(&self) -> Option<&Path> {
-        self.database_path.as_deref()
-    }
-
+    #[cfg(test)]
     pub(crate) async fn close(&self) {
         self.pool.close().await;
     }

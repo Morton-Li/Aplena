@@ -1,6 +1,6 @@
 # Aplena 数据库 Schema
 
-当前 schema：3
+当前 schema：4
 数据库：SQLite STRICT tables + foreign keys + WAL
 
 ## 1. 存储约定
@@ -12,7 +12,7 @@ RATE_SCALE   = 100_000_000
 
 - 金额列以分为单位存为 64 位 `INTEGER`；
 - 汇率列以八位缩放整数存储；
-- IPC、备份 manifest 摘要和 CSV 不暴露缩放整数；
+- IPC 不暴露缩放整数；
 - 日期为规范 `YYYY-MM-DD` 文本；月份为当月第一日；
 - 时间戳为 UTC ISO 8601 文本；
 - UUID 存为 36 字符文本；
@@ -154,7 +154,7 @@ END AS derived_actual_amount_scaled
 ## 9. 迁移链
 
 - `0001_initial.sql`：最初四表模型；
-- `0002_data_protection.sql`：数据保护约束和索引；
+- `0002_monthly_source_index.sql`：月度来源查询索引；
 - `0003_actual_entries_daily_dates_cents.sql`：五表、日级日期、分精度与实际条目模型；
 - `0004_manual_monthly_items.sql`：增加月度项目创建来源和手动项目约束。
 
@@ -179,29 +179,4 @@ cents = old_scaled / 100 + (old_scaled % 100 >= 50 ? 1 : 0)
 - 旧正式 PAYMENT 快照的支付日取原月锚点，以保持历史可解释；
 - 删除旧聚合实际列，创建实际条目表、索引和触发器。
 
-应用在迁移前创建恢复点并校验校验和。发现未来 schema 时拒绝启动，不做降级写入。
-
-## 10. 备份格式
-
-当前 manifest `format_version = 2`、`schema_version = 3`，摘要包含：
-
-- 设置、本位币、目标月；
-- 五张业务表记录数；
-- 最早和最晚月度范围；
-- SQLite 快照 SHA-256 和大小。
-
-格式 1 只含旧四表摘要。检查流程将数据库复制到隔离目录，执行当前追加迁移，再验证当前五表结构；对比旧 manifest 时使用旧四表和月范围口径，恢复结果使用格式 2 摘要。
-
-## 11. CSV
-
-导出文件：
-
-```text
-settings.csv
-exchange_rates.csv
-plan_items.csv
-monthly_items.csv
-actual_entries.csv
-```
-
-金额输出固定两位、汇率固定八位。`monthly_items.csv` 使用 `derived_actual_amount`、`actual_entry_count`、`actual_confirmed_at`、`data_status` 等列明确说明实际值为派生结果。CSV 没有 manifest、约束或事务语义，不可用于恢复。
+发现未来 schema 时拒绝启动，不做降级写入。追加迁移由 SQLx 顺序执行；任何迁移失败都会阻止应用进入业务流程。

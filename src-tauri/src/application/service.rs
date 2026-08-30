@@ -22,7 +22,6 @@ use crate::infrastructure::{
 
 use super::{
     analytics::build_month_analytics,
-    data_protection::DataProtectionState,
     dto::{
         ActualEntryDto, ActualEntryInputDto, ConfirmActualsDto, ConfirmActualsInputDto,
         ConfirmMonthlyItemInputDto, DeletePlanItemDto, EnsureActualOnlyInputDto, ExchangeRateDto,
@@ -47,7 +46,6 @@ pub struct FinanceService {
     pub(crate) store: Arc<RwLock<Store>>,
     pub(crate) operation_gate: Arc<RwLock<()>>,
     pub(crate) startup_status: Arc<RwLock<StartupStatusDto>>,
-    pub(crate) data_protection: Arc<DataProtectionState>,
 }
 
 impl FinanceService {
@@ -61,7 +59,6 @@ impl FinanceService {
                 initialization: None,
                 error: None,
             })),
-            data_protection: Arc::new(DataProtectionState::default()),
         })
     }
 
