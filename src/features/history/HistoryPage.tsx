@@ -126,7 +126,7 @@ function HistoryMonthRow({ analytics }: { analytics: MonthAnalytics }) {
       <td className="numeric-column history-secondary-column">{formatMoney(analytics.expense.actual_to_date, analytics.currency)}</td>
       <td className="numeric-column history-net-value">{formatMoney(analytics.net_balance.actual_to_date, analytics.currency)}</td>
       <td className="numeric-column history-secondary-column">{formatPercent(analytics.actual_savings_rate_percent)}</td>
-      <td className="history-plan-column"><span className="history-plan-state">{analytics.planned_item_count > 0 ? "有计划基准" : "仅实际"}</span><small>{analytics.recorded_item_count}/{analytics.total_item_count} 项已录入</small></td>
+      <td className="history-plan-column"><span className="history-plan-state">{analytics.planned_item_count > 0 ? "有计划基准" : "仅实际"}</span><small>{analytics.confirmed_item_count}/{analytics.total_item_count} 项已确认</small></td>
       <td><Link aria-label={`查看 ${monthLabel(analytics.month)} 详细报告`} className="history-row-action" to={reportPath}>查看报告</Link></td>
     </tr>
   );
@@ -151,8 +151,7 @@ function MonthReportPage({ requestedMonth, months }: { requestedMonth: string; m
         </div>
         <div className="history-report-context">
           <span className={`context-chip status-${selected.actual_status.toLowerCase()}`}>{statusLabel(selected.actual_status)}</span>
-          <strong>完整度 {formatPercent(selected.completeness_percent)}</strong>
-          <small>{selected.recorded_item_count}/{selected.total_item_count} 项已录入</small>
+          <strong>{selected.confirmed_item_count}/{selected.total_item_count} 项已确认</strong>
         </div>
       </header>
       {(previous || next) && <nav className="month-report-navigation" aria-label="相邻月份">

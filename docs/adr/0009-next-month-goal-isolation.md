@@ -17,7 +17,7 @@
 
 ## 后果
 
-- schema 5 新增 `next_month_goal`，从旧 `settings.minimum_savings_rate_bp` 迁移当前值，并从 `settings` 删除目标月份和储蓄率；
+- 预发布 schema 5 曾把目标从设置拆入 `next_month_goal`；首个公开版 schema 1 直接包含独立目标表和精简后的设置表；
 - 总览和历史报表不再展示动态“最低储蓄目标”，储蓄率完成度只比较该月冻结计划；
 - 设置页只管理本位币和汇率；
 - 旧 `/plans` 路由兼容跳转到 `/goals`；

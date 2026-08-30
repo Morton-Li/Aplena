@@ -1,6 +1,6 @@
 # Aplena 数据库 Schema
 
-当前 schema：5
+当前正式 schema：1
 数据库：SQLite STRICT tables + foreign keys + WAL
 
 ## 1. 存储约定
@@ -51,7 +51,9 @@ RATE_SCALE   = 100_000_000
 |---|---|---|
 | `currency_code` | TEXT | 三位大写 ASCII，主键 |
 | `rate_scaled` | INTEGER | > 0 |
-| `created_at` / `updated_at` | TEXT | 非空 |
+| `updated_at` | TEXT | 非空 |
+| `source` | TEXT | 非空；`BASE_CURRENCY` / `ECB_REFERENCE` / `MANUAL` |
+| `observed_on` | TEXT | 可空；参考或手动汇率的观察日期 |
 
 计划通过外键阻止删除仍被使用的币种。本位币汇率不能改离 1。
 
@@ -119,6 +121,11 @@ PLANNED + PAYMENT => scheduled_date IS NOT NULL
 | `occurred_on` | TEXT | 否 | 合法日级日期 |
 | `effect` | TEXT | 否 | `INCREASE` / `DECREASE` |
 | `amount_scaled` | INTEGER | 否 | > 0，单位分 |
+| `source_amount_scaled` | INTEGER | 否 | > 0，录入币种金额，单位分 |
+| `source_currency_code` | TEXT | 否 | 录入币种外键 |
+| `exchange_rate_scaled` | INTEGER | 否 | > 0，录入时固化的八位汇率 |
+| `exchange_rate_source` | TEXT | 否 | 本位币、ECB、手动或预发布迁移来源 |
+| `exchange_rate_observed_on` | TEXT | 否 | 固化汇率的观察日期 |
 | `origin` | TEXT | 否 | `USER` / `MIGRATED_AGGREGATE` |
 | `note` | TEXT | 是 | 备注或迁移说明 |
 | `created_at` / `updated_at` | TEXT | 否 | 审计字段 |
@@ -162,33 +169,13 @@ END AS derived_actual_amount_scaled
 | 确认 | `actual_confirmed_at` | 不创建条目或总额 |
 | 分析 | 无写入 | 实时查询 |
 
-## 9. 迁移链
+## 9. 正式迁移基线
 
-- `0001_initial.sql`：最初四表模型；
-- `0002_monthly_source_index.sql`：月度来源查询索引；
-- `0003_actual_entries_daily_dates_cents.sql`：五表、日级日期、分精度与实际条目模型；
-- `0004_manual_monthly_items.sql`：增加月度项目创建来源和手动项目约束。
-- `0005_next_month_goals.sql`：从设置中迁移储蓄率，新增独立下月目标，并精简设置表。
+- `0001_initial_release.sql`：首个公开版的完整六表结构、7 个业务索引和 12 个触发器；
+- 新安装的 `_sqlx_migrations` 只记录该正式基线；
+- 基线不包含旧金额转换、临时表、过渡列或数据搬运语句；
+- 正式发布后的变更只允许追加迁移，不再改写 schema 1。
 
-已发布迁移不可编辑，只能追加。
+预发布六段迁移的最终结构已冻结为测试夹具。自动测试同时比较 `sqlite_schema`、列、类型、默认值、非空与主键、外键、索引列、触发器和 STRICT 属性，并验证高版本预发布库会在不修改内容的前提下被拒绝。现有本地预发布数据必须遵循[独立换轨方案](08-pre-release-database-transition.md)，不能直接修改 `_sqlx_migrations`。
 
-### 9.1 schema 3 转换
-
-迁移在单一 SQL 迁移事务中重建计划和月度表：
-
-- 旧 `start_month` / `end_month` 作为相应日级日期保留；
-- 旧金额从四位缩放整数转为分：
-
-```text
-cents = old_scaled / 100 + (old_scaled % 100 >= 50 ? 1 : 0)
-```
-
-旧数据为非负，因此该整数公式等价于 `ROUND_HALF_UP`，避免使用 SQLite `REAL` 及大整数乘法溢出。
-
-- 旧月度实际为 `NULL`：不创建条目、不确认；
-- 旧月度实际为 0：不创建虚假条目，写入确认时间；
-- 旧月度实际大于 0 且舍入后至少 1 分：创建 `MIGRATED_AGGREGATE` 增加条目并确认；
-- 旧正式 PAYMENT 快照的支付日取原月锚点，以保持历史可解释；
-- 删除旧聚合实际列，创建实际条目表、索引和触发器。
-
-发现未来 schema 时拒绝启动，不做降级写入。追加迁移由 SQLx 顺序执行；任何迁移失败都会阻止应用进入业务流程。
+发现未来 schema 时拒绝启动，不做降级写入。任何正式迁移失败都会阻止应用进入业务流程。
