@@ -7,6 +7,12 @@ export default defineConfig({
   build: {
     // ECharts is isolated in an on-demand route chunk rather than the startup bundle.
     chunkSizeWarningLimit: 550,
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        financialWorkspace: "financial-workspace-v2.html",
+      },
+    },
   },
   server: {
     host: "127.0.0.1",

@@ -12,11 +12,13 @@
       {
         "label": "main",
         "title": "Aplena",
+        "url": "financial-workspace-v2.html",
         "width": 1180,
         "height": 760,
         "minWidth": 820,
         "minHeight": 600,
-        "resizable": true
+        "resizable": true,
+        "zoomHotkeysEnabled": true
       }
     ],
     "security": {
