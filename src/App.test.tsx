@@ -171,8 +171,7 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
     actual_status: "PARTIAL",
     total_item_count: 3,
     planned_item_count: 3,
-    recorded_item_count: 2,
-    completeness_percent: "66.67",
+    confirmed_item_count: 2,
     income: {
       planned: "30000.00",
       actual_to_date: "28700.00",
@@ -206,7 +205,7 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: "28700.00",
         planned_share_percent: "100.00",
         actual_share_percent: "100.00",
-        missing_actual_count: 0,
+        unconfirmed_item_count: 0,
       },
       {
         category: "VARIABLE_INCOME",
@@ -215,7 +214,7 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: null,
         planned_share_percent: "0.00",
         actual_share_percent: null,
-        missing_actual_count: 0,
+        unconfirmed_item_count: 0,
       },
       {
         category: "ESSENTIAL_EXPENSE",
@@ -224,7 +223,7 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: "6427.00",
         planned_share_percent: "67.74",
         actual_share_percent: "76.27",
-        missing_actual_count: 1,
+        unconfirmed_item_count: 1,
       },
       {
         category: "FIXED_COMMITMENT_EXPENSE",
@@ -233,7 +232,7 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: "2000.00",
         planned_share_percent: "21.51",
         actual_share_percent: "23.73",
-        missing_actual_count: 0,
+        unconfirmed_item_count: 0,
       },
       {
         category: "DISCRETIONARY_BUDGET",
@@ -242,7 +241,7 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: null,
         planned_share_percent: "10.75",
         actual_share_percent: null,
-        missing_actual_count: 1,
+        unconfirmed_item_count: 1,
       },
     ],
     projects: [
@@ -711,7 +710,7 @@ describe("planning workflows", () => {
     expect(screen.getByText("无论哪种模式，财务承载能力都按月均负担计算。")).toBeInTheDocument();
   });
 
-  it("shows actual completeness states and records expense/refund entries without editing totals", async () => {
+  it("shows actual confirmation states and records expense/refund entries without editing totals", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     installHarness({
@@ -1236,8 +1235,7 @@ describe("dashboard and capacity analytics", () => {
         actual_status: "EMPTY",
         total_item_count: 0,
         planned_item_count: 0,
-        recorded_item_count: 0,
-        completeness_percent: null,
+        confirmed_item_count: 0,
         income: emptyComparison,
         expense: emptyComparison,
         net_balance: emptyComparison,
@@ -1267,8 +1265,7 @@ describe("dashboard and capacity analytics", () => {
         monthAnalytics({
           month: "2026-07",
           actual_status: "COMPLETE",
-          recorded_item_count: 3,
-          completeness_percent: "100.00",
+          confirmed_item_count: 3,
         }),
         monthAnalytics(),
       ],
@@ -1297,8 +1294,8 @@ describe("dashboard and capacity analytics", () => {
   it("groups monthly reports by year with newest periods expanded first", async () => {
     installHarness({
       history: [
-        monthAnalytics({ month: "2025-12", actual_status: "COMPLETE", recorded_item_count: 3, completeness_percent: "100.00" }),
-        monthAnalytics({ month: "2026-07", actual_status: "COMPLETE", recorded_item_count: 3, completeness_percent: "100.00" }),
+        monthAnalytics({ month: "2025-12", actual_status: "COMPLETE", confirmed_item_count: 3 }),
+        monthAnalytics({ month: "2026-07", actual_status: "COMPLETE", confirmed_item_count: 3 }),
         monthAnalytics({ month: "2026-08" }),
       ],
     });
@@ -1314,6 +1311,8 @@ describe("dashboard and capacity analytics", () => {
     const latestTable = screen.getByRole("table", { name: "2026 年月度详细报告" });
     const latestHeaders = within(latestTable).getAllByRole("columnheader");
     expect(latestHeaders.slice(2, 6).every((header) => header.classList.contains("numeric-column"))).toBe(true);
+    expect(within(latestTable).getByText("2/3 项已确认")).toBeInTheDocument();
+    expect(within(latestTable).queryByText(/项已录入/)).not.toBeInTheDocument();
     expect(latestYear.querySelector(".history-year-chevron")).toBeEmptyDOMElement();
     const latestMonthLinks = within(latestTable).getAllByRole("link").filter((link) => link.classList.contains("history-month-link"));
     expect(latestMonthLinks.map((link) => link.textContent)).toEqual(["2026 年 8 月", "2026 年 7 月"]);
@@ -1347,8 +1346,13 @@ describe("dashboard and capacity analytics", () => {
     await user.click(await screen.findByText("2026 年 8 月"));
 
     expect(await screen.findByRole("heading", { name: "月度执行结果" })).toBeInTheDocument();
+    expect(screen.getByText("2/3 项已确认")).toBeInTheDocument();
+    expect(screen.queryByText(/完整度/)).not.toBeInTheDocument();
     expect(screen.getAllByText("固定承诺支出").length).toBeGreaterThan(0);
     expect(screen.getByText("房租")).toBeInTheDocument();
+    const categoryTable = screen.getByRole("table", { name: "分类结构图对应数据" });
+    expect(within(categoryTable).getByRole("columnheader", { name: "未确认" })).toBeInTheDocument();
+    expect(within(categoryTable).queryByRole("columnheader", { name: "未录入" })).not.toBeInTheDocument();
     await user.click(screen.getByLabelText("排名依据"));
     await user.click(screen.getByRole("option", { name: "实际金额" }));
     expect(screen.queryByText("房租")).not.toBeInTheDocument();

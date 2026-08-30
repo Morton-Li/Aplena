@@ -26,7 +26,7 @@ pub fn build_month_analytics(
     let planned_expense = sum_planned(items, FlowType::Expense);
     let actual_income = sum_actual(items, FlowType::Income);
     let actual_expense = sum_actual(items, FlowType::Expense);
-    let recorded_count = items
+    let confirmed_count = items
         .iter()
         .filter(|item| {
             matches!(
@@ -41,14 +41,14 @@ pub fn build_month_analytics(
         .iter()
         .filter(|item| item.item_source() == MonthlyItemSource::Planned)
         .count();
-    let actual_status = if total_count == 0 || (!any_actual && recorded_count == 0) {
+    let actual_status = if total_count == 0 || (!any_actual && confirmed_count == 0) {
         "EMPTY"
-    } else if recorded_count == total_count {
+    } else if confirmed_count == total_count {
         "COMPLETE"
     } else {
         "PARTIAL"
     };
-    let any_recorded = any_actual || recorded_count > 0;
+    let any_recorded = any_actual || confirmed_count > 0;
     let planned_net = planned_income - planned_expense;
     let actual_net = any_recorded
         .then(|| actual_income.unwrap_or(Decimal::ZERO) - actual_expense.unwrap_or(Decimal::ZERO));
@@ -96,7 +96,7 @@ pub fn build_month_analytics(
                 planned_share_percent: share_percent(planned, Some(flow_total)),
                 actual_share_percent: actual
                     .and_then(|actual| share_percent(actual, actual_flow_total)),
-                missing_actual_count: u64::try_from(
+                unconfirmed_item_count: u64::try_from(
                     category_items
                         .iter()
                         .filter(|item| {
@@ -208,12 +208,7 @@ pub fn build_month_analytics(
         actual_status: actual_status.to_owned(),
         total_item_count: u64::try_from(total_count).unwrap_or(u64::MAX),
         planned_item_count: u64::try_from(planned_count).unwrap_or(u64::MAX),
-        recorded_item_count: u64::try_from(recorded_count).unwrap_or(u64::MAX),
-        completeness_percent: (total_count > 0).then(|| {
-            format_percent(
-                Decimal::from(recorded_count) / Decimal::from(total_count) * Decimal::ONE_HUNDRED,
-            )
-        }),
+        confirmed_item_count: u64::try_from(confirmed_count).unwrap_or(u64::MAX),
         income: comparison(planned_income, actual_income, true),
         expense: comparison(planned_expense, actual_expense, false),
         net_balance: comparison(planned_net, actual_net, true),
@@ -347,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregates_income_expense_savings_completeness_and_variance_semantics() {
+    fn aggregates_income_expense_confirmation_and_variance_semantics() {
         let items = vec![
             item("工资", Category::FixedIncome, "10000", Some("11000")),
             item("奖金", Category::VariableIncome, "1000", None),
@@ -374,7 +369,7 @@ mod tests {
             Some("68.18")
         );
         assert_eq!(analytics.actual_status, "PARTIAL");
-        assert_eq!(analytics.completeness_percent.as_deref(), Some("75.00"));
+        assert_eq!(analytics.confirmed_item_count, 3);
         assert_eq!(analytics.important_variances[0].name, "工资");
         assert_eq!(
             analytics.important_variances[0].variance_effect,
@@ -433,14 +428,14 @@ mod tests {
 
         let empty = build_month_analytics(YearMonth::new(2026, 7).unwrap(), "CNY", &[]);
         assert_eq!(empty.actual_status, "EMPTY");
-        assert_eq!(empty.completeness_percent, None);
+        assert_eq!(empty.confirmed_item_count, 0);
         assert!(empty.projects.is_empty());
 
         let missing_actual = vec![item("未录入", Category::FixedIncome, "100", None)];
         let no_actuals =
             build_month_analytics(YearMonth::new(2026, 8).unwrap(), "CNY", &missing_actual);
         assert_eq!(no_actuals.actual_status, "EMPTY");
-        assert_eq!(no_actuals.completeness_percent.as_deref(), Some("0.00"));
+        assert_eq!(no_actuals.confirmed_item_count, 0);
         assert_eq!(no_actuals.income.actual_to_date, None);
     }
 

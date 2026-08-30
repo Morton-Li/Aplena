@@ -273,7 +273,7 @@ pub struct CategoryBreakdownDto {
     pub actual_to_date: Option<String>,
     pub planned_share_percent: Option<String>,
     pub actual_share_percent: Option<String>,
-    pub missing_actual_count: u64,
+    pub unconfirmed_item_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -299,8 +299,7 @@ pub struct MonthAnalyticsDto {
     pub actual_status: String,
     pub total_item_count: u64,
     pub planned_item_count: u64,
-    pub recorded_item_count: u64,
-    pub completeness_percent: Option<String>,
+    pub confirmed_item_count: u64,
     pub income: AmountComparisonDto,
     pub expense: AmountComparisonDto,
     pub net_balance: AmountComparisonDto,

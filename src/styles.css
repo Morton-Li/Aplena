@@ -2045,28 +2045,6 @@ textarea {
   white-space: nowrap;
 }
 
-.completeness-card {
-  display: grid;
-  min-width: 210px;
-  gap: 5px;
-  padding: 17px 19px;
-  background: rgb(255 255 255 / 58%);
-  border: 1px solid rgb(42 67 55 / 10%);
-  border-radius: 16px;
-}
-
-.completeness-card span,
-.completeness-card small {
-  color: #6f7d75;
-  font-size: 11px;
-}
-
-.completeness-card strong {
-  font-family: inherit;
-  font-size: 27px;
-  font-weight: 500;
-}
-
 .status-complete {
   border-color: #b9d2bf;
 }
