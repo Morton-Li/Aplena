@@ -75,7 +75,7 @@ export function DashboardPage() {
   const hasPlanBaseline = analytics.planned_item_count > 0;
 
   return (
-    <>
+    <div className="dashboard-page">
       <DashboardHeader analytics={analytics} hasPlanBaseline={hasPlanBaseline} />
       {analytics.total_item_count === 0 ? (
         <EmptyDashboard month={analytics.month} currency={analytics.currency} />
@@ -91,7 +91,7 @@ export function DashboardPage() {
           <VarianceReport analytics={analytics} />
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -102,16 +102,6 @@ function DashboardHeader({ analytics, hasPlanBaseline }: { analytics: MonthAnaly
         <p className="eyebrow">财务总览</p>
         <h1>{monthLabel(analytics.month)}</h1>
         <p>{currencyName(analytics.currency)} · {hasPlanBaseline ? "本月冻结计划与实际数据汇总" : "本月实际收支与财务报表汇总"}</p>
-      </div>
-      <div className={`data-status status-${analytics.actual_status.toLowerCase()}`}>
-        <span className="data-status-indicator" aria-hidden="true" />
-        <div>
-          <span>实际数据完成度</span>
-          <strong>{formatPercent(analytics.completeness_percent)}</strong>
-          <small>
-            {analytics.recorded_item_count}/{analytics.total_item_count} 项 · {actualStatusLabel(analytics.actual_status)}
-          </small>
-        </div>
       </div>
     </header>
   );
@@ -228,6 +218,7 @@ function DashboardCharts({
     () => financialTrendOption(recentHistory, analytics.currency),
     [analytics.currency, recentHistory],
   );
+  const savingsOption = useMemo(() => savingsTrendOption(recentHistory), [recentHistory]);
   const comparisonOption = useMemo(() => planActualOption(analytics, hasPlanBaseline), [analytics, hasPlanBaseline]);
   const expenses = useMemo(
     () =>
@@ -249,7 +240,7 @@ function DashboardCharts({
         <ReportCard eyebrow="历史趋势" title="收入、支出与净结余">
           {hasActualHistory(recentHistory) ? (
             <>
-              <AnalyticsChart option={trendOption} label="近八个月实际收入、支出与净结余趋势图" height={300} />
+              <AnalyticsChart option={trendOption} label="近八个月实际收入、支出与净结余趋势图" height={244} />
               <TrendDataTable months={recentHistory} currency={analytics.currency} />
             </>
           ) : (
@@ -257,7 +248,7 @@ function DashboardCharts({
           )}
         </ReportCard>
         <ReportCard eyebrow="本月执行" title={hasPlanBaseline ? "计划与实际" : "实际收支概览"}>
-          <AnalyticsChart option={comparisonOption} label={`${analytics.month}收入、支出与净结余${hasPlanBaseline ? "计划实际分组" : "实际"}柱状图`} height={300} />
+          <AnalyticsChart option={comparisonOption} label={`${analytics.month}收入、支出与净结余${hasPlanBaseline ? "计划实际分组" : "实际"}柱状图`} height={244} />
           <p className="chart-note">{hasPlanBaseline ? "灰蓝代表计划，蓝色代表当前实际；缺失实际不会按 0 绘制。" : "当前仅展示实际数据；配置周期规则后可增加计划对比。"}</p>
         </ReportCard>
       </div>
@@ -265,11 +256,21 @@ function DashboardCharts({
         <ReportCard eyebrow="支出结构" title="分类金额与占比">
           {expenses.length > 0 ? (
             <>
-              <AnalyticsChart option={expenseOption} label={`${analytics.month}支出分类${hasPlanBaseline ? "计划与实际" : "实际"}横向条形图`} height={Math.max(260, expenses.length * 54)} />
+              <AnalyticsChart option={expenseOption} label={`${analytics.month}支出分类${hasPlanBaseline ? "计划与实际" : "实际"}横向条形图`} height={Math.max(220, expenses.length * 44)} />
               <CategoryDataTable categories={expenses} currency={analytics.currency} hasPlanBaseline={hasPlanBaseline} />
             </>
           ) : (
             <ChartEmpty message="当前月份没有可绘制的支出分类。" />
+          )}
+        </ReportCard>
+        <ReportCard eyebrow="储蓄表现" title="计划与实际储蓄率趋势">
+          {hasSavingsHistory(recentHistory) ? (
+            <>
+              <AnalyticsChart option={savingsOption} label="近八个月计划储蓄率与实际储蓄率趋势图" height={244} />
+              <SavingsTrendDataTable months={recentHistory} />
+            </>
+          ) : (
+            <ChartEmpty message="至少形成一个月份的实际储蓄率后显示趋势图。" />
           )}
         </ReportCard>
       </div>
@@ -365,6 +366,12 @@ function TrendDataTable({ months, currency }: { months: MonthAnalytics[]; curren
   );
 }
 
+function SavingsTrendDataTable({ months }: { months: MonthAnalytics[] }) {
+  return (
+    <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><caption className="sr-only">储蓄率趋势精确数据</caption><thead><tr><th>月份</th><th>计划储蓄率</th><th>实际储蓄率</th></tr></thead><tbody>{months.map((month) => <tr key={month.month}><th><Link className="table-link" to={`/history/${month.month}`}>{month.month}</Link></th><td>{month.planned_item_count > 0 ? formatPercent(month.planned_savings_rate_percent) : "—"}</td><td>{formatPercent(month.actual_savings_rate_percent)}</td></tr>)}</tbody></table></div></details>
+  );
+}
+
 function CategoryDataTable({ categories, currency, hasPlanBaseline }: { categories: CategoryBreakdown[]; currency: string; hasPlanBaseline: boolean }) {
   return (
     <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><thead><tr><th>分类</th><th>计划</th><th>实际</th><th>实际占比</th></tr></thead><tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, currency) : "—"}</td><td>{formatMoney(item.actual_to_date, currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody></table></div></details>
@@ -391,6 +398,37 @@ function financialTrendOption(months: MonthAnalytics[], currency: string) {
       { name: "收入", type: "line", data: visible.map((month) => decimalValue(month.income.actual_to_date)), symbolSize: 6, itemStyle: { color: "#2563eb" }, lineStyle: { width: 2, color: "#2563eb" }, connectNulls: false },
       { name: "支出", type: "line", data: visible.map((month) => decimalValue(month.expense.actual_to_date)), symbolSize: 6, itemStyle: { color: "#64748b" }, lineStyle: { width: 2, color: "#64748b" }, connectNulls: false },
       { name: "净结余", type: "line", data: visible.map((month) => decimalValue(month.net_balance.actual_to_date)), symbolSize: 6, itemStyle: { color: "#4f46e5" }, lineStyle: { width: 2, color: "#4f46e5" }, connectNulls: false },
+    ],
+  };
+}
+
+function savingsTrendOption(months: MonthAnalytics[]) {
+  const visible = months.slice(-8);
+  return {
+    tooltip: { trigger: "axis", valueFormatter: (value: number | string) => `${value}%` },
+    legend: { top: 0, left: 0, data: ["计划储蓄率", "实际储蓄率"], textStyle: chartText },
+    grid: { left: 52, right: 18, top: 48, bottom: 36 },
+    xAxis: { type: "category", boundaryGap: false, data: visible.map((month) => month.month.slice(2)), axisLabel: chartText, axisLine },
+    yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => `${value}%` }, splitLine },
+    series: [
+      {
+        name: "计划储蓄率",
+        type: "line",
+        data: visible.map((month) => month.planned_item_count > 0 ? decimalValue(month.planned_savings_rate_percent) : null),
+        symbolSize: 6,
+        itemStyle: { color: "#94a3b8" },
+        lineStyle: { width: 2, color: "#94a3b8", type: "dashed" },
+        connectNulls: false,
+      },
+      {
+        name: "实际储蓄率",
+        type: "line",
+        data: visible.map((month) => decimalValue(month.actual_savings_rate_percent)),
+        symbolSize: 6,
+        itemStyle: { color: "#2563eb" },
+        lineStyle: { width: 2, color: "#2563eb" },
+        connectNulls: false,
+      },
     ],
   };
 }
@@ -436,6 +474,10 @@ function expenseStructureOption(categories: CategoryBreakdown[], currency: strin
 
 function hasActualHistory(months: MonthAnalytics[]) {
   return months.some((month) => month.income.actual_to_date !== null || month.expense.actual_to_date !== null || month.net_balance.actual_to_date !== null);
+}
+
+function hasSavingsHistory(months: MonthAnalytics[]) {
+  return months.some((month) => month.actual_savings_rate_percent !== null);
 }
 
 function comparisonDetail(comparison: AmountComparison, currency: string, actualQualifier: string) {

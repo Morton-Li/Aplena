@@ -18,8 +18,8 @@ use super::{
         InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
         MonthInitializationStatusDto, MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto,
         NextMonthGoalDto, NextMonthGoalInputDto, PlanItemDto, PlanItemInputDto, PlanPreviewDto,
-        PlanPreviewRequestDto, SettingsDto, SettingsInputDto, StartupStatusDto,
-        StopPlanItemRequestDto,
+        PlanPreviewRequestDto, ReferenceRateImportDto, SettingsDto, SettingsInputDto,
+        StartupStatusDto, StopPlanItemRequestDto,
     },
     error::AppError,
     service::FinanceService,
@@ -82,6 +82,14 @@ pub async fn upsert_exchange_rate(
     input: ExchangeRateUpsertDto,
 ) -> Result<Vec<ExchangeRateDto>, AppError> {
     service.upsert_exchange_rate(input).await
+}
+
+#[tauri::command]
+pub async fn import_reference_rates(
+    service: State<'_, FinanceService>,
+    input: ReferenceRateImportDto,
+) -> Result<Vec<ExchangeRateDto>, AppError> {
+    service.import_reference_rates(input).await
 }
 
 #[tauri::command]

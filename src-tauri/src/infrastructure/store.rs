@@ -9,8 +9,8 @@ use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, pool::PoolConnection};
 use uuid::Uuid;
 
 use super::{
-    DeletePlanResult, StoreError, StoredActualEntry, StoredExchangeRate, StoredMonthlyItem,
-    StoredNextMonthGoal, StoredPlanItem, StoredSettings,
+    ActualEntryExchangeSnapshot, DeletePlanResult, StoreError, StoredActualEntry,
+    StoredExchangeRate, StoredMonthlyItem, StoredNextMonthGoal, StoredPlanItem, StoredSettings,
 };
 
 #[derive(Debug, Clone)]
@@ -49,11 +49,13 @@ impl Store {
     ) -> Result<StoredSettings, StoreError> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO exchange_rates (currency_code, rate_scaled, updated_at) \
-             VALUES (?, 100000000, ?) \
-             ON CONFLICT(currency_code) DO UPDATE SET rate_scaled = 100000000, updated_at = excluded.updated_at",
+            "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
+             VALUES (?, 100000000, 'BASE_CURRENCY', date(?), ?) \
+             ON CONFLICT(currency_code) DO UPDATE SET rate_scaled = 100000000, \
+             source = 'BASE_CURRENCY', observed_on = excluded.observed_on, updated_at = excluded.updated_at",
         )
         .bind(settings.base_currency().as_str())
+        .bind(timestamp)
         .bind(timestamp)
         .execute(&mut *transaction)
         .await?;
@@ -79,11 +81,12 @@ impl Store {
     ) -> Result<StoredSettings, StoreError> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
-            "INSERT INTO exchange_rates (currency_code, rate_scaled, updated_at) \
-             VALUES (?, 100000000, ?) \
+            "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
+             VALUES (?, 100000000, 'BASE_CURRENCY', date(?), ?) \
              ON CONFLICT(currency_code) DO NOTHING",
         )
         .bind(settings.base_currency().as_str())
+        .bind(timestamp)
         .bind(timestamp)
         .execute(&mut *transaction)
         .await?;
@@ -141,11 +144,11 @@ impl Store {
             return Ok(Vec::new());
         };
         let rows = sqlx::query(
-            "SELECT e.currency_code, e.rate_scaled, e.updated_at, \
+            "SELECT e.currency_code, e.rate_scaled, e.source, e.observed_on, e.updated_at, \
                     COUNT(p.id) AS plan_reference_count \
              FROM exchange_rates e \
              LEFT JOIN plan_items p ON p.currency_code = e.currency_code \
-             GROUP BY e.currency_code, e.rate_scaled, e.updated_at \
+             GROUP BY e.currency_code, e.rate_scaled, e.source, e.observed_on, e.updated_at \
              ORDER BY e.currency_code",
         )
         .fetch_all(&self.pool)
@@ -159,19 +162,52 @@ impl Store {
     pub async fn upsert_exchange_rate(
         &self,
         exchange_rate: &ExchangeRate,
+        source: &str,
+        observed_on: Option<CalendarDate>,
         timestamp: &str,
     ) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO exchange_rates (currency_code, rate_scaled, updated_at) \
-             VALUES (?, ?, ?) \
+            "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
+             VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT(currency_code) DO UPDATE \
-             SET rate_scaled = excluded.rate_scaled, updated_at = excluded.updated_at",
+             SET rate_scaled = excluded.rate_scaled, source = excluded.source, \
+                 observed_on = excluded.observed_on, updated_at = excluded.updated_at",
         )
         .bind(exchange_rate.source_currency().as_str())
         .bind(exchange_rate.scaled_i64())
+        .bind(source)
+        .bind(observed_on.map(|date| date.to_string()))
         .bind(timestamp)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_exchange_rates(
+        &self,
+        exchange_rates: &[ExchangeRate],
+        source: &str,
+        observed_on: Option<CalendarDate>,
+        timestamp: &str,
+    ) -> Result<(), StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        for exchange_rate in exchange_rates {
+            sqlx::query(
+                "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
+                 VALUES (?, ?, ?, ?, ?) \
+                 ON CONFLICT(currency_code) DO UPDATE \
+                 SET rate_scaled = excluded.rate_scaled, source = excluded.source, \
+                     observed_on = excluded.observed_on, updated_at = excluded.updated_at",
+            )
+            .bind(exchange_rate.source_currency().as_str())
+            .bind(exchange_rate.scaled_i64())
+            .bind(source)
+            .bind(observed_on.map(|date| date.to_string()))
+            .bind(timestamp)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -461,9 +497,12 @@ impl Store {
         monthly_item_id: Uuid,
     ) -> Result<Vec<StoredActualEntry>, StoreError> {
         let rows = sqlx::query(
-            "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, e.origin, \
-                    e.note, e.created_at, e.updated_at, m.month \
+            "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, \
+                    e.source_amount_scaled, e.source_currency_code, e.exchange_rate_scaled, \
+                    e.exchange_rate_source, e.exchange_rate_observed_on, e.origin, e.note, \
+                    e.created_at, e.updated_at, m.month, s.base_currency_code \
              FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id \
+             JOIN settings s ON s.id = 1 \
              WHERE e.monthly_item_id = ? ORDER BY e.occurred_on DESC, e.created_at DESC, e.id",
         )
         .bind(monthly_item_id.to_string())
@@ -475,17 +514,25 @@ impl Store {
     pub async fn insert_actual_entry(
         &self,
         entry: &ActualEntry,
+        exchange_snapshot: &ActualEntryExchangeSnapshot,
         timestamp: &str,
     ) -> Result<StoredActualEntry, StoreError> {
         sqlx::query(
             "INSERT INTO actual_entries (id, monthly_item_id, occurred_on, effect, amount_scaled, \
-                    origin, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    source_amount_scaled, source_currency_code, exchange_rate_scaled, \
+                    exchange_rate_source, exchange_rate_observed_on, origin, note, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(entry.id().to_string())
         .bind(entry.monthly_item_id().to_string())
         .bind(entry.occurred_on().to_string())
         .bind(entry.effect().code())
         .bind(entry.amount().scaled_i64())
+        .bind(exchange_snapshot.source_amount.scaled_i64())
+        .bind(exchange_snapshot.source_currency.as_str())
+        .bind(exchange_snapshot.exchange_rate.scaled_i64())
+        .bind(&exchange_snapshot.source)
+        .bind(exchange_snapshot.observed_on.to_string())
         .bind(entry.origin().code())
         .bind(entry.note())
         .bind(timestamp)
@@ -498,15 +545,23 @@ impl Store {
     pub async fn update_actual_entry(
         &self,
         entry: &ActualEntry,
+        exchange_snapshot: &ActualEntryExchangeSnapshot,
         timestamp: &str,
     ) -> Result<StoredActualEntry, StoreError> {
         let result = sqlx::query(
-            "UPDATE actual_entries SET occurred_on = ?, effect = ?, amount_scaled = ?, note = ?, \
-                    updated_at = ? WHERE id = ? AND origin = 'USER'",
+            "UPDATE actual_entries SET occurred_on = ?, effect = ?, amount_scaled = ?, \
+                    source_amount_scaled = ?, source_currency_code = ?, exchange_rate_scaled = ?, \
+                    exchange_rate_source = ?, exchange_rate_observed_on = ?, note = ?, updated_at = ? \
+             WHERE id = ? AND origin = 'USER'",
         )
         .bind(entry.occurred_on().to_string())
         .bind(entry.effect().code())
         .bind(entry.amount().scaled_i64())
+        .bind(exchange_snapshot.source_amount.scaled_i64())
+        .bind(exchange_snapshot.source_currency.as_str())
+        .bind(exchange_snapshot.exchange_rate.scaled_i64())
+        .bind(&exchange_snapshot.source)
+        .bind(exchange_snapshot.observed_on.to_string())
         .bind(entry.note())
         .bind(timestamp)
         .bind(entry.id().to_string())
@@ -526,9 +581,12 @@ impl Store {
 
     pub async fn get_actual_entry(&self, id: Uuid) -> Result<StoredActualEntry, StoreError> {
         let row = sqlx::query(
-            "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, e.origin, \
-                    e.note, e.created_at, e.updated_at, m.month \
-             FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id WHERE e.id = ?",
+            "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, \
+                    e.source_amount_scaled, e.source_currency_code, e.exchange_rate_scaled, \
+                    e.exchange_rate_source, e.exchange_rate_observed_on, e.origin, e.note, \
+                    e.created_at, e.updated_at, m.month, s.base_currency_code \
+             FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id \
+             JOIN settings s ON s.id = 1 WHERE e.id = ?",
         )
         .bind(id.to_string())
         .fetch_optional(&self.pool)
@@ -692,6 +750,12 @@ fn exchange_rate_from_row(
             row.try_get("rate_scaled")?,
         )?,
         currency,
+        source: row.try_get("source")?,
+        observed_on: row
+            .try_get::<Option<String>, _>("observed_on")?
+            .as_deref()
+            .map(CalendarDate::from_str)
+            .transpose()?,
         updated_at: row.try_get("updated_at")?,
         plan_reference_count: row.try_get("plan_reference_count")?,
     })
@@ -788,6 +852,8 @@ fn actual_entry_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredActualEn
     let monthly_item_id = Uuid::parse_str(row.try_get::<String, _>("monthly_item_id")?.as_str())
         .map_err(|_| StoreError::InvalidUuid)?;
     let month = YearMonth::from_database_anchor(row.try_get::<String, _>("month")?.as_str())?;
+    let source_currency = CurrencyCode::new(row.try_get::<String, _>("source_currency_code")?)?;
+    let base_currency = CurrencyCode::new(row.try_get::<String, _>("base_currency_code")?)?;
     Ok(StoredActualEntry {
         value: ActualEntry::new(
             id,
@@ -799,6 +865,20 @@ fn actual_entry_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredActualEn
             ActualEntryOrigin::from_str(row.try_get::<String, _>("origin")?.as_str())?,
             row.try_get("note")?,
         )?,
+        exchange_snapshot: ActualEntryExchangeSnapshot {
+            source_amount: Amount::from_scaled_i64(row.try_get("source_amount_scaled")?)?,
+            source_currency: source_currency.clone(),
+            exchange_rate: ExchangeRate::from_scaled_i64(
+                source_currency,
+                base_currency,
+                row.try_get("exchange_rate_scaled")?,
+            )?,
+            source: row.try_get("exchange_rate_source")?,
+            observed_on: CalendarDate::from_str(
+                row.try_get::<String, _>("exchange_rate_observed_on")?
+                    .as_str(),
+            )?,
+        },
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

@@ -1,5 +1,6 @@
 use pfcm_domain::{
-    ActualEntry, CurrencyCode, ExchangeRate, MonthlyItem, NextMonthGoal, PlanItem, Settings,
+    ActualEntry, Amount, CalendarDate, CurrencyCode, ExchangeRate, MonthlyItem, NextMonthGoal,
+    PlanItem, Settings,
 };
 use uuid::Uuid;
 
@@ -21,8 +22,19 @@ pub struct StoredNextMonthGoal {
 pub struct StoredExchangeRate {
     pub currency: CurrencyCode,
     pub exchange_rate: ExchangeRate,
+    pub source: String,
+    pub observed_on: Option<CalendarDate>,
     pub updated_at: String,
     pub plan_reference_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActualEntryExchangeSnapshot {
+    pub source_amount: Amount,
+    pub source_currency: CurrencyCode,
+    pub exchange_rate: ExchangeRate,
+    pub source: String,
+    pub observed_on: CalendarDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +55,7 @@ pub struct StoredMonthlyItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredActualEntry {
     pub value: ActualEntry,
+    pub exchange_snapshot: ActualEntryExchangeSnapshot,
     pub created_at: String,
     pub updated_at: String,
 }

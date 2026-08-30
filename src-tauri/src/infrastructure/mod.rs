@@ -10,7 +10,7 @@ pub use database::open_database;
 pub use database::open_memory_database;
 pub use error::StoreError;
 pub use models::{
-    DeletePlanResult, StoredActualEntry, StoredExchangeRate, StoredMonthlyItem,
-    StoredNextMonthGoal, StoredPlanItem, StoredSettings,
+    ActualEntryExchangeSnapshot, DeletePlanResult, StoredActualEntry, StoredExchangeRate,
+    StoredMonthlyItem, StoredNextMonthGoal, StoredPlanItem, StoredSettings,
 };
 pub use store::Store;

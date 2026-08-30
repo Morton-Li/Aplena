@@ -1,5 +1,14 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Component, lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import {
+  Component,
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { HashRouter, Navigate, NavLink, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
 import { getDomainContract } from "./shared/api/domain";
@@ -32,7 +41,7 @@ const navigation = [
   { to: "/dashboard", label: "总览", icon: "dashboard" },
   { to: "/monthly", label: "月度执行", icon: "calendar" },
   { to: "/history", label: "历史报表", icon: "history" },
-  { to: "/goals", label: "目标", icon: "target" },
+  { to: "/goals", label: "配置预算", icon: "target" },
   { to: "/settings", label: "设置", icon: "settings" },
 ] as const;
 
@@ -131,11 +140,14 @@ function AppBootstrap() {
 }
 
 function AppLayout({ currentMonth, settings }: { currentMonth: string; settings: Settings }) {
+  const mainContentRef = useRef<HTMLElement>(null);
+
   return (
     <div className="app-shell">
-      <RouteScrollReset />
+      <WindowDragRegion />
+      <RouteScrollReset scrollContainerRef={mainContentRef} />
       <AppSidebar currentMonth={currentMonth} settings={settings} />
-      <main className="main-content">
+      <main className="main-content" ref={mainContentRef}>
         <Suspense fallback={<section className="state-card">正在打开页面…</section>}>
           <Outlet />
         </Suspense>
@@ -144,11 +156,13 @@ function AppLayout({ currentMonth, settings }: { currentMonth: string; settings:
   );
 }
 
-function RouteScrollReset() {
+function RouteScrollReset({ scrollContainerRef }: { scrollContainerRef: RefObject<HTMLElement | null> }) {
   const location = useLocation();
   useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [location.pathname]);
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
+  }, [location.pathname, scrollContainerRef]);
   return null;
 }
 
@@ -165,6 +179,7 @@ function ApplicationFrameState({
 }) {
   return (
     <div className="app-shell app-shell-state">
+      <WindowDragRegion />
       <AppSidebar />
       <main className="main-content" aria-live={tone === "error" ? "assertive" : "polite"}>
         <header className="page-header compact-header">
@@ -197,11 +212,15 @@ function ApplicationFrameState({
   );
 }
 
+function WindowDragRegion() {
+  return <div aria-hidden="true" className="window-drag-region" data-tauri-drag-region />;
+}
+
 function AppSidebar({ currentMonth, settings }: { currentMonth?: string; settings?: Settings }) {
   return (
     <aside className="sidebar" aria-label="主导航">
       <div className="brand-block">
-        <div className="brand-mark" aria-hidden="true">A</div>
+        <div className="brand-mark" aria-hidden="true"><span>$</span></div>
         <div>
           <p className="brand-name">Aplena</p>
           <p className="brand-caption">Financial Capacity</p>

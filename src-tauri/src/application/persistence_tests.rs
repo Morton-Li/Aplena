@@ -11,7 +11,7 @@ use super::{
         ActualEntryInputDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto,
         EnsureActualOnlyInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto,
         ManualMonthlyItemInputDto, NextMonthGoalInputDto, PlanItemInputDto, RateOverrideDto,
-        SettingsInputDto,
+        ReferenceRateImportDto, ReferenceRateObservationDto, SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -263,6 +263,20 @@ async fn legacy_four_decimal_database_migrates_to_cents_entries_and_confirmation
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].value.origin().code(), "MIGRATED_AGGREGATE");
     assert_eq!(entries[0].value.amount().decimal_string(), "1.01");
+    assert_eq!(
+        entries[0].exchange_snapshot.source_amount.decimal_string(),
+        "1.01"
+    );
+    assert_eq!(entries[0].exchange_snapshot.source_currency.as_str(), "CNY");
+    assert_eq!(
+        entries[0].exchange_snapshot.exchange_rate.decimal_string(),
+        "1.00000000"
+    );
+    assert_eq!(entries[0].exchange_snapshot.source, "MIGRATED_BASE");
+    assert_eq!(
+        entries[0].exchange_snapshot.observed_on.to_string(),
+        entries[0].value.occurred_on().to_string()
+    );
 }
 
 #[tokio::test]
@@ -532,6 +546,10 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
             occurred_on: format!("{next}-01"),
             effect: "DECREASE".to_owned(),
             amount: "25.00".to_owned(),
+            currency: "CNY".to_owned(),
+            exchange_rate: "1.00000000".to_owned(),
+            exchange_rate_source: "BASE_CURRENCY".to_owned(),
+            exchange_rate_observed_on: format!("{next}-01"),
             note: Some("迟到退款".to_owned()),
         })
         .await
@@ -584,6 +602,10 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
             occurred_on: format!("{next}-02"),
             effect: "INCREASE".to_owned(),
             amount: "1.00".to_owned(),
+            currency: "CNY".to_owned(),
+            exchange_rate: "1.00000000".to_owned(),
+            exchange_rate_source: "BASE_CURRENCY".to_owned(),
+            exchange_rate_observed_on: format!("{next}-02"),
             note: None,
         })
         .await
@@ -618,6 +640,10 @@ async fn manual_monthly_item_accepts_actual_entries_without_a_plan() {
             occurred_on: format!("{current}-02"),
             effect: "INCREASE".to_owned(),
             amount: "3200.00".to_owned(),
+            currency: "CNY".to_owned(),
+            exchange_rate: "1.00000000".to_owned(),
+            exchange_rate_source: "BASE_CURRENCY".to_owned(),
+            exchange_rate_observed_on: format!("{current}-02"),
             note: Some("月租".to_owned()),
         })
         .await
@@ -633,6 +659,142 @@ async fn manual_monthly_item_accepts_actual_entries_without_a_plan() {
     assert_eq!(refreshed.actual_amount.as_deref(), Some("3200.00"));
     assert_eq!(refreshed.variance_amount, None);
     assert_eq!(refreshed.variance_effect, "UNKNOWN");
+}
+
+#[tokio::test]
+async fn official_cross_rates_and_actual_entry_snapshots_stay_fixed_and_atomic() {
+    let service = test_service().await;
+    let current = current_month();
+    let observations = vec![
+        ReferenceRateObservationDto {
+            currency: "CNY".to_owned(),
+            euro_rate: "7.8251".to_owned(),
+            observed_on: "2026-08-28".to_owned(),
+        },
+        ReferenceRateObservationDto {
+            currency: "USD".to_owned(),
+            euro_rate: "1.1643".to_owned(),
+            observed_on: "2026-08-28".to_owned(),
+        },
+    ];
+    let imported = service
+        .import_reference_rates(ReferenceRateImportDto {
+            observations: observations.clone(),
+            currencies: vec!["USD".to_owned()],
+        })
+        .await
+        .unwrap();
+    let usd = imported.iter().find(|rate| rate.currency == "USD").unwrap();
+    assert_eq!(usd.rate, "6.72086232");
+    assert_eq!(usd.source, "ECB_REFERENCE");
+    assert_eq!(usd.observed_on.as_deref(), Some("2026-08-28"));
+
+    let item = service
+        .create_manual_monthly_item(ManualMonthlyItemInputDto {
+            name: "美元费用".to_owned(),
+            month: current.to_string(),
+            category: "ESSENTIAL_EXPENSE".to_owned(),
+            note: None,
+        })
+        .await
+        .unwrap();
+    let created = service
+        .create_actual_entry(ActualEntryInputDto {
+            id: None,
+            monthly_item_id: item.id.clone(),
+            occurred_on: format!("{current}-18"),
+            effect: "INCREASE".to_owned(),
+            amount: "100.00".to_owned(),
+            currency: "USD".to_owned(),
+            exchange_rate: usd.rate.clone(),
+            exchange_rate_source: usd.source.clone(),
+            exchange_rate_observed_on: usd.observed_on.clone().unwrap(),
+            note: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(created.source_amount, "100.00");
+    assert_eq!(created.source_currency, "USD");
+    assert_eq!(created.amount, "672.09");
+    assert_eq!(created.exchange_rate, "6.72086232");
+    assert_eq!(created.exchange_rate_source, "ECB_REFERENCE");
+
+    service
+        .import_reference_rates(ReferenceRateImportDto {
+            observations: vec![
+                ReferenceRateObservationDto {
+                    currency: "CNY".to_owned(),
+                    euro_rate: "8".to_owned(),
+                    observed_on: "2026-08-29".to_owned(),
+                },
+                ReferenceRateObservationDto {
+                    currency: "USD".to_owned(),
+                    euro_rate: "2".to_owned(),
+                    observed_on: "2026-08-29".to_owned(),
+                },
+            ],
+            currencies: vec!["USD".to_owned()],
+        })
+        .await
+        .unwrap();
+    let unchanged = service
+        .list_actual_entries(item.id.clone())
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(unchanged.amount, "672.09");
+    assert_eq!(unchanged.exchange_rate, "6.72086232");
+    assert_eq!(unchanged.exchange_rate_observed_on, "2026-08-28");
+
+    let edited = service
+        .update_actual_entry(ActualEntryInputDto {
+            id: Some(created.id.clone()),
+            monthly_item_id: item.id.clone(),
+            occurred_on: format!("{current}-19"),
+            effect: "INCREASE".to_owned(),
+            amount: "200.00".to_owned(),
+            currency: "EUR".to_owned(),
+            exchange_rate: "99".to_owned(),
+            exchange_rate_source: "MANUAL".to_owned(),
+            exchange_rate_observed_on: "2026-08-29".to_owned(),
+            note: Some("编辑金额但保留基准".to_owned()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(edited.source_amount, "200.00");
+    assert_eq!(edited.source_currency, "USD");
+    assert_eq!(edited.amount, "1344.17");
+    assert_eq!(edited.exchange_rate, "6.72086232");
+    assert_eq!(edited.exchange_rate_source, "ECB_REFERENCE");
+    assert_eq!(edited.exchange_rate_observed_on, "2026-08-28");
+
+    service
+        .delete_exchange_rate("USD".to_owned())
+        .await
+        .unwrap_err();
+    let rates_before_failure = service.list_exchange_rates().await.unwrap();
+    let usd_before_failure = rates_before_failure
+        .iter()
+        .find(|rate| rate.currency == "USD")
+        .unwrap()
+        .rate
+        .clone();
+    service
+        .import_reference_rates(ReferenceRateImportDto {
+            observations,
+            currencies: vec!["USD".to_owned(), "ZZZ".to_owned()],
+        })
+        .await
+        .unwrap_err();
+    let rates_after_failure = service.list_exchange_rates().await.unwrap();
+    assert_eq!(
+        rates_after_failure
+            .iter()
+            .find(|rate| rate.currency == "USD")
+            .unwrap()
+            .rate,
+        usd_before_failure
+    );
 }
 
 #[tokio::test]
@@ -997,6 +1159,10 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
             occurred_on: format!("{current}-15"),
             effect: "INCREASE".to_owned(),
             amount: "427.00".to_owned(),
+            currency: "CNY".to_owned(),
+            exchange_rate: "1.00000000".to_owned(),
+            exchange_rate_source: "BASE_CURRENCY".to_owned(),
+            exchange_rate_observed_on: format!("{current}-15"),
             note: None,
         })
         .await
@@ -1015,6 +1181,10 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
             occurred_on: format!("{current}-16"),
             effect: "DECREASE".to_owned(),
             amount: "500.00".to_owned(),
+            currency: "CNY".to_owned(),
+            exchange_rate: "1.00000000".to_owned(),
+            exchange_rate_source: "BASE_CURRENCY".to_owned(),
+            exchange_rate_observed_on: format!("{current}-16"),
             note: Some("退款超过本月支出".to_owned()),
         })
         .await
@@ -1049,6 +1219,10 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
             occurred_on: format!("{wrong_month}-01"),
             effect: "DECREASE".to_owned(),
             amount: "400.00".to_owned(),
+            currency: "CNY".to_owned(),
+            exchange_rate: "1.00000000".to_owned(),
+            exchange_rate_source: "BASE_CURRENCY".to_owned(),
+            exchange_rate_observed_on: format!("{wrong_month}-01"),
             note: Some("调整退款".to_owned()),
         })
         .await
@@ -1062,6 +1236,10 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
             occurred_on: format!("{current}-17"),
             effect: "DECREASE".to_owned(),
             amount: "400.00".to_owned(),
+            currency: "CNY".to_owned(),
+            exchange_rate: "1.00000000".to_owned(),
+            exchange_rate_source: "BASE_CURRENCY".to_owned(),
+            exchange_rate_observed_on: format!("{current}-17"),
             note: Some("调整退款".to_owned()),
         })
         .await

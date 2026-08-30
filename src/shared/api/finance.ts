@@ -24,6 +24,8 @@ export interface ExchangeRate {
   base_currency: string;
   rate: string;
   is_base_currency: boolean;
+  source: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL";
+  observed_on: string | null;
   plan_reference_count: number;
   updated_at: string;
 }
@@ -98,6 +100,10 @@ export interface ActualEntryInput {
   occurredOn: string;
   effect: "INCREASE" | "DECREASE";
   amount: string;
+  currency: string;
+  exchangeRate: string;
+  exchangeRateSource: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL";
+  exchangeRateObservedOn: string;
   note?: string;
 }
 
@@ -107,6 +113,11 @@ export interface ActualEntry {
   occurred_on: string;
   effect: "INCREASE" | "DECREASE";
   amount: string;
+  source_amount: string;
+  source_currency: string;
+  exchange_rate: string;
+  exchange_rate_source: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL" | "MIGRATED_BASE";
+  exchange_rate_observed_on: string;
   origin: "USER" | "MIGRATED_AGGREGATE";
   note: string | null;
   created_at: string;
@@ -116,6 +127,12 @@ export interface ActualEntry {
 export interface RateOverrideInput {
   currency: string;
   rate: string;
+}
+
+export interface ReferenceRateObservation {
+  currency: string;
+  euroRate: string;
+  observedOn: string;
 }
 
 export interface InitializeMonthInput {
@@ -291,6 +308,13 @@ export function upsertExchangeRate(
   invokeCommand: Invoke = invoke,
 ): Promise<ExchangeRate[]> {
   return invokeCommand<ExchangeRate[]>("upsert_exchange_rate", { input });
+}
+
+export function importReferenceRates(
+  input: { observations: ReferenceRateObservation[]; currencies: string[] },
+  invokeCommand: Invoke = invoke,
+): Promise<ExchangeRate[]> {
+  return invokeCommand<ExchangeRate[]>("import_reference_rates", { input });
 }
 
 export function deleteExchangeRate(
