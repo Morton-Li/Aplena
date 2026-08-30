@@ -50,18 +50,12 @@ export function GoalsPage() {
     <>
       <header className="page-header compact-header goal-page-header">
         <div>
-          <p className="eyebrow">下月目标</p>
-          <h1>{monthLabel(goal.target_month)}</h1>
-          <p>提前设定下一自然月的储蓄目标并评估承载能力。</p>
+          <p className="eyebrow">下月规划</p>
+          <h1>配置预算</h1>
+          <p>为 {monthLabel(goal.target_month)} 设定储蓄目标并评估承载能力。</p>
         </div>
         <div className="goal-month-badge"><span>目标期间</span><strong>{goal.target_month}</strong><small>由系统自动推进</small></div>
       </header>
-
-      <section className="goal-boundary" aria-label="目标适用范围">
-        <div><span>当前月</span><strong>不联动</strong><small>不会改写本月执行</small></div>
-        <div><span>历史月</span><strong>不回溯</strong><small>不会改变历史报表</small></div>
-        <div><span>生效范围</span><strong>仅下月</strong><small>跨月后重新设定</small></div>
-      </section>
 
       <div className="goal-overview-grid">
         <GoalSettings goal={goal} />
@@ -122,7 +116,7 @@ function CapacitySummary({ capacity, hasRules }: { capacity: FinancialCapacity; 
           <CapacityDataTable capacity={capacity} />
         </>
       ) : (
-        <div className="chart-empty goal-chart-empty"><span aria-hidden="true" /><p>添加周期规则后，这里会按下月收入、支出与储蓄目标计算承载力。</p></div>
+        <div className="chart-empty goal-chart-empty"><p>添加周期规则后，这里会按下月收入、支出与储蓄目标计算承载力。</p></div>
       )}
     </section>
   );
@@ -169,5 +163,5 @@ function capacityWaterfallOption(capacity: FinancialCapacity) {
 }
 
 function GoalLoading() {
-  return <><header className="page-header compact-header"><div><p className="eyebrow">下月目标</p><h1>正在准备目标空间</h1></div></header><section className="dashboard-loading" aria-label="正在加载下月目标"><div className="workspace-skeleton workspace-skeleton-wide" /><div className="workspace-skeleton-grid"><div className="workspace-skeleton" /><div className="workspace-skeleton" /></div></section></>;
+  return <><header className="page-header compact-header"><div><p className="eyebrow">下月规划</p><h1>配置预算</h1></div></header><section className="dashboard-loading" aria-label="正在加载配置预算页面"><div className="workspace-skeleton workspace-skeleton-wide" /><div className="workspace-skeleton-grid"><div className="workspace-skeleton" /><div className="workspace-skeleton" /></div></section></>;
 }

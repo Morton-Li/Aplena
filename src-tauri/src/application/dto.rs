@@ -40,8 +40,25 @@ pub struct ExchangeRateDto {
     pub base_currency: String,
     pub rate: String,
     pub is_base_currency: bool,
+    pub source: String,
+    pub observed_on: Option<String>,
     pub plan_reference_count: i64,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceRateObservationDto {
+    pub currency: String,
+    pub euro_rate: String,
+    pub observed_on: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceRateImportDto {
+    pub observations: Vec<ReferenceRateObservationDto>,
+    pub currencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -109,6 +126,10 @@ pub struct ActualEntryInputDto {
     pub occurred_on: String,
     pub effect: String,
     pub amount: String,
+    pub currency: String,
+    pub exchange_rate: String,
+    pub exchange_rate_source: String,
+    pub exchange_rate_observed_on: String,
     pub note: Option<String>,
 }
 
@@ -119,6 +140,11 @@ pub struct ActualEntryDto {
     pub occurred_on: String,
     pub effect: String,
     pub amount: String,
+    pub source_amount: String,
+    pub source_currency: String,
+    pub exchange_rate: String,
+    pub exchange_rate_source: String,
+    pub exchange_rate_observed_on: String,
     pub origin: String,
     pub note: Option<String>,
     pub created_at: String,

@@ -1,0 +1,265 @@
+import type { KeyboardEvent } from "react";
+
+import type { MonthlyItem } from "../../shared/api/finance";
+import { formatMoney, formatPercent } from "../../shared/formatting/finance";
+import { categoryLabel, flowLabel } from "../../shared/formatting/labels";
+import { Select } from "../../shared/components/Select";
+import {
+  defaultMonthlyWorkspaceFilters,
+  hasActiveMonthlyFilters,
+  isActualOnly,
+  isConfirmed,
+  monthlyStatusCounts,
+  type MonthlyWorkspaceFilters,
+} from "./monthlyWorkspace";
+
+interface MonthlyWorkspaceProps {
+  items: MonthlyItem[];
+  visibleItems: MonthlyItem[];
+  filters: MonthlyWorkspaceFilters;
+  onFiltersChange: (filters: MonthlyWorkspaceFilters) => void;
+  onSelectItem: (id: string) => void;
+  selectedItemId: string | null;
+  batchCategory: string;
+  onBatchCategoryChange: (category: string) => void;
+  onBatchConfirm: () => void;
+  batchPending: boolean;
+}
+
+const statusLabels: Record<MonthlyItem["data_status"], string> = {
+  MISSING: "待录入",
+  IN_PROGRESS: "记录中",
+  CONFIRMED_ZERO: "已确认零",
+  FINAL: "已确认",
+};
+
+const varianceLabels: Record<MonthlyItem["variance_effect"], string> = {
+  UNKNOWN: "待形成",
+  ON_PLAN: "符合计划",
+  FAVORABLE: "有利",
+  UNFAVORABLE: "需关注",
+};
+
+export function MonthlyWorkspace({
+  items,
+  visibleItems,
+  filters,
+  onFiltersChange,
+  onSelectItem,
+  selectedItemId,
+  batchCategory,
+  onBatchCategoryChange,
+  onBatchConfirm,
+  batchPending,
+}: MonthlyWorkspaceProps) {
+  const counts = monthlyStatusCounts(items);
+  const categories = Array.from(new Set(items.map((item) => item.category)));
+  const eligibleBatchItems = items.filter(
+    (item) => !isConfirmed(item) && (batchCategory === "ALL" || item.category === batchCategory),
+  );
+  const batchScope = batchCategory === "ALL" ? "整月" : categoryLabel(batchCategory);
+
+  const update = <Key extends keyof MonthlyWorkspaceFilters>(
+    key: Key,
+    value: MonthlyWorkspaceFilters[Key],
+  ) => onFiltersChange({ ...filters, [key]: value });
+
+  return (
+    <section aria-label="本月项目工作台" className="monthly-workspace">
+      <div aria-label="本月项目状态摘要" className="monthly-status-summary">
+        <SummaryMetric label="项目总数" value={counts.total} />
+        <SummaryMetric label="已确认" tone="complete" value={counts.confirmed} />
+        <SummaryMetric label="记录中" tone="progress" value={counts.inProgress} />
+        <SummaryMetric label="待录入" tone="attention" value={counts.missing} />
+        <SummaryMetric label="计划外项目" value={counts.actualOnly} />
+      </div>
+
+      <div className="monthly-workspace-controls">
+        <div aria-label="项目状态筛选" className="monthly-status-tabs" role="tablist">
+          <StatusTab active={filters.status === "ALL"} count={counts.total} label="全部" onClick={() => update("status", "ALL")} />
+          <StatusTab active={filters.status === "ATTENTION"} count={counts.missing} label="待处理" onClick={() => update("status", "ATTENTION")} />
+          <StatusTab active={filters.status === "IN_PROGRESS"} count={counts.inProgress} label="记录中" onClick={() => update("status", "IN_PROGRESS")} />
+          <StatusTab active={filters.status === "CONFIRMED"} count={counts.confirmed} label="已确认" onClick={() => update("status", "CONFIRMED")} />
+          <StatusTab active={filters.status === "ACTUAL_ONLY"} count={counts.actualOnly} label="计划外实际" onClick={() => update("status", "ACTUAL_ONLY")} />
+        </div>
+
+        <div className="monthly-filter-grid">
+          <label className="monthly-search-field">
+            <span className="sr-only">搜索项目、分类或备注</span>
+            <svg aria-hidden="true" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5" /><path d="m13 13 4 4" /></svg>
+            <input
+              aria-label="搜索项目、分类或备注"
+              onChange={(event) => update("search", event.target.value)}
+              placeholder="搜索项目、分类或备注"
+              type="search"
+              value={filters.search}
+            />
+          </label>
+          <Select
+            ariaLabel="财务类别筛选"
+            className="monthly-filter-select"
+            onChange={(value) => update("category", value)}
+            options={[{ value: "ALL", label: "全部分类" }, ...categories.map((value) => ({ value, label: categoryLabel(value) }))]}
+            value={filters.category}
+          />
+          <Select
+            ariaLabel="收支类型筛选"
+            className="monthly-filter-select"
+            onChange={(value) => update("flow", value as MonthlyWorkspaceFilters["flow"])}
+            options={[{ value: "ALL", label: "全部收支" }, { value: "INCOME", label: "收入" }, { value: "EXPENSE", label: "支出" }]}
+            value={filters.flow}
+          />
+          <Select
+            ariaLabel="偏差状态筛选"
+            className="monthly-filter-select"
+            onChange={(value) => update("variance", value as MonthlyWorkspaceFilters["variance"])}
+            options={[
+              { value: "ALL", label: "全部偏差" },
+              { value: "UNFAVORABLE", label: "需关注" },
+              { value: "FAVORABLE", label: "有利" },
+              { value: "ON_PLAN", label: "符合计划" },
+              { value: "UNKNOWN", label: "待形成" },
+            ]}
+            value={filters.variance}
+          />
+          <Select
+            ariaLabel="项目排序"
+            className="monthly-sort-select"
+            onChange={(value) => update("sort", value as MonthlyWorkspaceFilters["sort"])}
+            options={[
+              { value: "PRIORITY", label: "待处理优先" },
+              { value: "NAME", label: "项目名称" },
+              { value: "ACTUAL", label: "实际金额" },
+              { value: "VARIANCE", label: "偏差绝对值" },
+              { value: "COMPLETION", label: "完成率" },
+              { value: "UPDATED", label: "最近更新" },
+            ]}
+            value={filters.sort}
+          />
+        </div>
+
+        <div className="monthly-toolbar-footer">
+          <div className="monthly-result-summary">
+            <div className="monthly-result-count" aria-live="polite">
+              显示 <strong>{visibleItems.length}</strong> / {items.length} 项
+              {hasActiveMonthlyFilters(filters) && (
+                <button className="text-button" onClick={() => onFiltersChange(defaultMonthlyWorkspaceFilters)} type="button">清除筛选</button>
+              )}
+            </div>
+            <p className="monthly-confirmation-note">确认只标记条目已核对，不会补写计划金额或创建虚假实际。</p>
+          </div>
+          <div className="monthly-batch-controls">
+            <span>批量确认范围</span>
+            <Select
+              ariaLabel="批量确认范围"
+              className="monthly-batch-select"
+              onChange={onBatchCategoryChange}
+              options={[{ value: "ALL", label: "整月全部类别" }, ...categories.map((value) => ({ value, label: categoryLabel(value) }))]}
+              value={batchCategory}
+            />
+            <button
+              className="button button-secondary"
+              disabled={batchPending || eligibleBatchItems.length === 0}
+              onClick={onBatchConfirm}
+              type="button"
+            >
+              {batchPending ? "确认中…" : `确认${batchScope}待处理 ${eligibleBatchItems.length} 项`}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {visibleItems.length === 0 ? (
+        <div className="monthly-no-results">
+          <strong>没有符合当前条件的项目</strong>
+          <p>调整搜索或筛选条件即可返回完整项目列表。</p>
+          <button className="button button-secondary" onClick={() => onFiltersChange(defaultMonthlyWorkspaceFilters)} type="button">清除筛选</button>
+        </div>
+      ) : (
+        <div
+          className="monthly-table-frame"
+          style={{ overflow: "auto", overscrollBehaviorX: "contain", overscrollBehaviorY: "auto" }}
+        >
+          <table className="monthly-data-table">
+            <caption className="sr-only">本月项目、计划金额、实际金额、偏差、完成率和实际条目数量</caption>
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>项目 / 分类</th>
+                <th className="numeric-column">计划</th>
+                <th className="numeric-column">实际</th>
+                <th className="numeric-column monthly-optional-column">偏差</th>
+                <th className="numeric-column monthly-optional-column">完成率</th>
+                <th className="numeric-column">条目</th>
+                <th><span className="sr-only">操作</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleItems.map((item) => (
+                <MonthlyTableRow
+                  item={item}
+                  key={item.id}
+                  onSelect={() => onSelectItem(item.id)}
+                  selected={selectedItemId === item.id}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SummaryMetric({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "neutral" | "complete" | "progress" | "attention" }) {
+  return <div className={`monthly-summary-metric summary-${tone}`}><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function StatusTab({ active, count, label, onClick }: { active: boolean; count: number; label: string; onClick: () => void }) {
+  return (
+    <button aria-selected={active} className={active ? "active" : ""} onClick={onClick} role="tab" type="button">
+      <span>{label}</span><small>{count}</small>
+    </button>
+  );
+}
+
+function MonthlyTableRow({ item, selected, onSelect }: { item: MonthlyItem; selected: boolean; onSelect: () => void }) {
+  const handleKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect();
+    }
+  };
+  return (
+    <tr
+      aria-label={`打开 ${item.item_name} 详情`}
+      aria-selected={selected}
+      className={selected ? "monthly-row-selected" : ""}
+      onClick={onSelect}
+      onKeyDown={handleKeyDown}
+      tabIndex={0}
+    >
+      <td><span className={`monthly-status-badge monthly-status-${item.data_status.toLowerCase()}`}><i aria-hidden="true" />{statusLabels[item.data_status]}</span></td>
+      <th scope="row">
+        <span className="monthly-item-name">{item.item_name}</span>
+        <small>{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{isActualOnly(item) ? " · 计划外" : ""}</small>
+      </th>
+      <td className="numeric-column">{item.item_origin === "MANUAL" ? "—" : formatMoney(item.planned_amount, item.currency)}</td>
+      <td className="numeric-column monthly-actual-value">{formatMoney(item.actual_amount, item.currency)}</td>
+      <td className={`numeric-column monthly-optional-column variance-${item.variance_effect.toLowerCase()}`}>
+        <span>{formatMoney(item.variance_amount, item.currency)}</span>
+        <small>{varianceLabels[item.variance_effect]}</small>
+      </td>
+      <td className="numeric-column monthly-optional-column">{formatPercent(item.completion_rate_percent)}</td>
+      <td className="numeric-column">{item.actual_entry_count}</td>
+      <td>
+        <button
+          aria-label={`查看 ${item.item_name} 详情`}
+          className="monthly-row-action"
+          onClick={(event) => { event.stopPropagation(); onSelect(); }}
+          type="button"
+        >查看</button>
+      </td>
+    </tr>
+  );
+}

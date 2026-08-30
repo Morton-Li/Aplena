@@ -93,24 +93,22 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
 
   return (
     <section className="recurring-rules-panel recurring-rules-panel-open">
-      <header className="recurring-rules-summary-static">
-        <div>
+      <header className="recurring-rules-header">
+        <div className="recurring-rules-title">
           <p className="eyebrow">可选增强</p>
           <h2>周期规则</h2>
           <p>按需定义可复用的收入与支出规则，用于预估 {targetMonth}；保存不会改动本月或历史月。</p>
         </div>
-        <span className="recurring-rules-summary">{plansQuery.data?.length ?? 0} 项规则</span>
+        <div className="recurring-rules-header-actions">
+          <span className="recurring-rules-summary">{plansQuery.data?.length ?? 0} 项规则</span>
+          <button className="button button-primary" type="button" onClick={() => setEditor("new")}>新建周期规则</button>
+        </div>
       </header>
 
       <div className="recurring-rules-body">
-        <header className="recurring-rules-heading">
-          <div><p className="section-label">Recurring Rules</p><h3>自动月度基准</h3></div>
-          <button className="button button-primary" type="button" onClick={() => setEditor("new")}>新建周期规则</button>
-        </header>
-
       {feedback && <div className="success-banner" role="status">{feedback}</div>}
 
-      <section className="toolbar" aria-label="周期规则筛选">
+      {plansQuery.isSuccess && plansQuery.data.length > 0 && <section className="toolbar recurring-rules-toolbar" aria-label="周期规则筛选">
         <label className="search-field">
           <span className="sr-only">搜索周期规则</span>
           <input
@@ -132,8 +130,8 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
             ]}
           />
         </label>
-        <span className="result-count">{filtered.length} 项</span>
-      </section>
+        <span className="result-count">显示 {filtered.length} / {plansQuery.data.length} 项</span>
+      </section>}
 
       {(plansQuery.isPending || contractQuery.isPending) && <StatePanel>正在读取周期规则…</StatePanel>}
       {(plansQuery.isError || contractQuery.isError) && <StatePanel error={plansQuery.error ?? contractQuery.error} />}
@@ -143,34 +141,59 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
           : <EmptyState compact eyebrow="没有匹配项" title="换一个筛选条件试试" description="当前搜索词与类别组合没有匹配任何规则，已有规则没有被删除。" action={<button className="button button-secondary" type="button" onClick={() => { setSearch(""); setCategory("ALL"); }}>清除筛选</button>} />
       )}
       {filtered.length > 0 && (
-        <div className="plan-list">
-          {filtered.map((item) => (
-            <article className="plan-card" key={item.id}>
-              <div className="plan-card-main">
-                <div className="plan-title-row">
-                  <span className={`category-pill category-${item.flow_type.toLowerCase()}`}>
-                    {categoryLabel(item.category)}
-                  </span>
-                  <span>{flowLabel(item.flow_type)}</span>
-                </div>
-                <h2>{item.name}</h2>
-                <p>
-                  {item.start_date} 至 {item.end_date ?? "长期有效"} · {recognitionLabel(item.recognition_mode)}
-                </p>
-                {item.note && <small>{item.note}</small>}
-              </div>
-              <dl className="plan-facts">
-                <div><dt>原币金额</dt><dd>{formatMoney(item.planned_amount, item.currency)}</dd></div>
-                <div><dt>周期</dt><dd>{item.period_months} 个月</dd></div>
-                <div><dt>历史快照</dt><dd>{item.history_month_count} 个月</dd></div>
-              </dl>
-              <div className="card-actions">
-                <button className="button button-quiet" type="button" onClick={() => setEditor(item)}>编辑</button>
-                <button className="button button-quiet" type="button" onClick={() => setStopping(item)}>停止</button>
-                <button className="button button-danger-quiet" type="button" onClick={() => setDeleting(item)}>删除</button>
-              </div>
-            </article>
-          ))}
+        <div className="table-scroll recurring-rules-table-scroll">
+          <table className="data-table recurring-rules-table">
+            <caption className="sr-only">周期规则</caption>
+            <thead>
+              <tr>
+                <th scope="col">规则</th>
+                <th scope="col">计划金额</th>
+                <th scope="col">周期 / 确认</th>
+                <th scope="col">有效期间</th>
+                <th className="recurring-rule-optional" scope="col">历史快照</th>
+                <th className="recurring-rule-actions-heading" scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((item) => (
+                <tr key={item.id}>
+                  <th className="recurring-rule-identity" scope="row">
+                    <strong>{item.name}</strong>
+                    <span className="recurring-rule-labels">
+                      <span className={`category-pill category-${item.flow_type.toLowerCase()}`}>
+                        {categoryLabel(item.category)}
+                      </span>
+                      <span>{flowLabel(item.flow_type)}</span>
+                    </span>
+                    {item.note && <small title={item.note}>{item.note}</small>}
+                  </th>
+                  <td className="recurring-rule-amount">
+                    <strong>{formatMoney(item.planned_amount, item.currency)}</strong>
+                    <small>原币金额</small>
+                  </td>
+                  <td className="recurring-rule-schedule">
+                    <strong>{item.period_months} 个月</strong>
+                    <small>{recognitionLabel(item.recognition_mode)}</small>
+                  </td>
+                  <td className="recurring-rule-period">
+                    <time dateTime={item.start_date}>{item.start_date}</time>
+                    <small>至 {item.end_date ?? "长期有效"}</small>
+                  </td>
+                  <td className="recurring-rule-optional recurring-rule-history">
+                    <strong>{item.history_month_count}</strong>
+                    <small>个月</small>
+                  </td>
+                  <td>
+                    <div className="recurring-rule-actions">
+                      <button className="button button-quiet" type="button" onClick={() => setEditor(item)}>编辑</button>
+                      <button className="button button-quiet" type="button" onClick={() => setStopping(item)}>停止</button>
+                      <button className="button button-danger-quiet" type="button" onClick={() => setDeleting(item)}>删除</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
