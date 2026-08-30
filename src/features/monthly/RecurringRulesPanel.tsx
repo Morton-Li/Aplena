@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
-import type { DomainContract } from "../../shared/api/domain";
+import { getDomainContract, type DomainContract } from "../../shared/api/domain";
 import {
   createPlanItem,
   deletePlanItem,
@@ -60,8 +60,17 @@ const planSchema = z
 
 type PlanValues = z.infer<typeof planSchema>;
 
-export function PlansPage({ contract }: { contract: DomainContract }) {
+export function RecurringRulesPanel({
+  currentMonth,
+  open,
+  onOpenChange,
+}: {
+  currentMonth: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const queryClient = useQueryClient();
+  const contractQuery = useQuery({ queryKey: queryKeys.domain, queryFn: () => getDomainContract() });
   const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
   const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
@@ -101,23 +110,27 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
   };
 
   return (
-    <>
-      <header className="page-header">
+    <details className="recurring-rules-panel" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
+      <summary>
         <div>
           <p className="eyebrow">可选增强</p>
-          <h1>长期计划</h1>
-          <p>自动生成周期基准、计划偏差与承载能力分析；不设置也可直接使用月度实际与报表。</p>
+          <h2>周期规则</h2>
+          <p>需要时自动生成后续月份的计划基准；不会影响本月实际录入。</p>
         </div>
-        <button className="button button-primary" type="button" onClick={() => setEditor("new")}>
-          新建计划
-        </button>
-      </header>
+        <span className="recurring-rules-summary">{plansQuery.data?.length ?? 0} 项规则</span>
+      </summary>
+
+      <div className="recurring-rules-body">
+        <header className="recurring-rules-heading">
+          <div><p className="section-label">Recurring Rules</p><h3>自动月度基准</h3></div>
+          <button className="button button-primary" type="button" onClick={() => setEditor("new")}>新建周期规则</button>
+        </header>
 
       {feedback && <div className="success-banner" role="status">{feedback}</div>}
 
-      <section className="toolbar" aria-label="计划筛选">
+      <section className="toolbar" aria-label="周期规则筛选">
         <label className="search-field">
-          <span className="sr-only">搜索长期计划</span>
+          <span className="sr-only">搜索周期规则</span>
           <input
             type="search"
             placeholder="搜索名称或备注"
@@ -133,19 +146,19 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
             onChange={setCategory}
             options={[
               { value: "ALL", label: "全部类别" },
-              ...contract.categories.map((option) => ({ value: option.code, label: option.label })),
+              ...(contractQuery.data?.categories ?? []).map((option) => ({ value: option.code, label: option.label })),
             ]}
           />
         </label>
         <span className="result-count">{filtered.length} 项</span>
       </section>
 
-      {plansQuery.isPending && <StatePanel>正在读取长期计划…</StatePanel>}
-      {plansQuery.isError && <StatePanel error={plansQuery.error} />}
+      {(plansQuery.isPending || contractQuery.isPending) && <StatePanel>正在读取周期规则…</StatePanel>}
+      {(plansQuery.isError || contractQuery.isError) && <StatePanel error={plansQuery.error ?? contractQuery.error} />}
       {plansQuery.isSuccess && filtered.length === 0 && (
         plansQuery.data.length === 0
-          ? <EmptyState eyebrow="可按需启用" title="暂未设置周期性计划" description="这不会影响月度实际录入和基础财务报表。需要自动生成月度基准、比较偏差或计算承载能力时，再创建长期计划。" action={<button className="button button-secondary" type="button" onClick={() => setEditor("new")}>创建长期计划</button>} />
-          : <EmptyState compact eyebrow="没有匹配项" title="换一个筛选条件试试" description="当前搜索词与类别组合没有匹配任何计划，已有计划没有被删除。" action={<button className="button button-secondary" type="button" onClick={() => { setSearch(""); setCategory("ALL"); }}>清除筛选</button>} />
+          ? <EmptyState eyebrow="按需启用" title="暂未配置周期规则" description="这不会影响本月实际录入和历史报表。只有需要自动生成后续月份计划基准时才需要配置。" action={<button className="button button-secondary" type="button" onClick={() => setEditor("new")}>创建周期规则</button>} />
+          : <EmptyState compact eyebrow="没有匹配项" title="换一个筛选条件试试" description="当前搜索词与类别组合没有匹配任何规则，已有规则没有被删除。" action={<button className="button button-secondary" type="button" onClick={() => { setSearch(""); setCategory("ALL"); }}>清除筛选</button>} />
       )}
       {filtered.length > 0 && (
         <div className="plan-list">
@@ -179,9 +192,10 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
         </div>
       )}
 
-      {editor && settingsQuery.data && ratesQuery.data && (
+      {editor && contractQuery.data && settingsQuery.data && ratesQuery.data && (
         <PlanEditor
-          contract={contract}
+          contract={contractQuery.data}
+          currentMonth={currentMonth}
           existing={editor === "new" ? null : editor}
           rates={ratesQuery.data}
           settings={settingsQuery.data}
@@ -199,7 +213,7 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
           onClose={() => setStopping(null)}
           onStopped={async () => {
             setStopping(null);
-            setFeedback("计划已停止，历史月度快照未作修改。");
+            setFeedback("周期规则已停止，历史月度快照未作修改。");
             await refreshPlans();
           }}
         />
@@ -210,17 +224,19 @@ export function PlansPage({ contract }: { contract: DomainContract }) {
           onClose={() => setDeleting(null)}
           onDeleted={async () => {
             setDeleting(null);
-            setFeedback("长期计划已删除，关联历史快照已保留。");
+            setFeedback("周期规则已删除，关联历史快照已保留。");
             await refreshPlans();
           }}
         />
       )}
-    </>
+      </div>
+    </details>
   );
 }
 
 function PlanEditor({
   contract,
+  currentMonth,
   existing,
   rates,
   settings,
@@ -228,6 +244,7 @@ function PlanEditor({
   onSaved,
 }: {
   contract: DomainContract;
+  currentMonth: string;
   existing: PlanItem | null;
   rates: ExchangeRate[];
   settings: Settings;
@@ -252,7 +269,7 @@ function PlanEditor({
         plannedAmount: "",
         currency: settings.base_currency,
         periodMonths: 1,
-        startDate: settings.target_month + "-01",
+        startDate: currentMonth + "-01",
         endDate: "",
         recognitionMode: "AMORTIZED",
         note: "",
@@ -276,7 +293,7 @@ function PlanEditor({
   });
   const previewMutation = useMutation({
     mutationFn: (value: PlanValues) =>
-      previewPlanItem(contract, settings, rates, settings.target_month, toInput(value)),
+      previewPlanItem(contract, settings, rates, currentMonth, toInput(value)),
     onSuccess: (data) => setPreview({ signature, data }),
   });
   const saveMutation = useMutation<PlanMutationResult | PlanItem, Error, PlanValues>({
@@ -288,7 +305,7 @@ function PlanEditor({
         ? `并已为当前月新增 ${initialization.created_count} 个快照。`
         : "当前月快照未被覆盖。";
       await onSaved(
-        `计划已保存，${detail}`,
+        `周期规则已保存，${detail}`,
         initialization?.created_count ? initialization.month : undefined,
       );
     },
@@ -301,8 +318,8 @@ function PlanEditor({
 
   return (
       <Dialog
-        eyebrow={existing ? "编辑长期计划" : "新建长期计划"}
-        title={existing?.name ?? "新的收入或支出计划"}
+        eyebrow={existing ? "编辑周期规则" : "新建周期规则"}
+        title={existing?.name ?? "新的周期性收入或支出"}
         onClose={onClose}
         size="wide"
         footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-secondary" disabled={previewMutation.isPending} type="button" onClick={form.handleSubmit((value) => previewMutation.mutate(value))}>{previewMutation.isPending ? "计算中…" : "预览并检查"}</button><button className="button button-primary" disabled={!previewIsCurrent || saveMutation.isPending} form="plan-editor-form" type="submit">{saveMutation.isPending ? "保存中…" : "确认保存"}</button></>}
@@ -334,7 +351,7 @@ function PlanEditor({
 
           {previewIsCurrent && preview && (
             <div className="preview-card" aria-live="polite">
-              <div><span>目标月份</span><strong>{settings.target_month}</strong></div>
+              <div><span>预览月份</span><strong>{currentMonth}</strong></div>
               <div><span>生效状态</span><strong>{preview.data.effective ? "有效" : "未生效"}</strong></div>
               <div><span>生成月度项目</span><strong>{preview.data.recognized_in_target_month ? "会" : "不会"}</strong></div>
               <div><span>月度等价金额</span><strong>{formatMoney(preview.data.monthly_equivalent, preview.data.base_currency)}</strong></div>
@@ -354,8 +371,8 @@ function StopDialog({ item, onClose, onStopped }: { item: PlanItem; onClose: () 
   const [endDate, setEndDate] = useState(item.end_date ?? item.start_date);
   const mutation = useMutation({ mutationFn: () => stopPlanItem({ id: item.id, endDate }), onSuccess: onStopped });
   return (
-    <ConfirmDialog title={`停止“${item.name}”`} onClose={onClose}>
-      <p>停止只会设置结束日期，不会改动已经生成的月度快照。</p>
+    <ConfirmDialog title={`停止规则“${item.name}”`} onClose={onClose}>
+      <p>停止只会设置规则结束日期，不会改动已经生成的月度快照。</p>
       <label>最后有效日期<input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
       {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
       <button className="button button-primary" disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>确认停止</button>
@@ -367,9 +384,9 @@ function DeleteDialog({ item, onClose, onDeleted }: { item: PlanItem; onClose: (
   const mutation = useMutation({ mutationFn: () => deletePlanItem(item.id), onSuccess: onDeleted });
   return (
     <ConfirmDialog title={`删除“${item.name}”`} onClose={onClose}>
-      <p>这项计划关联 <strong>{item.history_month_count}</strong> 个月度快照。删除长期计划后，这些历史事实仍会保留。</p>
+      <p>这项规则关联 <strong>{item.history_month_count}</strong> 个月度快照。删除规则后，这些历史事实仍会保留。</p>
       {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
-      <button className="button button-danger" disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>确认删除长期计划</button>
+      <button className="button button-danger" disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>确认删除周期规则</button>
     </ConfirmDialog>
   );
 }

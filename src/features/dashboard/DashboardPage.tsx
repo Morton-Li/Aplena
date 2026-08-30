@@ -6,7 +6,7 @@ import {
   getFinancialCapacity,
   getHistoryAnalytics,
   getMonthAnalytics,
-  getSettings,
+  getStartupStatus,
   listPlanItems,
   queryKeys,
   type AmountComparison,
@@ -34,8 +34,8 @@ const axisLine = { lineStyle: { color: "#d8dee8" } };
 const splitLine = { lineStyle: { color: "#e8edf3" } };
 
 export function DashboardPage() {
-  const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
-  const month = settingsQuery.data?.target_month ?? "";
+  const startupQuery = useQuery({ queryKey: queryKeys.startup, queryFn: () => getStartupStatus() });
+  const month = startupQuery.data?.current_month ?? "";
   const analyticsQuery = useQuery({
     queryKey: queryKeys.monthAnalytics(month),
     queryFn: () => getMonthAnalytics(month),
@@ -53,7 +53,7 @@ export function DashboardPage() {
   const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
 
   if (
-    settingsQuery.isPending ||
+    startupQuery.isPending ||
     analyticsQuery.isPending ||
     historyQuery.isPending ||
     capacityQuery.isPending ||
@@ -62,7 +62,7 @@ export function DashboardPage() {
     return <DashboardLoading />;
   }
   if (
-    settingsQuery.isError ||
+    startupQuery.isError ||
     analyticsQuery.isError ||
     historyQuery.isError ||
     capacityQuery.isError ||
@@ -72,7 +72,7 @@ export function DashboardPage() {
       <section className="state-card state-card-error">
         <span role="alert">
           {describeError(
-            settingsQuery.error ??
+            startupQuery.error ??
               analyticsQuery.error ??
               historyQuery.error ??
               capacityQuery.error ??
@@ -82,15 +82,15 @@ export function DashboardPage() {
       </section>
     );
   }
-  if (!settingsQuery.data || !analyticsQuery.data || !capacityQuery.data) {
-    return <section className="state-card">默认财务基准尚未完成初始化。</section>;
+  if (!startupQuery.data || !analyticsQuery.data || !capacityQuery.data) {
+    return <section className="state-card">当前月份的财务数据尚未完成初始化。</section>;
   }
 
   const analytics = analyticsQuery.data;
   const capacity = capacityQuery.data;
   const actualQualifier = actualStatusLabel(analytics.actual_status);
   const hasPlanBaseline = analytics.planned_item_count > 0;
-  const hasLongTermPlans = (plansQuery.data?.length ?? 0) > 0;
+  const hasRecurringRules = (plansQuery.data?.length ?? 0) > 0;
 
   return (
     <>
@@ -99,13 +99,13 @@ export function DashboardPage() {
         <EmptyDashboard month={analytics.month} currency={analytics.currency} />
       ) : (
         <>
-          <KpiGrid analytics={analytics} capacity={capacity} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} hasLongTermPlans={hasLongTermPlans} />
+          <KpiGrid analytics={analytics} capacity={capacity} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} hasRecurringRules={hasRecurringRules} />
           <DashboardCharts
             analytics={analytics}
             capacity={capacity}
             history={historyQuery.data?.months ?? []}
             hasPlanBaseline={hasPlanBaseline}
-            hasLongTermPlans={hasLongTermPlans}
+            hasRecurringRules={hasRecurringRules}
           />
           <ExecutionReport analytics={analytics} actualQualifier={actualQualifier} hasPlanBaseline={hasPlanBaseline} />
           <VarianceReport analytics={analytics} />
@@ -148,11 +148,11 @@ function EmptyDashboard({ month, currency }: { month: string; currency: string }
       <EmptyState
         eyebrow="财务报表尚未建立"
         title="从本月第一项收入或支出开始"
-        description="直接录入本月实际后，收入、支出、净结余、分类结构与趋势图会自动生成。长期计划仅用于周期基准、偏差和承载能力分析。"
+        description="直接录入本月实际后，收入、支出、净结余、分类结构与趋势图会自动生成。周期规则仅在需要自动生成后续月份基准时使用。"
         action={
           <div className="empty-actions">
             <Link className="button button-primary" to="/monthly">录入本月实际</Link>
-            <Link className="button button-secondary" to="/plans">设置长期计划（可选）</Link>
+            <Link className="button button-secondary" to="/monthly?panel=rules">配置周期规则（可选）</Link>
           </div>
         }
       />
@@ -165,13 +165,13 @@ function KpiGrid({
   capacity,
   actualQualifier,
   hasPlanBaseline,
-  hasLongTermPlans,
+  hasRecurringRules,
 }: {
   analytics: MonthAnalytics;
   capacity: FinancialCapacity;
   actualQualifier: string;
   hasPlanBaseline: boolean;
-  hasLongTermPlans: boolean;
+  hasRecurringRules: boolean;
 }) {
   return (
     <section className="kpi-grid" aria-label="核心财务指标">
@@ -210,10 +210,10 @@ function KpiGrid({
         }
       />
       <KpiCard
-        label="可承载长期支出"
-        value={hasLongTermPlans ? formatMoney(capacity.preserved_capacity, capacity.base_currency) : "—"}
-        supporting={hasLongTermPlans ? "保留当前自主预算" : "可选增强项"}
-        detail={hasLongTermPlans ? `极限 ${formatMoney(capacity.maximum_capacity, capacity.base_currency)}` : "设置长期计划后计算"}
+        label="周期负担承载力"
+        value={hasRecurringRules ? formatMoney(capacity.preserved_capacity, capacity.base_currency) : "—"}
+        supporting={hasRecurringRules ? "保留当前自主预算" : "可选增强项"}
+        detail={hasRecurringRules ? `极限 ${formatMoney(capacity.maximum_capacity, capacity.base_currency)}` : "配置周期规则后计算"}
       />
     </section>
   );
@@ -249,13 +249,13 @@ function DashboardCharts({
   capacity,
   history,
   hasPlanBaseline,
-  hasLongTermPlans,
+  hasRecurringRules,
 }: {
   analytics: MonthAnalytics;
   capacity: FinancialCapacity;
   history: MonthAnalytics[];
   hasPlanBaseline: boolean;
-  hasLongTermPlans: boolean;
+  hasRecurringRules: boolean;
 }) {
   const recentHistory = useMemo(() => history.slice(-8), [history]);
   const trendOption = useMemo(
@@ -293,7 +293,7 @@ function DashboardCharts({
         </ReportCard>
         <ReportCard eyebrow="本月执行" title={hasPlanBaseline ? "计划与实际" : "实际收支概览"}>
           <AnalyticsChart option={comparisonOption} label={`${analytics.month}收入、支出与净结余${hasPlanBaseline ? "计划实际分组" : "实际"}柱状图`} height={300} />
-          <p className="chart-note">{hasPlanBaseline ? "灰蓝代表计划，蓝色代表当前实际；缺失实际不会按 0 绘制。" : "当前仅展示实际数据；启用长期计划后可增加计划对比。"}</p>
+          <p className="chart-note">{hasPlanBaseline ? "灰蓝代表计划，蓝色代表当前实际；缺失实际不会按 0 绘制。" : "当前仅展示实际数据；配置周期规则后可增加计划对比。"}</p>
         </ReportCard>
       </div>
       <div className="dashboard-chart-grid">
@@ -308,7 +308,7 @@ function DashboardCharts({
           )}
         </ReportCard>
         <ReportCard eyebrow="财务承载能力" title="稳定收入的分配路径">
-          {hasLongTermPlans ? <><AnalyticsChart option={capacityOption} label="稳定收入扣除必要支出、固定承诺、最低储蓄和自主预算后的剩余承载能力瀑布图" height={300} /><CapacityDataTable capacity={capacity} /></> : <ChartEmpty message="承载能力是可选的规划分析；设置长期收入与支出后显示。" />}
+          {hasRecurringRules ? <><AnalyticsChart option={capacityOption} label="稳定收入扣除必要支出、固定承诺、最低储蓄和自主预算后的剩余承载能力瀑布图" height={300} /><CapacityDataTable capacity={capacity} /></> : <ChartEmpty message="承载能力是可选增强；配置周期性收入与支出规则后显示。" />}
         </ReportCard>
       </div>
     </section>
@@ -399,7 +399,7 @@ function VarianceBadge({ comparison }: { comparison: Pick<AmountComparison, "var
 
 function TrendDataTable({ months, currency }: { months: MonthAnalytics[]; currency: string }) {
   return (
-    <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><thead><tr><th>月份</th><th>收入</th><th>支出</th><th>净结余</th></tr></thead><tbody>{months.map((month) => <tr key={month.month}><th>{month.month}</th><td>{formatMoney(month.income.actual_to_date, currency)}</td><td>{formatMoney(month.expense.actual_to_date, currency)}</td><td>{formatMoney(month.net_balance.actual_to_date, currency)}</td></tr>)}</tbody></table></div></details>
+    <details className="chart-data-details"><summary>查看精确数据</summary><div className="table-scroll"><table className="data-table"><thead><tr><th>月份</th><th>收入</th><th>支出</th><th>净结余</th></tr></thead><tbody>{months.map((month) => <tr key={month.month}><th><Link className="table-link" to={`/history/${month.month}`}>{month.month}</Link></th><td>{formatMoney(month.income.actual_to_date, currency)}</td><td>{formatMoney(month.expense.actual_to_date, currency)}</td><td>{formatMoney(month.net_balance.actual_to_date, currency)}</td></tr>)}</tbody></table></div></details>
   );
 }
 

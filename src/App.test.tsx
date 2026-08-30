@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -559,7 +559,16 @@ describe("planning workflows", () => {
     installHarness({ settings: null });
     render(<App />);
 
-    expect(await screen.findByRole("link", { name: "长期规划 · 可选" })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "2026 年 8 月" });
+    const navigation = screen.getByRole("navigation");
+    expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "总览",
+      "月度执行",
+      "历史报表",
+      "设置",
+    ]);
+    expect(screen.queryByRole("link", { name: /长期规划/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "财务分析" })).not.toBeInTheDocument();
     expect(screen.queryByText("建立你的财务基准")).not.toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("ensure_default_settings");
   });
@@ -567,16 +576,16 @@ describe("planning workflows", () => {
   it("previews and creates an AMORTIZED plan without frontend financial arithmetic", async () => {
     installHarness();
     const user = userEvent.setup();
+    window.location.hash = "#/monthly?panel=rules";
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "长期规划 · 可选" }));
-    await user.click(await screen.findByRole("button", { name: "新建计划" }));
+    await user.click(await screen.findByRole("button", { name: "新建周期规则" }));
     await user.type(screen.getByLabelText("项目名称"), "云服务器");
     await user.type(screen.getByLabelText("计划金额"), "1200");
     await user.click(screen.getByRole("button", { name: "预览并检查" }));
 
     expect((await screen.findAllByText("¥ 100.00")).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "确认保存" }));
-    expect(await screen.findByText(/计划已保存/)).toBeInTheDocument();
+    expect(await screen.findByText(/周期规则已保存/)).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith(
       "create_plan_item",
       expect.objectContaining({
@@ -588,9 +597,9 @@ describe("planning workflows", () => {
   it("explains PAYMENT mode and displays a payment-month preview before save", async () => {
     installHarness();
     const user = userEvent.setup();
+    window.location.hash = "#/monthly?panel=rules";
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "长期规划 · 可选" }));
-    await user.click(await screen.findByRole("button", { name: "新建计划" }));
+    await user.click(await screen.findByRole("button", { name: "新建周期规则" }));
     await user.type(screen.getByLabelText("项目名称"), "年度保险");
     await user.type(screen.getByLabelText("计划金额"), "1200");
     await user.click(screen.getByRole("radio", { name: /按支付月份确认/ }));
@@ -636,7 +645,7 @@ describe("planning workflows", () => {
     render(<App />);
 
     expect(await screen.findByText(/当前月已自动检查：新增 2 项/)).toBeInTheDocument();
-    expect(screen.getByText("尚无条目")).toBeInTheDocument();
+    expect(await screen.findByText("尚无条目")).toBeInTheDocument();
     expect(screen.getAllByText("¥ 0.00").length).toBeGreaterThan(0);
     expect(screen.getAllByText("¥ 300.00").length).toBeGreaterThan(0);
     await user.click(screen.getAllByRole("button", { name: "确认项目已完成" })[0]);
@@ -645,7 +654,7 @@ describe("planning workflows", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "添加实际条目" }));
-    await user.click(screen.getByRole("button", { name: /关联长期计划/ }));
+    await user.click(screen.getByRole("button", { name: /关联周期规则/ }));
     await user.clear(screen.getByLabelText("金额"));
     await user.type(screen.getByLabelText("金额"), "427.25");
     await user.click(screen.getByLabelText("类型"));
@@ -663,7 +672,7 @@ describe("planning workflows", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
-    await user.click(screen.getByRole("button", { name: /关联长期计划/ }));
+    await user.click(screen.getByRole("button", { name: /关联周期规则/ }));
     await user.type(screen.getByLabelText("金额"), "25.00");
     await user.click(screen.getByLabelText("类型"));
     await user.click(screen.getByRole("option", { name: "退款" }));
@@ -710,47 +719,38 @@ describe("planning workflows", () => {
     expect(invokeMock.mock.calls.some(([command]) => command === "ensure_actual_only_monthly_item")).toBe(false);
   });
 
-  it("browses future and historical months without writes, then explicitly initializes", async () => {
-    installHarness();
-    const user = userEvent.setup();
+  it("keeps monthly execution fixed to the current natural month", async () => {
+    installHarness({
+      settings: { ...settings, target_month: "2026-01" },
+      monthly: { "2026-08": [monthlyItem()] },
+    });
     window.location.hash = "#/monthly";
     render(<App />);
-    const picker = await screen.findByLabelText("查看月份");
-
-    fireEvent.change(picker, { target: { value: "2026-09" } });
-    expect(await screen.findByText("未来月份预览")).toBeInTheDocument();
-    expect(invokeMock.mock.calls.some(([command]) => command === "initialize_month")).toBe(false);
-    await user.click(screen.getByRole("button", { name: "确认并初始化未来月份" }));
-    await user.click(screen.getByLabelText(/我理解这会创建/));
-    await user.click(screen.getByRole("button", { name: "确认创建月度快照" }));
-    expect(invokeMock).toHaveBeenCalledWith(
-      "initialize_month",
-      expect.objectContaining({ input: expect.objectContaining({ month: "2026-09", confirmed: true }) }),
-    );
-
-    fireEvent.change(picker, { target: { value: "2026-01" } });
-    expect(await screen.findByText("历史月份查看")).toBeInTheDocument();
-    const historyPreviewCalls = invokeMock.mock.calls.filter(
-      ([command, args]) =>
-        command === "preview_month" &&
-        (args as { input: { month: string } }).input.month === "2026-01",
-    );
-    expect(historyPreviewCalls.length).toBeGreaterThan(0);
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("查看月份")).not.toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("list_monthly_items", { month: "2026-08" });
+    expect(invokeMock.mock.calls.some(([command, args]) => command === "list_monthly_items" && (args as { month?: string })?.month === "2026-01")).toBe(false);
   });
 
-  it("requires a temporary rate when a historical snapshot has a missing currency", async () => {
-    installHarness({ missingCurrency: "USD" });
-    const user = userEvent.setup();
-    window.location.hash = "#/monthly";
+  it("redirects the legacy plans route into the optional monthly rules panel", async () => {
+    installHarness();
+    window.location.hash = "#/plans";
     render(<App />);
-    fireEvent.change(await screen.findByLabelText("查看月份"), { target: { value: "2025-12" } });
-    expect(await screen.findByText("缺少汇率：USD")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "补录这个历史月份" }));
-    const confirm = screen.getByRole("button", { name: "确认创建月度快照" });
-    await user.click(screen.getByLabelText(/我理解这会创建/));
-    expect(confirm).toBeDisabled();
-    await user.type(screen.getByLabelText("USD 临时汇率（必填）"), "7.1");
-    expect(confirm).toBeEnabled();
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    const rules = screen.getByRole("heading", { name: "周期规则" }).closest("details");
+    expect(rules).toHaveAttribute("open");
+  });
+
+  it("redirects the legacy analysis route to the current month report", async () => {
+    installHarness();
+    window.location.hash = "#/analysis";
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "月度执行结果" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "相邻月份" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "财务分析" })).not.toBeInTheDocument();
   });
 
   it("batch confirmation marks completion without synthesizing actual entries", async () => {
@@ -939,18 +939,19 @@ describe("dashboard and capacity analytics", () => {
     installHarness({ plans: [examplePlan] });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("link", { name: "财务分析" }));
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+    await user.click(await screen.findByText("2026 年 8 月"));
 
-    expect(await screen.findByRole("heading", { name: "结构与承载能力" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "月度执行结果" })).toBeInTheDocument();
     expect(screen.getAllByText("固定承诺支出").length).toBeGreaterThan(0);
     expect(screen.getByText("房租")).toBeInTheDocument();
     await user.click(screen.getByLabelText("排名依据"));
     await user.click(screen.getByRole("option", { name: "实际金额" }));
     expect(screen.queryByText("房租")).not.toBeInTheDocument();
-    const rankingTable = screen.getByRole("table", { name: "项目排名图对应数值" });
+    const rankingTable = screen.getByRole("table", { name: "项目排名图对应数据" });
     expect(within(rankingTable).getByText("电费")).toBeInTheDocument();
     expect(within(rankingTable).getByText("¥ 427.00")).toBeInTheDocument();
-    expect(screen.getByText(/PAYMENT 项目在非支付月份仍计入/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
   });
 
   it("invalidates month analytics after an actual entry is added", async () => {

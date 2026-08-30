@@ -25,7 +25,6 @@ import { Select } from "../../shared/components/Select";
 
 const settingsSchema = z.object({
   baseCurrency: z.string().length(3),
-  targetMonth: z.string().regex(/^\d{4}-\d{2}$/),
   savingsRatePercent: z.number().min(0).max(100),
 });
 type SettingsValues = z.infer<typeof settingsSchema>;
@@ -46,7 +45,7 @@ export function SettingsPage() {
         <div>
           <p className="eyebrow">本地配置</p>
           <h1>系统设置</h1>
-          <p>管理本位币、目标月份、汇率与本地数据保护。</p>
+          <p>管理本位币、储蓄目标、汇率与本地数据保护。</p>
         </div>
       </header>
       {(settingsQuery.isPending || ratesQuery.isPending) && <section className="state-card">正在读取设置…</section>}
@@ -220,7 +219,7 @@ function DataSummaryView({ summary }: { summary: DataSummary }) {
     <div className="data-summary" aria-label="备份数据摘要">
       <div><span>设置</span><strong>{summary.settings_count}</strong></div>
       <div><span>汇率</span><strong>{summary.exchange_rate_count}</strong></div>
-      <div><span>长期计划</span><strong>{summary.plan_item_count}</strong></div>
+      <div><span>周期规则</span><strong>{summary.plan_item_count}</strong></div>
       <div><span>月度快照</span><strong>{summary.monthly_item_count}</strong></div>
       <div><span>实际条目</span><strong>{summary.actual_entry_count}</strong></div>
       <div><span>月份范围</span><strong>{summary.first_month && summary.last_month ? `${summary.first_month} — ${summary.last_month}` : "暂无月度快照"}</strong></div>
@@ -233,7 +232,7 @@ function DataSummaryComparison({ current, backup }: { current: DataSummary; back
   const rows = [
     comparisonRow("设置", settingsSummary(current), settingsSummary(backup)),
     countComparisonRow("汇率", current.exchange_rate_count, backup.exchange_rate_count),
-    countComparisonRow("长期计划", current.plan_item_count, backup.plan_item_count),
+    countComparisonRow("周期规则", current.plan_item_count, backup.plan_item_count),
     countComparisonRow("月度快照", current.monthly_item_count, backup.monthly_item_count),
     countComparisonRow("实际条目", current.actual_entry_count, backup.actual_entry_count),
     comparisonRow("月份范围", monthRange(current), monthRange(backup)),
@@ -294,7 +293,6 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
     resolver: zodResolver(settingsSchema),
     defaultValues: {
       baseCurrency: settings.base_currency,
-      targetMonth: settings.target_month,
       savingsRatePercent: settings.minimum_savings_rate_basis_points / 100,
     },
   });
@@ -302,7 +300,7 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
     mutationFn: (values: SettingsValues) =>
       saveSettings({
         baseCurrency: values.baseCurrency,
-        targetMonth: values.targetMonth,
+        targetMonth: settings.target_month,
         minimumSavingsRateBasisPoints: Math.round(values.savingsRatePercent * 100),
       }),
     onSuccess: async (updated) => {
@@ -319,10 +317,9 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
   });
   return (
     <form className="settings-card" onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
-      <div><p className="section-label">全局设置</p><h2>计划基准</h2></div>
+      <div><p className="section-label">全局设置</p><h2>财务基准</h2></div>
       <label>本位币<Controller control={form.control} name="baseCurrency" render={({ field, fieldState }) => <Select ariaLabel="本位币" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={currencies.map((currency) => ({ value: currency, label: currencyName(currency), description: currency }))} />} /></label>
       <div className="notice notice-warning">尚无月度快照时可以直接切换。已有快照后将保持锁定，避免历史报表混入不同计算基准；后续更换需要使用保留逐月币种基准的受控迁移，而不是静默重算历史。</div>
-      <label>目标月份<input type="month" {...form.register("targetMonth")} /></label>
       <label>目标储蓄率<span className="input-with-suffix"><input type="number" min="0" max="100" step="0.01" {...form.register("savingsRatePercent", { valueAsNumber: true })} /><span>%</span></span></label>
       {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
       {mutation.isSuccess && <div className="inline-success" role="status">设置已保存。</div>}

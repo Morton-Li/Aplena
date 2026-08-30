@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import {
   confirmMonthlyActuals,
@@ -14,7 +14,6 @@ import {
   initializeMonth,
   listActualEntries,
   listExchangeRates,
-  listExistingMonths,
   listMonthlyItems,
   listPlanItems,
   previewMonth,
@@ -30,7 +29,7 @@ import {
 } from "../../shared/api/finance";
 import { getDomainContract } from "../../shared/api/domain";
 import { describeError } from "../../shared/formatting/errors";
-import { formatMoney, formatPercent } from "../../shared/formatting/finance";
+import { formatMoney, formatPercent, monthLabel } from "../../shared/formatting/finance";
 import { Dialog } from "../../shared/components/Dialog";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { Select } from "../../shared/components/Select";
@@ -39,17 +38,17 @@ import {
   flowLabel,
   recognitionLabel,
 } from "../../shared/formatting/labels";
+import { RecurringRulesPanel } from "./RecurringRulesPanel";
 
 export function MonthlyPage() {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
   const startupQuery = useQuery({ queryKey: queryKeys.startup, queryFn: () => getStartupStatus() });
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
   const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
-  const monthsQuery = useQuery({ queryKey: queryKeys.existingMonths, queryFn: () => listExistingMonths() });
-  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [previewOverrides, setPreviewOverrides] = useState<RateOverrideInput[]>([]);
-  const month = selectedMonth ?? settingsQuery.data?.target_month ?? "";
+  const month = startupQuery.data?.current_month ?? settingsQuery.data?.target_month ?? "";
   const itemsQuery = useQuery({
     queryKey: queryKeys.monthly(month),
     queryFn: () => listMonthlyItems(month),
@@ -63,6 +62,15 @@ export function MonthlyPage() {
   const [initializing, setInitializing] = useState(false);
   const [batchCategory, setBatchCategory] = useState("ALL");
   const [addingEntry, setAddingEntry] = useState(false);
+  const [rulesOpen, setRulesOpenState] = useState(searchParams.get("panel") === "rules");
+
+  const setRulesOpen = (open: boolean) => {
+    setRulesOpenState(open);
+    const next = new URLSearchParams(searchParams);
+    if (open) next.set("panel", "rules");
+    else next.delete("panel");
+    setSearchParams(next, { replace: true });
+  };
 
   const invalidateMonth = async () => {
     await Promise.all([
@@ -92,24 +100,10 @@ export function MonthlyPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">月度执行</p>
-          <h1>{month || "选择月份"}</h1>
-          <p>核对本月计划、实际记录与最终确认状态。</p>
+          <h1>{month ? monthLabel(month) : "正在读取本月"}</h1>
+          <p>只处理当前自然月：查看本月数据、增加实际条目并完成月末确认。</p>
         </div>
-        <div className="header-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>添加实际条目</button><label className="month-picker">
-          查看月份
-          <input
-            type="month"
-            list="existing-months"
-            value={month}
-            onChange={(event) => {
-              setSelectedMonth(event.target.value);
-              setPreviewOverrides([]);
-            }}
-          />
-          <datalist id="existing-months">
-            {monthsQuery.data?.map((value) => <option key={value} value={value} />)}
-          </datalist>
-        </label></div>
+        <div className="header-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>添加实际条目</button></div>
       </header>
 
       {startupQuery.data?.error && (
@@ -170,8 +164,10 @@ export function MonthlyPage() {
       )}
 
       {itemsQuery.data?.length === 0 && previewQuery.data?.candidate_count === 0 && previewQuery.data.missing_currencies.length === 0 && (
-        <EmptyState eyebrow="这个月份还没有数据" title="直接记录本月第一项收入或支出" description="月度实际可以独立录入。长期计划仅用于自动生成周期基准与承载能力分析，不是开始使用 Aplena 的前置条件。" action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>录入本月实际</button><Link className="button button-secondary" to="/plans">设置长期计划（可选）</Link></div>} />
+        <EmptyState eyebrow="本月还没有数据" title="直接记录第一项收入或支出" description="本月实际可以独立录入。周期规则仅用于自动生成后续月份基准，不是开始使用 Aplena 的前置条件。" action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setAddingEntry(true)}>录入本月实际</button><button className="button button-secondary" type="button" onClick={() => setRulesOpen(true)}>配置周期规则（可选）</button></div>} />
       )}
+
+      {month && <RecurringRulesPanel currentMonth={month} open={rulesOpen} onOpenChange={setRulesOpen} />}
 
       {initializing && previewQuery.data && ratesQuery.data && (
         <InitializationDialog
@@ -200,15 +196,10 @@ export function MonthlyPage() {
 }
 
 function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPreview; hasItems: boolean; onInitialize: () => void }) {
-  const context = {
-    CURRENT: { title: "当前自然月", copy: "系统会在启动和新建计划后自动补齐当前月缺失快照。" },
-    FUTURE: { title: "未来月份预览", copy: "浏览不会写入。确认初始化后，计划与汇率将冻结为独立快照。" },
-    HISTORICAL: { title: "历史月份查看", copy: "浏览不会写入。缺失月份只能在说明汇率语义后显式补录。" },
-  }[preview.direction];
   const canInitialize = preview.candidate_count > 0 || preview.missing_currencies.length > 0;
   return (
-    <section className={"month-context context-" + preview.direction.toLowerCase()}>
-      <div><span className="section-label">{context.title}</span><strong>{context.copy}</strong></div>
+    <section className="month-context context-current">
+      <div><span className="section-label">当前自然月</span><strong>系统会在启动和新增周期规则后补齐本月缺失快照。</strong></div>
       <dl>
         <div><dt>已存在</dt><dd>{preview.existing_count}</dd></div>
         <div><dt>可新增</dt><dd>{preview.candidate_count}</dd></div>
@@ -217,7 +208,7 @@ function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPrevi
       {preview.missing_currencies.length > 0 && <p className="warning-text">缺少汇率：{preview.missing_currencies.join("、")}</p>}
       {canInitialize && (
         <button className="button button-primary" type="button" onClick={onInitialize}>
-          {preview.direction === "FUTURE" ? "确认并初始化未来月份" : preview.direction === "HISTORICAL" ? "补录这个历史月份" : hasItems ? "补齐当前月新增计划" : "初始化当前月"}
+          {hasItems ? "补齐本月新增规则" : "初始化本月"}
         </button>
       )}
     </section>
@@ -347,15 +338,15 @@ function EntryDialog({ month, plans, monthlyItems, fixedItem, existing, onClose,
     {!fixedItem && <>
       <div className="entry-mode-switch" role="group" aria-label="录入方式">
         <button className={entryMode === "MANUAL" ? "active" : ""} type="button" onClick={() => setEntryMode("MANUAL")}><strong>本月项目</strong><span>直接记录，不需要计划</span></button>
-        <button className={entryMode === "PLAN_LINKED" ? "active" : ""} disabled={plans.length === 0} type="button" onClick={() => setEntryMode("PLAN_LINKED")}><strong>关联长期计划</strong><span>{plans.length === 0 ? "尚未设置，可稍后启用" : "用于计划执行与偏差分析"}</span></button>
+        <button className={entryMode === "PLAN_LINKED" ? "active" : ""} disabled={plans.length === 0} type="button" onClick={() => setEntryMode("PLAN_LINKED")}><strong>关联周期规则</strong><span>{plans.length === 0 ? "尚未配置，可稍后启用" : "沿用本月计划基准"}</span></button>
       </div>
       {entryMode === "MANUAL" ? <>
         <label>项目名称<input autoFocus data-dialog-initial-focus placeholder="例如：工资、房租、日常餐饮" value={manualName} onChange={(event) => setManualName(event.target.value)} /></label>
         <label>财务类别<Select ariaLabel="财务类别" value={manualCategory} onChange={setManualCategory} options={(contractQuery.data?.categories ?? []).map((category) => ({ value: category.code, label: category.label, description: flowForCategory(category.code) === "INCOME" ? "收入" : "支出" }))} /></label>
-        <div className="notice">这是独立的本月项目，不会自动创建长期计划，也不会产生虚假的计划偏差。</div>
-      </> : <label>所属计划<Select ariaLabel="所属计划" value={planId} onChange={setPlanId} placeholder="选择长期计划" options={plans.map((plan) => ({ value: plan.id, label: plan.name, description: categoryLabel(plan.category) }))} /></label>}
+        <div className="notice">这是独立的本月项目，不会自动创建周期规则，也不会产生虚假的计划偏差。</div>
+      </> : <label>周期规则<Select ariaLabel="周期规则" value={planId} onChange={setPlanId} placeholder="选择周期规则" options={plans.map((plan) => ({ value: plan.id, label: plan.name, description: categoryLabel(plan.category) }))} /></label>}
     </>}
-    {entryMode === "PLAN_LINKED" && selectedPlan?.end_date && selectedPlan.end_date < `${month}-01` && <div className="notice notice-warning">该长期计划已经结束；本条记录仍可作为迟到退款或冲减归入历史项目。</div>}
+    {entryMode === "PLAN_LINKED" && selectedPlan?.end_date && selectedPlan.end_date < `${month}-01` && <div className="notice notice-warning">该周期规则已经结束；本条记录仍可作为迟到退款或冲减归入本月项目。</div>}
     <label>日期<input type="date" min={`${month}-01`} max={`${month}-${new Date(Number(month.slice(0,4)), Number(month.slice(5,7)), 0).getDate()}`} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
     <label>类型<Select ariaLabel="类型" value={effect} onChange={(value) => setEffect(value as "INCREASE" | "DECREASE")} options={[{ value: "INCREASE", label: increaseLabel }, { value: "DECREASE", label: decreaseLabel }]} /></label>
     <label>金额<input autoFocus={Boolean(fixedItem)} data-dialog-initial-focus={fixedItem ? true : undefined} inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
@@ -403,7 +394,7 @@ function InitializationDialog({
         <div className="notice notice-warning">
           {preview.direction === "HISTORICAL"
             ? "当前汇率不一定代表当时汇率。你可以为本次补录临时覆盖汇率；覆盖值不会保存到汇率设置。"
-            : "初始化后，本月计划金额不会随长期计划或今后汇率变化。已有快照不会被覆盖。"}
+            : "初始化后，本月计划金额不会随周期规则或今后汇率变化。已有快照不会被覆盖。"}
         </div>
         {rates.filter((rate) => !rate.is_base_currency).length > 0 && (
           <details>

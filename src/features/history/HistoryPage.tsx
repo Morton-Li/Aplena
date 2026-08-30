@@ -1,96 +1,117 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useMemo } from "react";
+import { Link, useParams } from "react-router-dom";
 
-import {
-  getHistoryAnalytics,
-  queryKeys,
-  type MonthAnalytics,
-} from "../../shared/api/finance";
+import { getHistoryAnalytics, queryKeys, type MonthAnalytics } from "../../shared/api/finance";
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
 import { EmptyState } from "../../shared/components/EmptyState";
-import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
-import { formatMoney, formatPercent } from "../../shared/formatting/finance";
-import { categoryLabel, flowLabel, recognitionLabel } from "../../shared/formatting/labels";
+import { formatMoney, formatPercent, monthLabel } from "../../shared/formatting/finance";
+import { MonthReportDetail } from "./MonthReportDetail";
 
 export function HistoryPage() {
+  const { month } = useParams<{ month?: string }>();
   const historyQuery = useQuery({
     queryKey: queryKeys.historyAnalytics,
     queryFn: () => getHistoryAnalytics(),
   });
-  const [selectedState, setSelectedState] = useState<string | null>(null);
-  const historyData = historyQuery.data;
-  const months = useMemo(() => historyData?.months ?? [], [historyData]);
-  const selectedMonth = selectedState ?? months.at(-1)?.month ?? "";
-  const selected = months.find((month) => month.month === selectedMonth);
-  const financialOption = useMemo(() => trendOption(months), [months]);
-  const savingsOption = useMemo(() => savingsTrendOption(months), [months]);
 
   if (historyQuery.isPending) return <section className="state-card">正在重算历史序列…</section>;
   if (historyQuery.isError) return <section className="state-card"><span role="alert">{describeError(historyQuery.error)}</span></section>;
-  if (months.length === 0) return <EmptyState eyebrow="历史保持只读" title="还没有可比较的月份" description="录入第一个月份的实际数据后，趋势和历史明细会自动出现在这里；单纯浏览历史不会创建数据。" action={<Link className="button button-primary" to="/monthly">录入月度实际</Link>} />;
+
+  const months = historyQuery.data.months;
+  if (month) return <MonthReportPage requestedMonth={month} months={months} />;
+  if (months.length === 0) {
+    return <EmptyState eyebrow="历史保持只读" title="还没有可查看的月份" description="录入第一个月份的实际数据后，月度趋势和详细报告会自动出现在这里；浏览历史不会创建或修改数据。" action={<Link className="button button-primary" to="/monthly">录入本月实际</Link>} />;
+  }
+  return <HistoryIndex months={months} />;
+}
+
+function HistoryIndex({ months }: { months: MonthAnalytics[] }) {
+  const financialOption = useMemo(() => trendOption(months), [months]);
+  const savingsOption = useMemo(() => savingsTrendOption(months), [months]);
+  const newestFirst = useMemo(() => [...months].reverse(), [months]);
 
   return (
     <>
       <header className="page-header">
         <div>
-          <p className="eyebrow">跨月报表</p>
+          <p className="eyebrow">跨月聚合</p>
           <h1>历史报表</h1>
-          <p>比较各月实际结果；存在计划基准的月份同时展示计划执行情况。</p>
+          <p>先比较月份趋势，再进入某个月查看完整财务分析；所有历史数据保持只读。</p>
         </div>
-        <label className="month-picker">查看月份<Select ariaLabel="查看月份" value={selectedMonth} onChange={setSelectedState} options={months.map((month) => ({ value: month.month, label: month.month, description: statusLabel(month.actual_status) }))} /></label>
+        <span className="context-chip">{months.length} 个月份</span>
       </header>
 
       <div className="trend-grid">
         <section className="analysis-card trend-card">
-          <header><div><p className="section-label">Financial Trend</p><h2>收入、支出与结余</h2></div></header>
-          <AnalyticsChart option={financialOption} label="各月计划与实际收入、支出和结余趋势图；未完整月份是当前已录值" height={330} />
+          <header><div><p className="section-label">Financial Trend</p><h2>收入、支出与净结余</h2></div></header>
+          <AnalyticsChart option={financialOption} label="各月计划与实际收入、支出和净结余趋势图" height={330} />
           <FinancialTrendTable months={months} />
         </section>
         <section className="analysis-card trend-card">
           <header><div><p className="section-label">Savings Trend</p><h2>储蓄率</h2></div></header>
-          <AnalyticsChart option={savingsOption} label="各月计划储蓄率与实际储蓄率趋势图；零收入显示为空" height={330} />
-          <table className="data-table">
-            <caption className="sr-only">储蓄率趋势对应数值</caption>
-            <thead><tr><th>月份</th><th>状态</th><th>计划</th><th>实际</th></tr></thead>
-            <tbody>{months.map((month) => <tr key={month.month}><th>{month.month}</th><td>{statusLabel(month.actual_status)}</td><td>{month.planned_item_count > 0 ? percent(month.planned_savings_rate_percent) : "—"}</td><td>{percent(month.actual_savings_rate_percent)}</td></tr>)}</tbody>
-          </table>
+          <AnalyticsChart option={savingsOption} label="各月计划储蓄率与实际储蓄率趋势图" height={330} />
+          <div className="table-scroll"><table className="data-table"><caption className="sr-only">储蓄率趋势对应数值</caption><thead><tr><th>月份</th><th>状态</th><th>计划</th><th>实际</th></tr></thead><tbody>{months.map((item) => <tr key={item.month}><th><Link className="table-link" to={`/history/${item.month}`}>{item.month}</Link></th><td>{statusLabel(item.actual_status)}</td><td>{item.planned_item_count > 0 ? formatPercent(item.planned_savings_rate_percent) : "—"}</td><td>{formatPercent(item.actual_savings_rate_percent)}</td></tr>)}</tbody></table></div>
         </section>
       </div>
 
-      {selected && <MonthHistoryDetail analytics={selected} />}
+      <section className="history-month-index" aria-labelledby="history-month-index-title">
+        <header className="section-heading">
+          <div><p className="section-label">Monthly Reports</p><h2 id="history-month-index-title">按月份查看详细报告</h2></div>
+          <span className="report-context">最近月份优先</span>
+        </header>
+        <div className="history-month-grid">
+          {newestFirst.map((item) => <MonthReportLink analytics={item} key={item.month} />)}
+        </div>
+      </section>
     </>
   );
 }
 
-function MonthHistoryDetail({ analytics }: { analytics: MonthAnalytics }) {
-  const actualLabel = analytics.actual_status === "COMPLETE" ? "最终实际" : "当前已录";
+function MonthReportLink({ analytics }: { analytics: MonthAnalytics }) {
   return (
-    <section className="history-detail">
-      <header>
-        <div><p className="section-label">{analytics.month} 月度总览</p><h2>快照、分类与项目明细</h2></div>
-        <span className={"context-chip status-" + analytics.actual_status.toLowerCase()}>{statusLabel(analytics.actual_status)} · {analytics.recorded_item_count}/{analytics.total_item_count}</span>
+    <Link className="history-month-card" to={`/history/${analytics.month}`}>
+      <div><span>{monthLabel(analytics.month)}</span><small>{statusLabel(analytics.actual_status)} · {analytics.recorded_item_count}/{analytics.total_item_count} 项</small></div>
+      <dl>
+        <div><dt>收入</dt><dd>{formatMoney(analytics.income.actual_to_date, analytics.currency)}</dd></div>
+        <div><dt>支出</dt><dd>{formatMoney(analytics.expense.actual_to_date, analytics.currency)}</dd></div>
+        <div><dt>净结余</dt><dd>{formatMoney(analytics.net_balance.actual_to_date, analytics.currency)}</dd></div>
+      </dl>
+      <span className="history-month-card-action">查看详细报告 <span aria-hidden="true">→</span></span>
+    </Link>
+  );
+}
+
+function MonthReportPage({ requestedMonth, months }: { requestedMonth: string; months: MonthAnalytics[] }) {
+  const selectedIndex = months.findIndex((item) => item.month === requestedMonth);
+  const selected = selectedIndex >= 0 ? months[selectedIndex] : null;
+  if (!selected || !/^\d{4}-\d{2}$/.test(requestedMonth)) {
+    return <EmptyState eyebrow="历史报表" title="没有找到这个月份" description="该月份没有可用的月度快照或实际条目。历史浏览不会自动创建缺失数据。" action={<Link className="button button-primary" to="/history">返回历史报表</Link>} />;
+  }
+  const previous = months[selectedIndex - 1];
+  const next = months[selectedIndex + 1];
+  return (
+    <>
+      <header className="page-header history-report-header">
+        <div>
+          <Link className="back-link" to="/history">← 返回历史报表</Link>
+          <p className="eyebrow">月度详细报告</p>
+          <h1>{monthLabel(selected.month)}</h1>
+          <p>该月份的核心指标、计划执行、分类结构、项目排名与重要偏差。</p>
+        </div>
+        <div className="history-report-context">
+          <span className={`context-chip status-${selected.actual_status.toLowerCase()}`}>{statusLabel(selected.actual_status)}</span>
+          <strong>完整度 {formatPercent(selected.completeness_percent)}</strong>
+          <small>{selected.recorded_item_count}/{selected.total_item_count} 项已录入</small>
+        </div>
       </header>
-      <div className="history-summary">
-        {[["总收入", analytics.income], ["总支出", analytics.expense], ["净结余", analytics.net_balance]].map(([label, value]) => {
-          const metric = value as MonthAnalytics["income"];
-          return <article key={label as string}><span>{label as string}</span><strong>{analytics.planned_item_count > 0 ? formatMoney(metric.planned, analytics.currency) : formatMoney(metric.actual_to_date, analytics.currency)}</strong><small>{analytics.planned_item_count > 0 ? `计划基准 · ${actualLabel} ${formatMoney(metric.actual_to_date, analytics.currency)}` : `${actualLabel} · 无计划基准`}</small></article>;
-        })}
-        <article><span>储蓄率</span><strong>{analytics.planned_item_count > 0 ? percent(analytics.planned_savings_rate_percent) : percent(analytics.actual_savings_rate_percent)}</strong><small>{analytics.planned_item_count > 0 ? `计划基准 · ${actualLabel} ${percent(analytics.actual_savings_rate_percent)}` : `${actualLabel} · 无计划基准`}</small></article>
-      </div>
-      <div className="history-tables">
-        <section className="analysis-card">
-          <header><h3>分类汇总</h3></header>
-          <table className="data-table"><thead><tr><th>类别</th><th>方向</th><th>计划</th><th>{actualLabel}</th><th>未录入</th></tr></thead><tbody>{analytics.categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{flowLabel(item.flow_type)}</td><td>{analytics.planned_item_count > 0 ? formatMoney(item.planned_amount, analytics.currency) : "—"}</td><td>{formatMoney(item.actual_to_date, analytics.currency)}</td><td>{item.missing_actual_count}</td></tr>)}</tbody></table>
-        </section>
-        <section className="analysis-card">
-          <header><h3>项目明细</h3></header>
-          <table className="data-table"><thead><tr><th>项目</th><th>类别</th><th>计划</th><th>{actualLabel}</th><th>偏差</th></tr></thead><tbody>{analytics.projects.map((item) => <tr key={item.monthly_item_id}><th>{item.name}</th><td>{categoryLabel(item.category)}</td><td>{item.variance_amount === null ? "—" : formatMoney(item.planned_amount, analytics.currency)}</td><td>{formatMoney(item.actual_amount, analytics.currency)}</td><td>{formatMoney(item.variance_amount, analytics.currency)}</td></tr>)}</tbody></table>
-          <p className="table-note">计划项目的模式信息保留在月度执行中：{recognitionLabel("AMORTIZED")}与{recognitionLabel("PAYMENT")}均不会被历史查询重算；手动项目没有计划偏差。</p>
-        </section>
-      </div>
-    </section>
+      {(previous || next) && <nav className="month-report-navigation" aria-label="相邻月份">
+        {previous ? <Link to={`/history/${previous.month}`}>← {monthLabel(previous.month)}</Link> : <span />}
+        {next ? <Link to={`/history/${next.month}`}>{monthLabel(next.month)} →</Link> : <span />}
+      </nav>}
+      <MonthReportDetail analytics={selected} />
+    </>
   );
 }
 
@@ -107,22 +128,9 @@ function trendOption(months: MonthAnalytics[]) {
     tooltip: { trigger: "axis" },
     legend: { type: "scroll", top: 0, left: 0, right: 0, data: series.map(([name]) => name), textStyle: chartLegendText },
     grid: { left: 58, right: 20, top: 70, bottom: 40 },
-    xAxis: {
-      type: "category",
-      boundaryGap: false,
-      data: months.map((month) => month.month),
-      axisLabel: compactMonthLabels(months.length),
-    },
+    xAxis: { type: "category", boundaryGap: false, data: months.map((item) => item.month), axisLabel: compactMonthLabels(months.length) },
     yAxis: { type: "value" },
-    series: series.map(([name, metric, field, color, type]) => ({
-      name,
-      type: "line",
-      data: months.map((month) => field === "planned" && month.planned_item_count === 0 ? null : month[metric][field]),
-      connectNulls: false,
-      lineStyle: { color, type },
-      itemStyle: { color },
-      symbolSize: 7,
-    })),
+    series: series.map(([name, metric, field, color, lineType]) => ({ name, type: "line", data: months.map((item) => field === "planned" && item.planned_item_count === 0 ? null : item[metric][field]), connectNulls: false, lineStyle: { color, type: lineType }, itemStyle: { color }, symbolSize: 7 })),
   };
 }
 
@@ -131,44 +139,25 @@ function savingsTrendOption(months: MonthAnalytics[]) {
     tooltip: { trigger: "axis" },
     legend: { top: 0, data: ["计划储蓄率", "实际储蓄率"], textStyle: chartLegendText },
     grid: { left: 52, right: 20, top: 55, bottom: 40 },
-    xAxis: {
-      type: "category",
-      boundaryGap: false,
-      data: months.map((month) => month.month),
-      axisLabel: compactMonthLabels(months.length),
-    },
+    xAxis: { type: "category", boundaryGap: false, data: months.map((item) => item.month), axisLabel: compactMonthLabels(months.length) },
     yAxis: { type: "value", axisLabel: { formatter: "{value}%" } },
     series: [
-      { name: "计划储蓄率", type: "line", data: months.map((month) => month.planned_savings_rate_percent), itemStyle: { color: "#94a3b8" }, lineStyle: { color: "#94a3b8", type: "dashed" } },
-      { name: "实际储蓄率", type: "line", data: months.map((month) => month.actual_savings_rate_percent), itemStyle: { color: "#2563eb" }, lineStyle: { color: "#2563eb" }, connectNulls: false },
+      { name: "计划储蓄率", type: "line", data: months.map((item) => item.planned_item_count > 0 ? item.planned_savings_rate_percent : null), itemStyle: { color: "#94a3b8" }, lineStyle: { color: "#94a3b8", type: "dashed" } },
+      { name: "实际储蓄率", type: "line", data: months.map((item) => item.actual_savings_rate_percent), itemStyle: { color: "#2563eb" }, lineStyle: { color: "#2563eb" }, connectNulls: false },
     ],
   };
 }
 
-const chartLegendText = { color: "#64748b", fontSize: 11 };
-
-function compactMonthLabels(count: number) {
-  return {
-    hideOverlap: true,
-    interval: count > 6 ? 1 : 0,
-    formatter: (value: string) => value.slice(2),
-  };
+function FinancialTrendTable({ months }: { months: MonthAnalytics[] }) {
+  return <div className="table-scroll"><table className="data-table"><caption className="sr-only">财务趋势图对应数值</caption><thead><tr><th>月份</th><th>状态</th><th>计划收入</th><th>实际收入</th><th>计划支出</th><th>实际支出</th><th>计划结余</th><th>实际结余</th></tr></thead><tbody>{months.map((item) => <tr key={item.month}><th><Link className="table-link" to={`/history/${item.month}`}>{item.month}</Link></th><td>{statusLabel(item.actual_status)}</td><td>{item.planned_item_count > 0 ? formatMoney(item.income.planned, item.currency) : "—"}</td><td>{formatMoney(item.income.actual_to_date, item.currency)}</td><td>{item.planned_item_count > 0 ? formatMoney(item.expense.planned, item.currency) : "—"}</td><td>{formatMoney(item.expense.actual_to_date, item.currency)}</td><td>{item.planned_item_count > 0 ? formatMoney(item.net_balance.planned, item.currency) : "—"}</td><td>{formatMoney(item.net_balance.actual_to_date, item.currency)}</td></tr>)}</tbody></table></div>;
 }
 
-function FinancialTrendTable({ months }: { months: MonthAnalytics[] }) {
-  return (
-    <table className="data-table">
-      <caption className="sr-only">财务趋势图对应数值</caption>
-      <thead><tr><th>月份</th><th>状态</th><th>计划收入</th><th>实际收入</th><th>计划支出</th><th>实际支出</th><th>计划结余</th><th>实际结余</th></tr></thead>
-      <tbody>{months.map((month) => <tr key={month.month}><th>{month.month}</th><td>{statusLabel(month.actual_status)}</td><td>{month.planned_item_count > 0 ? formatMoney(month.income.planned, month.currency) : "—"}</td><td>{formatMoney(month.income.actual_to_date, month.currency)}</td><td>{month.planned_item_count > 0 ? formatMoney(month.expense.planned, month.currency) : "—"}</td><td>{formatMoney(month.expense.actual_to_date, month.currency)}</td><td>{month.planned_item_count > 0 ? formatMoney(month.net_balance.planned, month.currency) : "—"}</td><td>{formatMoney(month.net_balance.actual_to_date, month.currency)}</td></tr>)}</tbody>
-    </table>
-  );
+function compactMonthLabels(count: number) {
+  return { hideOverlap: true, interval: count > 6 ? 1 : 0, formatter: (value: string) => value.slice(2) };
 }
 
 function statusLabel(status: MonthAnalytics["actual_status"]) {
   return status === "COMPLETE" ? "最终实际" : status === "PARTIAL" ? "当前已录" : "空月份";
 }
 
-function percent(value: string | null) {
-  return formatPercent(value);
-}
+const chartLegendText = { color: "#64748b", fontSize: 11 };

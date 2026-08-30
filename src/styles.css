@@ -3387,6 +3387,214 @@ textarea:focus,
   gap: 8px;
 }
 
+.recurring-rules-panel {
+  margin-top: 24px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: clip;
+}
+
+.recurring-rules-panel > summary {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 22px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.recurring-rules-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.recurring-rules-panel > summary::after {
+  content: "+";
+  width: 28px;
+  color: #64748b;
+  font-size: 24px;
+  font-weight: 400;
+  text-align: center;
+}
+
+.recurring-rules-panel[open] > summary::after {
+  content: "−";
+}
+
+.recurring-rules-panel > summary h2 {
+  margin: 5px 0 4px;
+  font-size: 20px;
+}
+
+.recurring-rules-panel > summary p:last-child {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.recurring-rules-summary {
+  margin-left: auto;
+  color: #475569;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.recurring-rules-body {
+  padding: 20px 22px 24px;
+  border-top: 1px solid var(--border);
+}
+
+.recurring-rules-heading {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.recurring-rules-heading h3 {
+  margin: 5px 0 0;
+  font-size: 18px;
+}
+
+.history-month-index {
+  margin-top: 30px;
+}
+
+.history-month-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.history-month-card {
+  display: grid;
+  gap: 15px;
+  padding: 19px 20px;
+  color: var(--ink);
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  text-decoration: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.history-month-card:hover {
+  border-color: #aebbd0;
+  box-shadow: 0 12px 30px rgb(15 23 42 / 10%);
+  transform: translateY(-1px);
+}
+
+.history-month-card > div:first-child,
+.history-month-card > div:first-child span,
+.history-month-card > div:first-child small {
+  display: block;
+}
+
+.history-month-card > div:first-child span {
+  font-size: 19px;
+  font-weight: 650;
+}
+
+.history-month-card > div:first-child small,
+.history-month-card-action {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.history-month-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.history-month-card dl div {
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #e5eaf1;
+  border-radius: 8px;
+}
+
+.history-month-card dt {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.history-month-card dd {
+  margin: 5px 0 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.history-month-card-action {
+  color: #1d4ed8;
+  font-weight: 650;
+}
+
+.table-link,
+.back-link,
+.month-report-navigation a {
+  color: #1d4ed8;
+  text-decoration: none;
+}
+
+.table-link:hover,
+.back-link:hover,
+.month-report-navigation a:hover {
+  text-decoration: underline;
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 15px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.history-report-context {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+}
+
+.history-report-context strong {
+  font-size: 17px;
+}
+
+.history-report-context small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.month-report-navigation {
+  display: flex;
+  justify-content: space-between;
+  margin: -8px 0 18px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.month-report-detail > .history-summary {
+  margin-top: 0;
+}
+
+.history-execution-card,
+.history-variance-card {
+  margin-top: 18px;
+}
+
+.history-category-card {
+  overflow: auto;
+}
+
 @media (max-width: 1180px) {
   .kpi-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3424,7 +3632,7 @@ textarea:focus,
 
   .navigation {
     display: grid;
-    grid-template-columns: repeat(6, max-content);
+    grid-template-columns: repeat(4, max-content);
     gap: 3px;
     width: 100%;
     overflow-x: auto;
@@ -3469,7 +3677,7 @@ textarea:focus,
   }
 
   .navigation {
-    grid-template-columns: repeat(6, max-content);
+    grid-template-columns: repeat(4, max-content);
   }
 
   .main-content {
@@ -3490,6 +3698,20 @@ textarea:focus,
   .workspace-skeleton-grid,
   .empty-ledger-header {
     grid-template-columns: 1fr;
+  }
+
+  .history-month-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .recurring-rules-heading,
+  .history-report-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-report-context {
+    justify-items: start;
   }
 
   .empty-ledger-header div + div {
