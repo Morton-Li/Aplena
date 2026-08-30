@@ -6,6 +6,7 @@ mod category;
 mod currency;
 mod error;
 mod monthly_item;
+mod next_month_goal;
 mod plan_item;
 mod recognition;
 mod settings;
@@ -21,6 +22,7 @@ pub use category::{Category, FlowType, MonthlyItemOrigin, MonthlyItemSource, Rec
 pub use currency::CurrencyCode;
 pub use error::DomainError;
 pub use monthly_item::{ActualDataStatus, MonthlyItem};
+pub use next_month_goal::NextMonthGoal;
 pub use plan_item::PlanItem;
 pub use recognition::{
     create_monthly_snapshot, is_effective_in, is_recognized_in, monthly_equivalent,

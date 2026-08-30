@@ -1,8 +1,7 @@
 use std::cmp::Ordering;
 
 use pfcm_domain::{
-    Category, FlowType, MonthlyItem, MonthlyItemOrigin, MonthlyItemSource, SavingsRate,
-    SignedAmount, YearMonth,
+    Category, FlowType, MonthlyItem, MonthlyItemOrigin, MonthlyItemSource, SignedAmount, YearMonth,
 };
 use rust_decimal::{Decimal, RoundingStrategy};
 
@@ -21,7 +20,6 @@ const CATEGORIES: [Category; 5] = [
 pub fn build_month_analytics(
     month: YearMonth,
     currency: &str,
-    minimum_savings_rate: SavingsRate,
     items: &[MonthlyItem],
 ) -> MonthAnalyticsDto {
     let planned_income = sum_planned(items, FlowType::Income);
@@ -60,20 +58,12 @@ pub fn build_month_analytics(
     let savings_rate_variance = actual_savings_rate
         .zip(planned_savings_rate)
         .map(|(actual, planned)| actual - planned);
-    let savings_rate_target_completion =
+    let savings_rate_plan_completion =
         actual_savings_rate
             .zip(planned_savings_rate)
             .and_then(|(actual, planned)| {
                 (planned > Decimal::ZERO).then(|| actual / planned * Decimal::ONE_HUNDRED)
             });
-    let savings_rate_relative_deviation =
-        actual_savings_rate
-            .zip(planned_savings_rate)
-            .and_then(|(actual, planned)| {
-                (planned > Decimal::ZERO)
-                    .then(|| (actual - planned).abs() / planned * Decimal::ONE_HUNDRED)
-            });
-
     let categories = CATEGORIES
         .into_iter()
         .map(|category| {
@@ -230,12 +220,7 @@ pub fn build_month_analytics(
         planned_savings_rate_percent: planned_savings_rate.map(format_percent),
         actual_savings_rate_percent: actual_savings_rate.map(format_percent),
         savings_rate_percentage_point_variance: savings_rate_variance.map(format_percent),
-        savings_rate_target_completion_percent: savings_rate_target_completion.map(format_percent),
-        savings_rate_relative_deviation_percent: savings_rate_relative_deviation
-            .map(format_percent),
-        minimum_savings_rate_percent: format_percent(
-            minimum_savings_rate.factor() * Decimal::ONE_HUNDRED,
-        ),
+        savings_rate_plan_completion_percent: savings_rate_plan_completion.map(format_percent),
         categories,
         projects,
         important_variances,
@@ -369,12 +354,7 @@ mod tests {
             item("房租", Category::EssentialExpense, "3000", Some("3200")),
             item("订阅", Category::FixedCommitmentExpense, "500", Some("400")),
         ];
-        let analytics = build_month_analytics(
-            YearMonth::new(2026, 6).unwrap(),
-            "CNY",
-            SavingsRate::from_basis_points(2000).unwrap(),
-            &items,
-        );
+        let analytics = build_month_analytics(YearMonth::new(2026, 6).unwrap(), "CNY", &items);
 
         assert_eq!(analytics.income.planned, "11000.00");
         assert_eq!(analytics.income.actual_to_date.as_deref(), Some("11000.00"));
@@ -443,12 +423,7 @@ mod tests {
             "0",
             Some("0"),
         )];
-        let analytics = build_month_analytics(
-            YearMonth::new(2026, 6).unwrap(),
-            "CNY",
-            SavingsRate::from_basis_points(0).unwrap(),
-            &zero_plan,
-        );
+        let analytics = build_month_analytics(YearMonth::new(2026, 6).unwrap(), "CNY", &zero_plan);
         assert_eq!(analytics.actual_status, "COMPLETE");
         assert_eq!(analytics.planned_savings_rate_percent, None);
         assert_eq!(analytics.actual_savings_rate_percent, None);
@@ -456,23 +431,14 @@ mod tests {
         assert_eq!(analytics.projects[0].actual_share_percent, None);
         assert_eq!(analytics.income.completion_percent, None);
 
-        let empty = build_month_analytics(
-            YearMonth::new(2026, 7).unwrap(),
-            "CNY",
-            SavingsRate::from_basis_points(0).unwrap(),
-            &[],
-        );
+        let empty = build_month_analytics(YearMonth::new(2026, 7).unwrap(), "CNY", &[]);
         assert_eq!(empty.actual_status, "EMPTY");
         assert_eq!(empty.completeness_percent, None);
         assert!(empty.projects.is_empty());
 
         let missing_actual = vec![item("未录入", Category::FixedIncome, "100", None)];
-        let no_actuals = build_month_analytics(
-            YearMonth::new(2026, 8).unwrap(),
-            "CNY",
-            SavingsRate::from_basis_points(0).unwrap(),
-            &missing_actual,
-        );
+        let no_actuals =
+            build_month_analytics(YearMonth::new(2026, 8).unwrap(), "CNY", &missing_actual);
         assert_eq!(no_actuals.actual_status, "EMPTY");
         assert_eq!(no_actuals.completeness_percent.as_deref(), Some("0.00"));
         assert_eq!(no_actuals.income.actual_to_date, None);
@@ -498,12 +464,7 @@ mod tests {
             CurrencyCode::new("CNY").unwrap(),
             None,
         );
-        let analytics = build_month_analytics(
-            YearMonth::new(2026, 6).unwrap(),
-            "CNY",
-            SavingsRate::from_basis_points(2000).unwrap(),
-            &[manual],
-        );
+        let analytics = build_month_analytics(YearMonth::new(2026, 6).unwrap(), "CNY", &[manual]);
 
         assert_eq!(analytics.planned_item_count, 0);
         assert_eq!(analytics.expense.actual_to_date.as_deref(), Some("3200.00"));

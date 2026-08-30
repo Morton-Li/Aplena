@@ -10,7 +10,8 @@ use super::{
     dto::{
         ActualEntryInputDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto,
         EnsureActualOnlyInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto,
-        ManualMonthlyItemInputDto, PlanItemInputDto, RateOverrideDto, SettingsInputDto,
+        ManualMonthlyItemInputDto, NextMonthGoalInputDto, PlanItemInputDto, RateOverrideDto,
+        SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -19,9 +20,7 @@ async fn test_service() -> FinanceService {
     let service = FinanceService::new(open_memory_database().await.unwrap()).unwrap();
     service
         .save_settings(SettingsInputDto {
-            target_month: current_month().to_string(),
             base_currency: "CNY".to_owned(),
-            minimum_savings_rate_basis_points: 2000,
         })
         .await
         .unwrap();
@@ -85,12 +84,17 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             let name: String = row.try_get("name").ok()?;
             matches!(
                 name.as_str(),
-                "settings" | "exchange_rates" | "plan_items" | "monthly_items" | "actual_entries"
+                "settings"
+                    | "next_month_goal"
+                    | "exchange_rates"
+                    | "plan_items"
+                    | "monthly_items"
+                    | "actual_entries"
             )
             .then(|| (name, row.try_get::<i64, _>("strict").unwrap()))
         })
         .collect::<Vec<_>>();
-    assert_eq!(business_tables.len(), 5);
+    assert_eq!(business_tables.len(), 6);
     assert!(business_tables.iter().all(|(_, strict)| *strict == 1));
 
     let names: Vec<String> =
@@ -144,10 +148,9 @@ async fn migration_reopens_existing_database_without_losing_data_and_uses_wal() 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("existing.sqlite3");
     let store = open_database(&path).await.unwrap();
-    let month = YearMonth::new(2026, 1).unwrap();
     store
         .create_settings(
-            &Settings::new(month, CurrencyCode::new("CNY").unwrap(), 2500).unwrap(),
+            &Settings::new(CurrencyCode::new("CNY").unwrap()).unwrap(),
             "2026-01-01T00:00:00Z",
         )
         .await
@@ -167,8 +170,9 @@ async fn migration_reopens_existing_database_without_losing_data_and_uses_wal() 
             .unwrap()
             .unwrap()
             .value
-            .target_month(),
-        month
+            .base_currency()
+            .as_str(),
+        "CNY"
     );
 }
 
@@ -221,6 +225,15 @@ async fn legacy_four_decimal_database_migrates_to_cents_entries_and_confirmation
     let plans = store.list_plan_items().await.unwrap();
     assert_eq!(plans[0].value.amount().decimal_string(), "1.23");
     assert_eq!(plans[0].value.start_date().to_string(), "2026-01-01");
+    let migrated_goal = store.get_next_month_goal().await.unwrap().unwrap();
+    assert_eq!(
+        migrated_goal.value.minimum_savings_rate().basis_points(),
+        2_000
+    );
+    assert_eq!(
+        migrated_goal.value.target_month(),
+        current_month().next_month().unwrap()
+    );
     let january = store
         .list_monthly_items(YearMonth::from_str("2026-01").unwrap())
         .await
@@ -258,7 +271,7 @@ async fn startup_automatically_initializes_only_the_current_natural_month() {
     let current = current_month();
     store
         .create_settings(
-            &Settings::new(current, CurrencyCode::new("CNY").unwrap(), 2000).unwrap(),
+            &Settings::new(CurrencyCode::new("CNY").unwrap()).unwrap(),
             "2026-01-01T00:00:00Z",
         )
         .await
@@ -304,9 +317,13 @@ async fn startup_creates_default_cny_settings_idempotently() {
     service.initialize_on_startup().await;
 
     let settings = service.get_settings().await.unwrap().unwrap();
-    assert_eq!(settings.target_month, current_month().to_string());
     assert_eq!(settings.base_currency, "CNY");
-    assert_eq!(settings.minimum_savings_rate_basis_points, 2_000);
+    let goal = service.get_next_month_goal().await.unwrap();
+    assert_eq!(
+        goal.target_month,
+        current_month().next_month().unwrap().to_string()
+    );
+    assert_eq!(goal.minimum_savings_rate_basis_points, 2_000);
     assert!(service.startup_status().await.error.is_none());
 
     let store = service.test_store().await;
@@ -321,6 +338,58 @@ async fn startup_creates_default_cny_settings_idempotently() {
             .unwrap();
     assert_eq!(settings_count, 1);
     assert_eq!(base_rate, 100_000_000);
+}
+
+#[tokio::test]
+async fn goal_and_rule_changes_stay_forward_looking_and_do_not_mutate_current_snapshots() {
+    let service = test_service().await;
+    let current = current_month();
+    let created = service
+        .create_plan_item(plan(
+            "下月工资",
+            "FIXED_INCOME",
+            "30000",
+            "CNY",
+            1,
+            "AMORTIZED",
+            current,
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .list_monthly_items(current.to_string())
+            .await
+            .unwrap()
+            .len(),
+        0,
+        "saving a rule must not initialize the current month"
+    );
+
+    service.initialize_month(init(current)).await.unwrap();
+    let before = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap();
+    let goal = service
+        .save_next_month_goal(NextMonthGoalInputDto {
+            minimum_savings_rate_basis_points: 3_500,
+        })
+        .await
+        .unwrap();
+    assert_eq!(goal.target_month, current.next_month().unwrap().to_string());
+    assert_eq!(goal.minimum_savings_rate_basis_points, 3_500);
+    let after = service
+        .list_monthly_items(current.to_string())
+        .await
+        .unwrap();
+    assert_eq!(before, after);
+    assert_eq!(
+        after[0].source_plan_item_id.as_deref(),
+        Some(created.id.as_str())
+    );
 }
 
 #[tokio::test]
@@ -389,6 +458,8 @@ async fn initialization_is_idempotent_concurrency_safe_and_requires_noncurrent_c
         .await
         .unwrap();
 
+    let first = service.initialize_month(init(current)).await.unwrap();
+    assert_eq!(first.created_count, 1);
     let repeated = service.initialize_month(init(current)).await.unwrap();
     assert_eq!(repeated.created_count, 0);
     assert_eq!(repeated.skipped_existing_count, 1);
@@ -446,7 +517,7 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
         .unwrap();
     let actual_only = service
         .ensure_actual_only(EnsureActualOnlyInputDto {
-            plan_item_id: created.plan_item.id.clone(),
+            plan_item_id: created.id.clone(),
             month: next.to_string(),
         })
         .await
@@ -468,13 +539,13 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
 
     service
         .update_plan_item(PlanItemInputDto {
-            id: Some(created.plan_item.id.clone()),
-            name: created.plan_item.name.clone(),
-            category: created.plan_item.category.clone(),
-            planned_amount: created.plan_item.planned_amount.clone(),
-            currency: created.plan_item.currency.clone(),
+            id: Some(created.id.clone()),
+            name: created.name.clone(),
+            category: created.category.clone(),
+            planned_amount: created.planned_amount.clone(),
+            currency: created.currency.clone(),
             period_months: 1,
-            start_date: created.plan_item.start_date.clone(),
+            start_date: created.start_date.clone(),
             end_date: None,
             recognition_mode: "PAYMENT".to_owned(),
             note: None,
@@ -505,10 +576,7 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
     assert_eq!(repeated.created_count, 0);
     assert_eq!(repeated.skipped_existing_count, 1);
 
-    service
-        .delete_plan_item(created.plan_item.id)
-        .await
-        .unwrap();
+    service.delete_plan_item(created.id).await.unwrap();
     let error = service
         .create_actual_entry(ActualEntryInputDto {
             id: None,
@@ -842,7 +910,7 @@ async fn plan_rate_changes_and_deletion_never_rewrite_history() {
         historical,
         Some(historical),
     );
-    changed.id = Some(created.plan_item.id.clone());
+    changed.id = Some(created.id.clone());
     service.update_plan_item(changed).await.unwrap();
     service
         .upsert_exchange_rate(ExchangeRateUpsertDto {
@@ -866,10 +934,7 @@ async fn plan_rate_changes_and_deletion_never_rewrite_history() {
         1
     );
 
-    let deleted = service
-        .delete_plan_item(created.plan_item.id)
-        .await
-        .unwrap();
+    let deleted = service.delete_plan_item(created.id).await.unwrap();
     assert_eq!(deleted.detached_monthly_items, 1);
     let after_delete = service
         .list_monthly_items(historical.to_string())
@@ -896,6 +961,7 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
         ))
         .await
         .unwrap();
+    service.initialize_month(init(current)).await.unwrap();
     let item = service
         .list_monthly_items(current.to_string())
         .await
@@ -1030,9 +1096,7 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
 
     let error = service
         .save_settings(SettingsInputDto {
-            target_month: current.to_string(),
             base_currency: "USD".to_owned(),
-            minimum_savings_rate_basis_points: 2000,
         })
         .await
         .unwrap_err();
@@ -1083,10 +1147,7 @@ async fn persisted_capacity_uses_payment_items_monthly_equivalent_even_between_p
         .await
         .unwrap();
 
-    let capacity = service
-        .financial_capacity(Some("2026-02".to_owned()))
-        .await
-        .unwrap();
+    let capacity = service.financial_capacity().await.unwrap();
     assert_eq!(capacity.stable_income, "30000.00");
     assert_eq!(capacity.fixed_commitments, "3000.00");
     assert_eq!(capacity.preserved_capacity, "21000.00");

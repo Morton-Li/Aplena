@@ -61,8 +61,8 @@ function MonthSummary({
         <strong>{formatPercent(analytics.actual_savings_rate_percent)}</strong>
         <small>
           {hasPlanBaseline
-            ? `计划 ${formatPercent(analytics.planned_savings_rate_percent)} · 目标 ${formatPercent(analytics.minimum_savings_rate_percent)}`
-            : `目标 ${formatPercent(analytics.minimum_savings_rate_percent)}`}
+            ? `冻结计划 ${formatPercent(analytics.planned_savings_rate_percent)}`
+            : `${actualLabel} · 无计划基准`}
         </small>
       </article>
     </section>
@@ -108,7 +108,7 @@ function ExecutionTable({
               <td>{hasPlanBaseline ? formatPercent(analytics.planned_savings_rate_percent) : "—"}</td>
               <td>{formatPercent(analytics.actual_savings_rate_percent)}</td>
               <td>{hasPlanBaseline ? `${analytics.savings_rate_percentage_point_variance ?? "—"} 个百分点` : "—"}</td>
-              <td>{hasPlanBaseline ? formatPercent(analytics.savings_rate_target_completion_percent) : "—"}</td>
+              <td>{hasPlanBaseline ? formatPercent(analytics.savings_rate_plan_completion_percent) : "—"}</td>
             </tr>
           </tbody>
         </table>

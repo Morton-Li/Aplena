@@ -2995,7 +2995,7 @@ textarea:focus,
 
 .kpi-grid {
   display: grid;
-  grid-template-columns: 1.35fr repeat(4, minmax(0, 1fr));
+  grid-template-columns: 1.35fr repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -3255,6 +3255,25 @@ textarea:focus,
   list-style: none;
 }
 
+.recurring-rules-summary-static {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 22px;
+}
+
+.recurring-rules-summary-static h2 {
+  margin: 5px 0 4px;
+  font-size: 20px;
+}
+
+.recurring-rules-summary-static p:last-child {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
 .recurring-rules-panel > summary::-webkit-details-marker {
   display: none;
 }
@@ -3306,6 +3325,146 @@ textarea:focus,
 .recurring-rules-heading h3 {
   margin: 5px 0 0;
   font-size: 18px;
+}
+
+.goal-page-header {
+  align-items: flex-end;
+}
+
+.goal-month-badge {
+  min-width: 168px;
+  padding: 13px 15px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-left: 3px solid #2563eb;
+  border-radius: 8px;
+  box-shadow: var(--shadow-card);
+}
+
+.goal-month-badge span,
+.goal-month-badge small {
+  display: block;
+  color: #64748b;
+  font-size: 10px;
+}
+
+.goal-month-badge strong {
+  display: block;
+  margin: 3px 0;
+  color: #111827;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.goal-boundary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.goal-boundary div {
+  padding: 13px 16px;
+}
+
+.goal-boundary div + div {
+  border-left: 1px solid var(--border);
+}
+
+.goal-boundary span,
+.goal-boundary strong,
+.goal-boundary small {
+  display: block;
+}
+
+.goal-boundary span,
+.goal-boundary small {
+  color: #64748b;
+  font-size: 10px;
+}
+
+.goal-boundary strong {
+  margin: 3px 0;
+  color: #1e3a5f;
+  font-size: 13px;
+}
+
+.goal-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(270px, 0.72fr) minmax(0, 1.6fr);
+  gap: 14px;
+}
+
+.goal-settings-card {
+  align-content: start;
+}
+
+.goal-policy-note {
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid #e5eaf1;
+  border-radius: 7px;
+}
+
+.goal-policy-note span,
+.goal-policy-note small {
+  display: block;
+  color: #64748b;
+  font-size: 10px;
+}
+
+.goal-policy-note strong {
+  display: block;
+  margin: 5px 0;
+  color: #111827;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.goal-capacity-card {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.goal-capacity-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 16px 0 4px;
+  overflow: hidden;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.goal-capacity-metrics div {
+  min-width: 0;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.goal-capacity-metrics span,
+.goal-capacity-metrics small {
+  display: block;
+  color: #64748b;
+  font-size: 9px;
+}
+
+.goal-capacity-metrics strong {
+  display: block;
+  margin: 5px 0;
+  color: #111827;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums lining-nums;
+  overflow-wrap: anywhere;
+}
+
+.goal-chart-empty {
+  min-height: 250px;
 }
 
 .history-month-index {
@@ -3456,6 +3615,10 @@ textarea:focus,
   .dashboard-chart-grid-primary {
     grid-template-columns: 1fr;
   }
+
+  .goal-overview-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 860px) {
@@ -3481,7 +3644,7 @@ textarea:focus,
 
   .navigation {
     display: grid;
-    grid-template-columns: repeat(4, max-content);
+    grid-template-columns: repeat(5, max-content);
     gap: 3px;
     width: 100%;
     overflow-x: auto;
@@ -3526,7 +3689,7 @@ textarea:focus,
   }
 
   .navigation {
-    grid-template-columns: repeat(4, max-content);
+    grid-template-columns: repeat(5, max-content);
   }
 
   .main-content {
@@ -3545,8 +3708,15 @@ textarea:focus,
 
   .kpi-grid,
   .workspace-skeleton-grid,
-  .empty-ledger-header {
+  .empty-ledger-header,
+  .goal-boundary,
+  .goal-capacity-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .goal-boundary div + div {
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 
   .history-month-grid {

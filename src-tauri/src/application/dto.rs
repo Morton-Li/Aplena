@@ -3,15 +3,25 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsInputDto {
-    pub target_month: String,
     pub base_currency: String,
-    pub minimum_savings_rate_basis_points: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SettingsDto {
-    pub target_month: String,
     pub base_currency: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NextMonthGoalInputDto {
+    pub minimum_savings_rate_basis_points: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NextMonthGoalDto {
+    pub target_month: String,
     pub minimum_savings_rate_basis_points: u16,
     pub created_at: String,
     pub updated_at: String,
@@ -214,12 +224,6 @@ pub struct InitializeMonthDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlanMutationDto {
-    pub plan_item: PlanItemDto,
-    pub current_month_initialization: Option<InitializeMonthDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StartupStatusDto {
     pub current_month: String,
     pub initialization: Option<InitializeMonthDto>,
@@ -277,9 +281,7 @@ pub struct MonthAnalyticsDto {
     pub planned_savings_rate_percent: Option<String>,
     pub actual_savings_rate_percent: Option<String>,
     pub savings_rate_percentage_point_variance: Option<String>,
-    pub savings_rate_target_completion_percent: Option<String>,
-    pub savings_rate_relative_deviation_percent: Option<String>,
-    pub minimum_savings_rate_percent: String,
+    pub savings_rate_plan_completion_percent: Option<String>,
     pub categories: Vec<CategoryBreakdownDto>,
     pub projects: Vec<ProjectBreakdownDto>,
     pub important_variances: Vec<ProjectBreakdownDto>,
