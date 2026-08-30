@@ -1,10 +1,13 @@
 use chrono::{Datelike, Local};
 use pfcm_domain::{Amount, Category, CurrencyCode, PlanItem, RecognitionMode, Settings, YearMonth};
-use sqlx::Row;
+use sqlx::{
+    Row,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::infrastructure::{create_version_two_fixture, open_database, open_memory_database};
+use crate::infrastructure::{StoreError, open_database, open_memory_database};
 
 use super::{
     dto::{
@@ -65,6 +68,96 @@ fn init(month: YearMonth) -> InitializeMonthInputDto {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SchemaSnapshot {
+    objects: Vec<(String, String, String, String)>,
+    tables: Vec<String>,
+    columns: Vec<String>,
+    foreign_keys: Vec<String>,
+    indexes: Vec<String>,
+    index_columns: Vec<String>,
+}
+
+async fn schema_snapshot(pool: &sqlx::SqlitePool) -> SchemaSnapshot {
+    let objects = sqlx::query(
+        "SELECT type, name, tbl_name, sql FROM sqlite_schema \
+         WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name != '_sqlx_migrations' \
+         ORDER BY type, name",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        let sql: String = row.get("sql");
+        (
+            row.get("type"),
+            row.get("name"),
+            row.get("tbl_name"),
+            sql.chars()
+                .filter(|character| !character.is_whitespace())
+                .collect(),
+        )
+    })
+    .collect();
+
+    async fn text_rows(pool: &sqlx::SqlitePool, query: &'static str) -> Vec<String> {
+        sqlx::query_scalar(query).fetch_all(pool).await.unwrap()
+    }
+
+    let tables = text_rows(
+        pool,
+        "SELECT name || '|' || strict || '|' || wr FROM pragma_table_list \
+         WHERE schema = 'main' AND name NOT LIKE 'sqlite_%' AND name != '_sqlx_migrations' \
+         ORDER BY name",
+    )
+    .await;
+    let columns = text_rows(
+        pool,
+        "SELECT m.name || '|' || p.cid || '|' || p.name || '|' || p.type || '|' || \
+         p.[notnull] || '|' || COALESCE(p.dflt_value, '<NULL>') || '|' || p.pk || '|' || p.hidden \
+         FROM sqlite_schema AS m, pragma_table_xinfo(m.name) AS p \
+         WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name != '_sqlx_migrations' \
+         ORDER BY m.name, p.cid",
+    )
+    .await;
+    let foreign_keys = text_rows(
+        pool,
+        "SELECT m.name || '|' || f.id || '|' || f.seq || '|' || f.[table] || '|' || \
+         f.[from] || '|' || f.[to] || '|' || f.on_update || '|' || f.on_delete || '|' || f.match \
+         FROM sqlite_schema AS m, pragma_foreign_key_list(m.name) AS f \
+         WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name != '_sqlx_migrations' \
+         ORDER BY m.name, f.id, f.seq",
+    )
+    .await;
+    let indexes = text_rows(
+        pool,
+        "SELECT m.name || '|' || i.name || '|' || i.[unique] || '|' || i.origin || '|' || \
+         i.partial FROM sqlite_schema AS m, pragma_index_list(m.name) AS i \
+         WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name != '_sqlx_migrations' \
+         ORDER BY m.name, i.name",
+    )
+    .await;
+    let index_columns = text_rows(
+        pool,
+        "SELECT m.name || '|' || i.name || '|' || x.seqno || '|' || x.cid || '|' || \
+         COALESCE(x.name, '<NULL>') || '|' || x.[desc] || '|' || x.coll || '|' || x.[key] \
+         FROM sqlite_schema AS m, pragma_index_list(m.name) AS i, pragma_index_xinfo(i.name) AS x \
+         WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name != '_sqlx_migrations' \
+         ORDER BY m.name, i.name, x.seqno",
+    )
+    .await;
+
+    SchemaSnapshot {
+        objects,
+        tables,
+        columns,
+        foreign_keys,
+        indexes,
+        index_columns,
+    }
+}
+
 #[tokio::test]
 async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
     let store = open_memory_database().await.unwrap();
@@ -73,6 +166,17 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
         .await
         .unwrap();
     assert_eq!(foreign_keys, 1);
+
+    let migration_history: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT version, description, success FROM _sqlx_migrations ORDER BY version",
+    )
+    .fetch_all(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        migration_history,
+        vec![(1, "initial release".to_owned(), 1)]
+    );
 
     let tables = sqlx::query("PRAGMA table_list")
         .fetch_all(store.pool())
@@ -144,6 +248,88 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
 }
 
 #[tokio::test]
+async fn initial_release_schema_matches_frozen_pre_release_final_schema() {
+    let baseline = open_memory_database().await.unwrap();
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")
+        .unwrap()
+        .foreign_keys(true);
+    let pre_release = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../tests/fixtures/pre_release_final_schema.sql"
+    ))
+    .execute(&pre_release)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        schema_snapshot(baseline.pool()).await,
+        schema_snapshot(&pre_release).await
+    );
+}
+
+#[tokio::test]
+async fn pre_release_database_is_refused_without_modification() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("pre-release.sqlite3");
+    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+        .unwrap()
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let pre_release = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../tests/fixtures/pre_release_final_schema.sql"
+    ))
+    .execute(&pre_release)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, success BOOLEAN NOT NULL)",
+    )
+    .execute(&pre_release)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO _sqlx_migrations (version, success) VALUES (6, TRUE)")
+        .execute(&pre_release)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE preservation_marker (value TEXT NOT NULL)")
+        .execute(&pre_release)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO preservation_marker VALUES ('unchanged')")
+        .execute(&pre_release)
+        .await
+        .unwrap();
+    pre_release.close().await;
+
+    let result = open_database(&path).await;
+    assert!(matches!(result, Err(StoreError::FutureSchema)));
+
+    let verification = sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    let marker: String = sqlx::query_scalar("SELECT value FROM preservation_marker")
+        .fetch_one(&verification)
+        .await
+        .unwrap();
+    let applied_version: i64 =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success = TRUE")
+            .fetch_one(&verification)
+            .await
+            .unwrap();
+    assert_eq!(marker, "unchanged");
+    assert_eq!(applied_version, 6);
+}
+
+#[tokio::test]
 async fn migration_reopens_existing_database_without_losing_data_and_uses_wal() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("existing.sqlite3");
@@ -173,109 +359,6 @@ async fn migration_reopens_existing_database_without_losing_data_and_uses_wal() 
             .base_currency()
             .as_str(),
         "CNY"
-    );
-}
-
-#[tokio::test]
-async fn legacy_four_decimal_database_migrates_to_cents_entries_and_confirmation_states() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("legacy.sqlite3");
-    create_version_two_fixture(&path).await.unwrap();
-    let url = format!("sqlite://{}", path.display());
-    let pool = sqlx::SqlitePool::connect(&url).await.unwrap();
-    sqlx::query("INSERT INTO exchange_rates VALUES ('CNY', 100000000, 't')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO settings VALUES (1, '2026-01-01', 'CNY', 2000, 't', 't')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO plan_items VALUES \
-         ('11111111-1111-4111-8111-111111111111', '迁移计划', 'ESSENTIAL_EXPENSE', 12345, \
-          'CNY', 1, 'PAYMENT', '2026-01-01', NULL, NULL, 't', 't')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    for (id, month, actual) in [
-        ("22222222-2222-4222-8222-222222222221", "2026-01-01", None),
-        (
-            "22222222-2222-4222-8222-222222222222",
-            "2026-02-01",
-            Some(0_i64),
-        ),
-        (
-            "22222222-2222-4222-8222-222222222223",
-            "2026-03-01",
-            Some(10055_i64),
-        ),
-    ] {
-        sqlx::query(
-            "INSERT INTO monthly_items (id, source_plan_item_id, month, snapshot_name, category, \
-             flow_type, recognition_mode, planned_amount_scaled, actual_amount_scaled, currency_code, \
-             note, created_at, updated_at) VALUES (?, '11111111-1111-4111-8111-111111111111', ?, \
-             '迁移计划', 'ESSENTIAL_EXPENSE', 'EXPENSE', 'PAYMENT', 12345, ?, 'CNY', NULL, 't', 't')",
-        ).bind(id).bind(month).bind(actual).execute(&pool).await.unwrap();
-    }
-    pool.close().await;
-
-    let store = open_database(&path).await.unwrap();
-    let plans = store.list_plan_items().await.unwrap();
-    assert_eq!(plans[0].value.amount().decimal_string(), "1.23");
-    assert_eq!(plans[0].value.start_date().to_string(), "2026-01-01");
-    let migrated_goal = store.get_next_month_goal().await.unwrap().unwrap();
-    assert_eq!(
-        migrated_goal.value.minimum_savings_rate().basis_points(),
-        2_000
-    );
-    assert_eq!(
-        migrated_goal.value.target_month(),
-        current_month().next_month().unwrap()
-    );
-    let january = store
-        .list_monthly_items(YearMonth::from_str("2026-01").unwrap())
-        .await
-        .unwrap();
-    let february = store
-        .list_monthly_items(YearMonth::from_str("2026-02").unwrap())
-        .await
-        .unwrap();
-    let march = store
-        .list_monthly_items(YearMonth::from_str("2026-03").unwrap())
-        .await
-        .unwrap();
-    assert_eq!(january[0].value.actual_data_status().code(), "MISSING");
-    assert_eq!(
-        february[0].value.actual_data_status().code(),
-        "CONFIRMED_ZERO"
-    );
-    assert_eq!(march[0].value.actual_data_status().code(), "FINAL");
-    assert_eq!(
-        march[0].value.actual_amount().unwrap().decimal_string(),
-        "1.01"
-    );
-    let entries = store
-        .list_actual_entries(march[0].value.id())
-        .await
-        .unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].value.origin().code(), "MIGRATED_AGGREGATE");
-    assert_eq!(entries[0].value.amount().decimal_string(), "1.01");
-    assert_eq!(
-        entries[0].exchange_snapshot.source_amount.decimal_string(),
-        "1.01"
-    );
-    assert_eq!(entries[0].exchange_snapshot.source_currency.as_str(), "CNY");
-    assert_eq!(
-        entries[0].exchange_snapshot.exchange_rate.decimal_string(),
-        "1.00000000"
-    );
-    assert_eq!(entries[0].exchange_snapshot.source, "MIGRATED_BASE");
-    assert_eq!(
-        entries[0].exchange_snapshot.observed_on.to_string(),
-        entries[0].value.occurred_on().to_string()
     );
 }
 

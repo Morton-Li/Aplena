@@ -41,6 +41,7 @@ ID 签名/公证和真实 Windows 安装仍是公开发布门禁，不能由本�
 - [信息架构与用户流程](docs/05-ux-and-user-flows.md)
 - [MVP 路线图](docs/06-mvp-roadmap.md)
 - [本地候选与外部门禁](docs/07-release-readiness.md)
+- [预发布本地数据库换轨方案](docs/08-pre-release-database-transition.md)
 - [ADR：本地优先的 Tauri + SQLite](docs/adr/0001-local-first-tauri-sqlite.md)
 - [ADR：双计入模式](docs/adr/0002-recognition-modes.md)
 - [ADR：月度自动初始化](docs/adr/0003-automatic-month-initialization.md)
@@ -53,7 +54,7 @@ ID 签名/公证和真实 Windows 安装仍是公开发布门禁，不能由本�
 ## 技术栈
 
 - Tauri 2、Rust、React、TypeScript、Vite
-- SQLite STRICT、WAL、SQLx、版本化 SQL migrations
+- SQLite STRICT、WAL、SQLx、正式基线与后续追加式 migrations
 - React Hook Form、Zod、TanStack Query、Apache ECharts、原生 CSS
 - Cargo tests、Vitest、Testing Library
 
@@ -93,7 +94,7 @@ docs/                 产品、领域、架构、数据库与路线图基线
 - 动态 Dashboard、历史时间序列、分类结构、项目排名和重要偏差；
 - 以稳定收入和长期月均负担计算的保留预算后承载力与最大承载力，`PAYMENT` 项目在
   非支付月份仍计入长期负担；
-- 追加式数据库迁移、未来 schema 拒绝、外键约束和事务回滚，保留确认状态与历史快照语义。
+- 首个公开版使用单一正式基线迁移；正式发布后只追加迁移，并拒绝未来 schema，保留外键、事务回滚、确认状态与历史快照语义。
 
 主要页面：`总览`、`月度执行`、`历史报表`、`配置预算`、`设置`。“配置预算”页集中管理下月储蓄率、
 承载力和可选周期规则；图表均有 ARIA

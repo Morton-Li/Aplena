@@ -3,8 +3,6 @@ mod error;
 mod models;
 mod store;
 
-#[cfg(test)]
-pub(crate) use database::create_version_two_fixture;
 pub use database::open_database;
 #[cfg(test)]
 pub use database::open_memory_database;
