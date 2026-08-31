@@ -5,7 +5,7 @@ import {
   defaultMonthlyWorkspaceFilters,
   filterAndSortMonthlyItems,
   hasActiveMonthlyFilters,
-  monthlyStatusCounts,
+  monthlyItemCounts,
 } from "./monthlyWorkspace";
 
 function item(overrides: Partial<MonthlyItem>): MonthlyItem {
@@ -23,10 +23,8 @@ function item(overrides: Partial<MonthlyItem>): MonthlyItem {
     planned_amount: "100.00",
     actual_amount: null,
     actual_entry_count: 0,
-    actual_confirmed_at: null,
     variance_amount: null,
     completion_rate_percent: null,
-    data_status: "MISSING",
     variance_effect: "UNKNOWN",
     currency: "CNY",
     note: null,
@@ -37,35 +35,33 @@ function item(overrides: Partial<MonthlyItem>): MonthlyItem {
 }
 
 const items = [
-  item({ id: "final", item_name: "房租", data_status: "FINAL", actual_amount: "3000", variance_amount: "0", completion_rate_percent: "100" }),
-  item({ id: "progress", item_name: "餐饮", data_status: "IN_PROGRESS", actual_amount: "240", note: "工作餐", variance_amount: "-760", completion_rate_percent: "24", variance_effect: "FAVORABLE" }),
-  item({ id: "missing", item_name: "水电费", data_status: "MISSING" }),
-  item({ id: "manual", item_name: "临时维修", data_status: "FINAL", item_origin: "MANUAL", item_source: "ACTUAL_ONLY", actual_amount: "500", variance_amount: null }),
+  item({ id: "rent", item_name: "房租", actual_amount: "3000", actual_entry_count: 1, variance_amount: "0", completion_rate_percent: "100", updated_at: "2026-08-04T00:00:00Z" }),
+  item({ id: "food", item_name: "餐饮", actual_amount: "240", actual_entry_count: 2, note: "工作餐", variance_amount: "-760", completion_rate_percent: "24", variance_effect: "FAVORABLE", updated_at: "2026-08-03T00:00:00Z" }),
+  item({ id: "utilities", item_name: "水电费", updated_at: "2026-08-02T00:00:00Z" }),
+  item({ id: "temporary", item_name: "临时维修", item_origin: "MANUAL", item_source: "ACTUAL_ONLY", source_plan_item_id: null, actual_amount: "500", actual_entry_count: 1, variance_amount: null, updated_at: "2026-08-05T00:00:00Z" }),
 ];
 
 describe("monthly workspace filtering and ordering", () => {
-  it("puts missing and in-progress items before confirmed items by default", () => {
+  it("puts most recently updated items first by default", () => {
     expect(filterAndSortMonthlyItems(items, defaultMonthlyWorkspaceFilters).map(({ id }) => id))
-      .toEqual(["missing", "progress", "final", "manual"]);
+      .toEqual(["temporary", "rent", "food", "utilities"]);
   });
 
   it("searches names, localized categories and notes", () => {
     expect(filterAndSortMonthlyItems(items, { ...defaultMonthlyWorkspaceFilters, search: "工作餐" }).map(({ id }) => id))
-      .toEqual(["progress"]);
+      .toEqual(["food"]);
     expect(filterAndSortMonthlyItems(items, { ...defaultMonthlyWorkspaceFilters, search: "必要支出" })).toHaveLength(4);
   });
 
-  it("supports status, flow, variance and absolute-variance sorting", () => {
-    expect(filterAndSortMonthlyItems(items, { ...defaultMonthlyWorkspaceFilters, status: "ACTUAL_ONLY" }).map(({ id }) => id))
-      .toEqual(["manual"]);
+  it("supports flow, variance and absolute-variance sorting", () => {
     expect(filterAndSortMonthlyItems(items, { ...defaultMonthlyWorkspaceFilters, variance: "FAVORABLE" }).map(({ id }) => id))
-      .toEqual(["progress"]);
+      .toEqual(["food"]);
     expect(filterAndSortMonthlyItems(items, { ...defaultMonthlyWorkspaceFilters, sort: "VARIANCE" }).map(({ id }) => id)[0])
-      .toBe("progress");
+      .toBe("food");
   });
 
-  it("counts mutually meaningful workflow states and detects resettable controls", () => {
-    expect(monthlyStatusCounts(items)).toEqual({ total: 4, missing: 1, inProgress: 1, confirmed: 2, actualOnly: 1 });
+  it("counts class origins and actual entries and detects resettable controls", () => {
+    expect(monthlyItemCounts(items)).toEqual({ total: 4, planned: 3, temporary: 1, entries: 4 });
     expect(hasActiveMonthlyFilters(defaultMonthlyWorkspaceFilters)).toBe(false);
     expect(hasActiveMonthlyFilters({ ...defaultMonthlyWorkspaceFilters, category: "ESSENTIAL_EXPENSE" })).toBe(true);
   });

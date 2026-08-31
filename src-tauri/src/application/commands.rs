@@ -11,8 +11,8 @@ use tauri::State;
 
 use super::{
     dto::{
-        ActualEntryDto, ActualEntryInputDto, CapacityDto, CapacityRequestDto, ConfirmActualsDto,
-        ConfirmActualsInputDto, ConfirmMonthlyItemInputDto, DeletePlanItemDto, DomainContractDto,
+        ActualEntryDto, ActualEntryInputDto, CapacityDto, CapacityRequestDto,
+        DeleteManualMonthlyItemInputDto, DeletePlanItemDto, DomainContractDto,
         EnsureActualOnlyInputDto, EnumOptionDto, ExchangeRateDto, ExchangeRateInputDto,
         ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
         InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
@@ -164,6 +164,14 @@ pub async fn create_manual_monthly_item(
 }
 
 #[tauri::command]
+pub async fn delete_manual_monthly_item(
+    service: State<'_, FinanceService>,
+    input: DeleteManualMonthlyItemInputDto,
+) -> Result<(), AppError> {
+    service.delete_manual_monthly_item(input).await
+}
+
+#[tauri::command]
 pub async fn list_actual_entries(
     service: State<'_, FinanceService>,
     monthly_item_id: String,
@@ -196,27 +204,11 @@ pub async fn delete_actual_entry(
 }
 
 #[tauri::command]
-pub async fn confirm_monthly_item(
-    service: State<'_, FinanceService>,
-    input: ConfirmMonthlyItemInputDto,
-) -> Result<MonthlyItemDto, AppError> {
-    service.confirm_monthly_item(input).await
-}
-
-#[tauri::command]
 pub async fn update_monthly_note(
     service: State<'_, FinanceService>,
     input: MonthlyNoteInputDto,
 ) -> Result<MonthlyItemDto, AppError> {
     service.update_monthly_note(input).await
-}
-
-#[tauri::command]
-pub async fn confirm_monthly_actuals(
-    service: State<'_, FinanceService>,
-    input: ConfirmActualsInputDto,
-) -> Result<ConfirmActualsDto, AppError> {
-    service.confirm_actuals(input).await
 }
 
 #[tauri::command]

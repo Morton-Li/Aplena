@@ -71,7 +71,7 @@ export function DashboardPage() {
   }
 
   const analytics = analyticsQuery.data;
-  const actualQualifier = actualStatusLabel(analytics.actual_status);
+  const actualQualifier = "当前实际";
   const hasPlanBaseline = analytics.planned_item_count > 0;
 
   return (
@@ -486,8 +486,4 @@ function comparisonDetail(comparison: AmountComparison, currency: string, actual
 
 function completionDetail(comparison: AmountComparison, actualQualifier: string) {
   return comparison.completion_percent ? `计划完成 ${comparison.completion_percent}%` : `${actualQualifier}尚不可计算`;
-}
-
-function actualStatusLabel(status: MonthAnalytics["actual_status"]) {
-  return status === "COMPLETE" ? "最终实际" : status === "PARTIAL" ? "当前已录" : "尚未录入";
 }

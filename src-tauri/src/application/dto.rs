@@ -94,10 +94,8 @@ pub struct MonthlyItemDto {
     pub planned_amount: String,
     pub actual_amount: Option<String>,
     pub actual_entry_count: u64,
-    pub actual_confirmed_at: Option<String>,
     pub variance_amount: Option<String>,
     pub completion_rate_percent: Option<String>,
-    pub data_status: String,
     pub variance_effect: String,
     pub currency: String,
     pub note: Option<String>,
@@ -169,7 +167,7 @@ pub struct ManualMonthlyItemInputDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConfirmMonthlyItemInputDto {
+pub struct DeleteManualMonthlyItemInputDto {
     pub id: String,
 }
 
@@ -178,18 +176,6 @@ pub struct ConfirmMonthlyItemInputDto {
 pub struct MonthlyNoteInputDto {
     pub id: String,
     pub note: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfirmActualsInputDto {
-    pub month: String,
-    pub category: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ConfirmActualsDto {
-    pub updated_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -273,7 +259,6 @@ pub struct CategoryBreakdownDto {
     pub actual_to_date: Option<String>,
     pub planned_share_percent: Option<String>,
     pub actual_share_percent: Option<String>,
-    pub unconfirmed_item_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -296,10 +281,8 @@ pub struct ProjectBreakdownDto {
 pub struct MonthAnalyticsDto {
     pub month: String,
     pub currency: String,
-    pub actual_status: String,
     pub total_item_count: u64,
     pub planned_item_count: u64,
-    pub confirmed_item_count: u64,
     pub income: AmountComparisonDto,
     pub expense: AmountComparisonDto,
     pub net_balance: AmountComparisonDto,

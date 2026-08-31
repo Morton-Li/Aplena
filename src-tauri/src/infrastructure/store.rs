@@ -320,10 +320,10 @@ impl Store {
         let rows = sqlx::query(
             "SELECT m.id, m.source_plan_item_id, m.month, m.snapshot_name, m.category, m.flow_type, \
                     m.recognition_mode, m.item_source, m.item_origin, m.scheduled_date, m.planned_amount_scaled, \
-                    CASE WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL \
-                      THEN COALESCE(SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END), 0) \
+                    CASE WHEN COUNT(e.id) > 0 \
+                      THEN SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END) \
                       ELSE NULL END AS derived_actual_amount_scaled, \
-                    COUNT(e.id) AS actual_entry_count, m.actual_confirmed_at, m.currency_code, \
+                    COUNT(e.id) AS actual_entry_count, m.currency_code, \
                     m.note, m.created_at, m.updated_at \
              FROM monthly_items m LEFT JOIN actual_entries e ON e.monthly_item_id = m.id \
              WHERE m.month >= ? AND m.month < ? \
@@ -375,61 +375,31 @@ impl Store {
         self.get_monthly_item(id).await
     }
 
-    pub async fn confirm_actuals(
-        &self,
-        month: YearMonth,
-        category: Option<Category>,
-        timestamp: &str,
-    ) -> Result<u64, StoreError> {
-        let next_month = month.next_month()?;
-        let result = match category {
-            Some(category) => {
-                sqlx::query(
-                    "UPDATE monthly_items \
-                     SET actual_confirmed_at = ?, updated_at = ? \
-                     WHERE month >= ? AND month < ? AND category = ? \
-                       AND actual_confirmed_at IS NULL",
-                )
-                .bind(timestamp)
-                .bind(timestamp)
-                .bind(month.database_anchor())
-                .bind(next_month.database_anchor())
-                .bind(category.code())
-                .execute(&self.pool)
-                .await?
-            }
-            None => {
-                sqlx::query(
-                    "UPDATE monthly_items \
-                     SET actual_confirmed_at = ?, updated_at = ? \
-                     WHERE month >= ? AND month < ? AND actual_confirmed_at IS NULL",
-                )
-                .bind(timestamp)
-                .bind(timestamp)
-                .bind(month.database_anchor())
-                .bind(next_month.database_anchor())
-                .execute(&self.pool)
-                .await?
-            }
-        };
-        Ok(result.rows_affected())
-    }
-
-    pub async fn confirm_monthly_item(
-        &self,
-        id: Uuid,
-        timestamp: &str,
-    ) -> Result<StoredMonthlyItem, StoreError> {
-        let result = sqlx::query(
-            "UPDATE monthly_items SET actual_confirmed_at = ?, updated_at = ? WHERE id = ?",
+    pub async fn delete_manual_monthly_item(&self, id: Uuid) -> Result<(), StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let deletable: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM monthly_items \
+             WHERE id = ? AND item_origin = 'MANUAL' AND item_source = 'ACTUAL_ONLY' \
+               AND source_plan_item_id IS NULL",
         )
-        .bind(timestamp)
-        .bind(timestamp)
         .bind(id.to_string())
-        .execute(&self.pool)
+        .fetch_one(&mut *transaction)
         .await?;
+        if deletable != 1 {
+            return Err(StoreError::Database(sqlx::Error::RowNotFound));
+        }
+
+        sqlx::query("DELETE FROM actual_entries WHERE monthly_item_id = ?")
+            .bind(id.to_string())
+            .execute(&mut *transaction)
+            .await?;
+        let result = sqlx::query("DELETE FROM monthly_items WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&mut *transaction)
+            .await?;
         require_changed(result.rows_affected())?;
-        self.get_monthly_item(id).await
+        transaction.commit().await?;
+        Ok(())
     }
 
     pub async fn insert_monthly_item(
@@ -456,10 +426,10 @@ impl Store {
         let row = sqlx::query(
             "SELECT m.id, m.source_plan_item_id, m.month, m.snapshot_name, m.category, m.flow_type, \
                     m.recognition_mode, m.item_source, m.item_origin, m.scheduled_date, m.planned_amount_scaled, \
-                    CASE WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL \
-                      THEN COALESCE(SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END), 0) \
+                    CASE WHEN COUNT(e.id) > 0 \
+                      THEN SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END) \
                       ELSE NULL END AS derived_actual_amount_scaled, \
-                    COUNT(e.id) AS actual_entry_count, m.actual_confirmed_at, m.currency_code, \
+                    COUNT(e.id) AS actual_entry_count, m.currency_code, \
                     m.note, m.created_at, m.updated_at \
              FROM monthly_items m LEFT JOIN actual_entries e ON e.monthly_item_id = m.id \
              WHERE m.id = ? GROUP BY m.id",
@@ -680,8 +650,8 @@ impl Store {
         let result = sqlx::query(
             "INSERT INTO monthly_items (id, source_plan_item_id, month, snapshot_name, category, \
                     flow_type, recognition_mode, item_source, item_origin, scheduled_date, planned_amount_scaled, \
-                    actual_confirmed_at, currency_code, note, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                    currency_code, note, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(source_plan_item_id, month) DO UPDATE SET \
                snapshot_name = excluded.snapshot_name, category = excluded.category, \
                flow_type = excluded.flow_type, recognition_mode = excluded.recognition_mode, \
@@ -701,7 +671,6 @@ impl Store {
         .bind(monthly_item.item_origin().code())
         .bind(monthly_item.scheduled_date().map(|date| date.to_string()))
         .bind(monthly_item.planned_amount().scaled_i64())
-        .bind(monthly_item.actual_confirmed_at())
         .bind(monthly_item.currency().as_str())
         .bind(monthly_item.note())
         .bind(timestamp)
@@ -837,7 +806,6 @@ fn monthly_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredMonthlyI
             Amount::from_scaled_i64(row.try_get("planned_amount_scaled")?)?,
             actual_amount,
             entry_count,
-            row.try_get("actual_confirmed_at")?,
             CurrencyCode::new(row.try_get::<String, _>("currency_code")?)?,
             row.try_get("note")?,
         ),

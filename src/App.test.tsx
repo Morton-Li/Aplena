@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, ApplicationErrorBoundary } from "./App";
+import { defaultActualEntryDate } from "./features/monthly/monthlyWorkspace";
 import type { Invoke } from "./shared/api/domain";
 import type {
   ActualEntry,
@@ -42,6 +43,11 @@ it("replaces unexpected render failures with a path-safe recovery message", () =
   expect(screen.getByRole("heading", { name: "界面资源加载失败" })).toBeInTheDocument();
   expect(screen.queryByText(/sensitive diagnostic/)).not.toBeInTheDocument();
   errorOutput.mockRestore();
+});
+
+it("defaults actual-entry dates to today when today belongs to the active month", () => {
+  expect(defaultActualEntryDate("2026-08", new Date(2026, 7, 31, 23, 30))).toBe("2026-08-31");
+  expect(defaultActualEntryDate("2026-07", new Date(2026, 7, 31, 23, 30))).toBe("2026-07-01");
 });
 
 const contract = {
@@ -151,10 +157,8 @@ function monthlyItem(overrides: Partial<MonthlyItem> = {}): MonthlyItem {
     planned_amount: "300.00",
     actual_amount: null,
     actual_entry_count: 0,
-    actual_confirmed_at: null,
     variance_amount: null,
     completion_rate_percent: null,
-    data_status: "MISSING",
     variance_effect: "UNKNOWN",
     currency: "CNY",
     note: null,
@@ -168,10 +172,8 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
   return {
     month: "2026-08",
     currency: "CNY",
-    actual_status: "PARTIAL",
     total_item_count: 3,
     planned_item_count: 3,
-    confirmed_item_count: 2,
     income: {
       planned: "30000.00",
       actual_to_date: "28700.00",
@@ -205,7 +207,6 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: "28700.00",
         planned_share_percent: "100.00",
         actual_share_percent: "100.00",
-        unconfirmed_item_count: 0,
       },
       {
         category: "VARIABLE_INCOME",
@@ -214,7 +215,6 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: null,
         planned_share_percent: "0.00",
         actual_share_percent: null,
-        unconfirmed_item_count: 0,
       },
       {
         category: "ESSENTIAL_EXPENSE",
@@ -223,7 +223,6 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: "6427.00",
         planned_share_percent: "67.74",
         actual_share_percent: "76.27",
-        unconfirmed_item_count: 1,
       },
       {
         category: "FIXED_COMMITMENT_EXPENSE",
@@ -232,7 +231,6 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: "2000.00",
         planned_share_percent: "21.51",
         actual_share_percent: "23.73",
-        unconfirmed_item_count: 0,
       },
       {
         category: "DISCRETIONARY_BUDGET",
@@ -241,7 +239,6 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
         actual_to_date: null,
         planned_share_percent: "10.75",
         actual_share_percent: null,
-        unconfirmed_item_count: 1,
       },
     ],
     projects: [
@@ -505,16 +502,23 @@ function installHarness(options: HarnessOptions = {}) {
       }
       case "ensure_actual_only_monthly_item":
         return monthlyItem({ item_source: "ACTUAL_ONLY", planned_amount: "0.00" }) as T;
-      case "create_manual_monthly_item":
-        return monthlyItem({
+      case "create_manual_monthly_item": {
+        const input = args?.input as { name: string; month: string; category: string; note?: string };
+        const created = monthlyItem({
+          id: "00000000-0000-0000-0000-000000000698",
           source_plan_item_id: null,
-          item_name: (args?.input as { name: string }).name,
-          category: (args?.input as { category: string }).category,
-          flow_type: ["FIXED_INCOME", "VARIABLE_INCOME"].includes((args?.input as { category: string }).category) ? "INCOME" : "EXPENSE",
+          item_name: input.name,
+          month: input.month,
+          category: input.category,
+          flow_type: ["FIXED_INCOME", "VARIABLE_INCOME"].includes(input.category) ? "INCOME" : "EXPENSE",
           item_source: "ACTUAL_ONLY",
           item_origin: "MANUAL",
           planned_amount: "0.00",
-        }) as T;
+          note: input.note ?? null,
+        });
+        monthly[input.month] = [...(monthly[input.month] ?? []), created];
+        return created as T;
+      }
       case "create_actual_entry":
       case "update_actual_entry": {
         const input = args?.input as { id?: string; monthlyItemId: string; occurredOn: string; effect: string; amount: string; currency: string; exchangeRate: string; exchangeRateSource: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL"; exchangeRateObservedOn: string; note?: string };
@@ -532,12 +536,16 @@ function installHarness(options: HarnessOptions = {}) {
         }
         return undefined as T;
       }
-      case "confirm_monthly_item":
-        return monthlyItem({ actual_amount: "0.00", actual_confirmed_at: "2026-08-31T00:00:00Z", data_status: "CONFIRMED_ZERO" }) as T;
       case "update_monthly_note":
         return monthlyItem() as T;
-      case "confirm_monthly_actuals":
-        return { updated_count: 1 } as T;
+      case "delete_manual_monthly_item": {
+        const id = (args?.input as { id: string }).id;
+        for (const month of Object.keys(monthly)) {
+          monthly[month] = monthly[month].filter((item) => item.id !== id);
+        }
+        delete actualEntries[id];
+        return undefined as T;
+      }
       case "delete_plan_item":
         return undefined as T;
       case "stop_plan_item":
@@ -710,7 +718,7 @@ describe("planning workflows", () => {
     expect(screen.getByText("无论哪种模式，财务承载能力都按月均负担计算。")).toBeInTheDocument();
   });
 
-  it("shows actual confirmation states and records expense/refund entries without editing totals", async () => {
+  it("keeps the detail drawer open while a new entry defaults to today", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     installHarness({
@@ -719,27 +727,6 @@ describe("planning workflows", () => {
       monthly: {
         "2026-08": [
           monthlyItem(),
-          monthlyItem({
-            id: "00000000-0000-0000-0000-000000000202",
-            item_name: "退款",
-            actual_amount: "0.00",
-            actual_confirmed_at: "2026-08-31T00:00:00Z",
-            variance_amount: "-100.00",
-            completion_rate_percent: "0.00",
-            data_status: "CONFIRMED_ZERO",
-            variance_effect: "FAVORABLE",
-          }),
-          monthlyItem({
-            id: "00000000-0000-0000-0000-000000000203",
-            item_name: "房租",
-            actual_amount: "300.00",
-            actual_entry_count: 1,
-            actual_confirmed_at: "2026-08-31T00:00:00Z",
-            variance_amount: "0.00",
-            completion_rate_percent: "100.00",
-            data_status: "FINAL",
-            variance_effect: "ON_PLAN",
-          }),
         ],
       },
     });
@@ -751,24 +738,20 @@ describe("planning workflows", () => {
     await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
     expect(await screen.findByRole("dialog", { name: "电费" })).toBeInTheDocument();
     expect(await screen.findByText("还没有实际条目")).toBeInTheDocument();
-    expect(screen.getAllByText("¥ 0.00").length).toBeGreaterThan(0);
     expect(screen.getAllByText("¥ 300.00").length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("button", { name: "确认项目已完成" }));
-    expect(invokeMock).toHaveBeenCalledWith("confirm_monthly_item", {
-      input: expect.objectContaining({ id: expect.any(String) }),
-    });
-    await user.click(screen.getByRole("button", { name: "关闭项目详情" }));
-
-    await user.click(screen.getByRole("button", { name: "添加实际条目" }));
-    await user.click(screen.getByRole("button", { name: /关联周期规则/ }));
-    await user.clear(screen.getByLabelText("原币金额"));
+    await user.click(screen.getByRole("button", { name: "添加支出或退款" }));
+    expect(screen.getByRole("dialog", { name: "电费" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "添加支出或退款" })).toBeInTheDocument();
+    const expectedDate = defaultActualEntryDate("2026-08");
+    expect(screen.getByLabelText("日期")).toHaveValue(expectedDate);
     await user.type(screen.getByLabelText("原币金额"), "427.25");
     await user.click(screen.getByLabelText("类型"));
     await user.click(screen.getByRole("option", { name: "退款" }));
     await user.click(screen.getByRole("button", { name: "保存条目" }));
     expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
-      input: expect.objectContaining({ amount: "427.25", effect: "DECREASE" }),
+      input: expect.objectContaining({ amount: "427.25", effect: "DECREASE", occurredOn: expectedDate }),
     });
+    expect(await screen.findByRole("dialog", { name: "电费" })).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -837,44 +820,15 @@ describe("planning workflows", () => {
     }));
   });
 
-  it("creates an actual-only monthly item before recording an entry outside the plan schedule", async () => {
-    installHarness({ plans: [examplePlan], monthly: { "2026-08": [] } });
-    const user = userEvent.setup();
-    window.location.hash = "#/monthly";
-    render(<App />);
-
-    await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
-    await user.click(screen.getByRole("button", { name: /关联周期规则/ }));
-    await user.type(screen.getByLabelText("原币金额"), "25.00");
-    await user.click(screen.getByLabelText("类型"));
-    await user.click(screen.getByRole("option", { name: "退款" }));
-    await user.click(screen.getByRole("button", { name: "保存条目" }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith("ensure_actual_only_monthly_item", {
-        input: { planItemId: examplePlan.id, month: "2026-08" },
-      });
-    });
-    expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
-      input: expect.objectContaining({
-        monthlyItemId: "00000000-0000-0000-0000-000000000201",
-        occurredOn: "2026-08-01",
-        effect: "DECREASE",
-        amount: "25.00",
-      }),
-    });
-  });
-
-  it("records a manual monthly item without requiring a long-term plan", async () => {
+  it("creates a temporary category without synthesizing an actual entry", async () => {
     installHarness({ plans: [], monthly: { "2026-08": [] } });
     const user = userEvent.setup();
     window.location.hash = "#/monthly";
     render(<App />);
 
-    await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
-    await user.type(screen.getByLabelText("项目名称"), "本月房租");
-    await user.type(screen.getByLabelText("原币金额"), "3200.00");
-    await user.click(screen.getByRole("button", { name: "保存条目" }));
+    await user.click(await screen.findByRole("button", { name: "添加临时类目" }));
+    await user.type(screen.getByLabelText("类目名称"), "本月房租");
+    await user.click(screen.getByRole("button", { name: "创建临时类目" }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("create_manual_monthly_item", {
@@ -885,35 +839,34 @@ describe("planning workflows", () => {
         },
       });
     });
-    expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
-      input: expect.objectContaining({ amount: "3200.00", effect: "INCREASE" }),
-    });
+    expect(await screen.findByRole("dialog", { name: "本月房租" })).toBeInTheDocument();
+    expect(invokeMock.mock.calls.some(([command]) => command === "create_actual_entry")).toBe(false);
     expect(invokeMock.mock.calls.some(([command]) => command === "ensure_actual_only_monthly_item")).toBe(false);
   });
 
-  it("creates an independent expense with expense labels when an income rule already exists", async () => {
-    installHarness({
-      plans: [{ ...examplePlan, category: "FIXED_INCOME", flow_type: "INCOME" }],
-      monthly: { "2026-08": [] },
+  it("deletes a temporary category only after explicit confirmation", async () => {
+    const temporary = monthlyItem({
+      source_plan_item_id: null,
+      item_name: "临时维修",
+      item_origin: "MANUAL",
+      item_source: "ACTUAL_ONLY",
+      planned_amount: "0.00",
+      actual_entry_count: 1,
     });
+    installHarness({ monthly: { "2026-08": [temporary] }, actualEntries: { [temporary.id]: [actualEntry()] } });
     const user = userEvent.setup();
     window.location.hash = "#/monthly";
     render(<App />);
 
-    await user.click(await screen.findByRole("button", { name: "添加实际条目" }));
-    await user.type(screen.getByLabelText("项目名称"), "独立支出");
-    await user.click(screen.getByLabelText("类型"));
-    expect(screen.getByRole("option", { name: "支出" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "退款" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "收入" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("option", { name: "支出" }));
-    fireEvent.change(screen.getByLabelText("原币金额"), { target: { value: "88.00" } });
-    await user.click(screen.getByRole("button", { name: "保存条目" }));
-
-    expect(invokeMock).toHaveBeenCalledWith("create_manual_monthly_item", {
-      input: { name: "独立支出", month: "2026-08", category: "ESSENTIAL_EXPENSE" },
-    });
-    expect(invokeMock.mock.calls.some(([command]) => command === "ensure_actual_only_monthly_item")).toBe(false);
+    await user.click(await screen.findByRole("button", { name: "查看 临时维修 详情" }));
+    await user.click(screen.getByRole("button", { name: "删除临时类目" }));
+    expect(screen.getByRole("dialog", { name: "临时维修" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "确认删除“临时维修”？" })).toHaveTextContent("1 条实际记录");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(invokeMock.mock.calls.some(([command]) => command === "delete_manual_monthly_item")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "删除临时类目" }));
+    await user.click(screen.getByRole("button", { name: "确认删除临时类目" }));
+    expect(invokeMock).toHaveBeenCalledWith("delete_manual_monthly_item", { input: { id: temporary.id } });
   });
 
   it("adds refunds to an existing manual expense even when an income rule exists", async () => {
@@ -966,8 +919,6 @@ describe("planning workflows", () => {
       planned_amount: "0.00",
       actual_amount: "120.00",
       actual_entry_count: 1,
-      actual_confirmed_at: "2026-08-31T00:00:00Z",
-      data_status: "FINAL",
     });
     const incomeEntry = actualEntry({ monthly_item_id: manualIncome.id });
     installHarness({
@@ -987,8 +938,9 @@ describe("planning workflows", () => {
     const editedAmount = screen.getByLabelText("原币金额");
     fireEvent.change(editedAmount, { target: { value: "135.50" } });
     expect(editedAmount).toHaveValue("135.50");
-    await user.clear(screen.getByLabelText("备注（可选）"));
-    await user.type(screen.getByLabelText("备注（可选）"), "核对后调整");
+    const editedNote = screen.getByLabelText("备注（可选）");
+    fireEvent.change(editedNote, { target: { value: "核对后调整" } });
+    expect(editedNote).toHaveValue("核对后调整");
     expect(screen.getByRole("button", { name: "保存条目" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "保存条目" }));
 
@@ -1022,7 +974,7 @@ describe("planning workflows", () => {
   });
 
   it("confirms actual-entry deletion in-app and keeps cancel and Escape non-destructive", async () => {
-    const item = monthlyItem({ actual_amount: "120.00", actual_entry_count: 1, data_status: "IN_PROGRESS" });
+    const item = monthlyItem({ actual_amount: "120.00", actual_entry_count: 1 });
     const entry = actualEntry({ monthly_item_id: item.id });
     installHarness({
       monthly: { "2026-08": [item] },
@@ -1035,6 +987,7 @@ describe("planning workflows", () => {
     await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
     await user.click((await screen.findAllByRole("button", { name: "删除" }))[0]);
     expect(await screen.findByRole("dialog", { name: "确认删除这条记录？" })).toHaveTextContent("2026-08-10");
+    expect(screen.getByRole("dialog", { name: "电费" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(invokeMock.mock.calls.some(([command]) => command === "delete_actual_entry")).toBe(false);
 
@@ -1085,17 +1038,14 @@ describe("planning workflows", () => {
     expect(screen.queryByRole("link", { name: "财务分析" })).not.toBeInTheDocument();
   });
 
-  it("batch confirmation marks completion without synthesizing actual entries", async () => {
+  it("does not expose category status or completion confirmation controls", async () => {
     installHarness({ monthly: { "2026-08": [monthlyItem()] } });
-    const user = userEvent.setup();
     window.location.hash = "#/monthly";
     render(<App />);
-    expect(await screen.findByText("确认只标记条目已核对，不会补写计划金额或创建虚假实际。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "确认整月待处理 1 项" }));
-    expect(await screen.findByText("已将 1 项标记为最终确认。")).toBeInTheDocument();
-    expect(invokeMock).toHaveBeenCalledWith("confirm_monthly_actuals", {
-      input: { month: "2026-08", category: null },
-    });
+    const table = await screen.findByRole("table", { name: "本月类目、计划金额、实际金额、偏差、完成率和实际条目数量" });
+    expect(within(table).queryByRole("columnheader", { name: "状态" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /确认.*完成/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("本月类目摘要")).toHaveTextContent("预算类目");
   });
 
   it("searches and filters monthly projects, then opens an accessible lazy detail drawer", async () => {
@@ -1111,7 +1061,6 @@ describe("planning workflows", () => {
             actual_entry_count: 2,
             variance_amount: "-60.00",
             completion_rate_percent: "80.00",
-            data_status: "IN_PROGRESS",
             variance_effect: "FAVORABLE",
           }),
           monthlyItem({
@@ -1121,7 +1070,6 @@ describe("planning workflows", () => {
             actual_entry_count: 1,
             variance_amount: "0.00",
             completion_rate_percent: "100.00",
-            data_status: "FINAL",
             variance_effect: "ON_PLAN",
           }),
         ],
@@ -1137,11 +1085,6 @@ describe("planning workflows", () => {
     expect(screen.queryByRole("button", { name: "查看 电费 详情" })).not.toBeInTheDocument();
 
     await user.clear(search);
-    await user.click(screen.getByRole("tab", { name: /^已确认/ }));
-    expect(screen.getByRole("button", { name: "查看 房租 详情" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "查看 电费 详情" })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: /^全部/ }));
     await user.click(screen.getByRole("button", { name: "查看 电费 详情" }));
     const drawer = await screen.findByRole("dialog", { name: "电费" });
     expect(invokeMock).toHaveBeenCalledWith("list_actual_entries", {
@@ -1159,7 +1102,7 @@ describe("planning workflows", () => {
     render(<App />);
     await user.click(await screen.findByRole("link", { name: "月度执行" }));
 
-    const tableFrame = (await screen.findByRole("table", { name: "本月项目、计划金额、实际金额、偏差、完成率和实际条目数量" })).parentElement;
+    const tableFrame = (await screen.findByRole("table", { name: "本月类目、计划金额、实际金额、偏差、完成率和实际条目数量" })).parentElement;
     expect(tableFrame).toHaveStyle({ overflow: "auto" });
     expect(tableFrame).toHaveStyle({ overscrollBehaviorY: "auto" });
     expect(tableFrame).toHaveStyle({ overscrollBehaviorX: "contain" });
@@ -1193,7 +1136,7 @@ describe("dashboard and capacity analytics", () => {
 
     expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
     expect(screen.queryByText("66.67%")).not.toBeInTheDocument();
-    expect(screen.getAllByText("当前已录").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("当前实际").length).toBeGreaterThan(0);
     expect(
       screen.getByRole("img", {
         name: "2026-08收入、支出与净结余计划实际分组柱状图",
@@ -1232,10 +1175,8 @@ describe("dashboard and capacity analytics", () => {
     };
     installHarness({
       analytics: monthAnalytics({
-        actual_status: "EMPTY",
         total_item_count: 0,
         planned_item_count: 0,
-        confirmed_item_count: 0,
         income: emptyComparison,
         expense: emptyComparison,
         net_balance: emptyComparison,
@@ -1264,8 +1205,6 @@ describe("dashboard and capacity analytics", () => {
       history: [
         monthAnalytics({
           month: "2026-07",
-          actual_status: "COMPLETE",
-          confirmed_item_count: 3,
         }),
         monthAnalytics(),
       ],
@@ -1294,8 +1233,8 @@ describe("dashboard and capacity analytics", () => {
   it("groups monthly reports by year with newest periods expanded first", async () => {
     installHarness({
       history: [
-        monthAnalytics({ month: "2025-12", actual_status: "COMPLETE", confirmed_item_count: 3 }),
-        monthAnalytics({ month: "2026-07", actual_status: "COMPLETE", confirmed_item_count: 3 }),
+        monthAnalytics({ month: "2025-12" }),
+        monthAnalytics({ month: "2026-07" }),
         monthAnalytics({ month: "2026-08" }),
       ],
     });
@@ -1310,9 +1249,8 @@ describe("dashboard and capacity analytics", () => {
 
     const latestTable = screen.getByRole("table", { name: "2026 年月度详细报告" });
     const latestHeaders = within(latestTable).getAllByRole("columnheader");
-    expect(latestHeaders.slice(2, 6).every((header) => header.classList.contains("numeric-column"))).toBe(true);
-    expect(within(latestTable).getByText("2/3 项已确认")).toBeInTheDocument();
-    expect(within(latestTable).queryByText(/项已录入/)).not.toBeInTheDocument();
+    expect(latestHeaders.slice(1, 5).every((header) => header.classList.contains("numeric-column"))).toBe(true);
+    expect(within(latestTable).getAllByText("3 个类目").length).toBeGreaterThan(0);
     expect(latestYear.querySelector(".history-year-chevron")).toBeEmptyDOMElement();
     const latestMonthLinks = within(latestTable).getAllByRole("link").filter((link) => link.classList.contains("history-month-link"));
     expect(latestMonthLinks.map((link) => link.textContent)).toEqual(["2026 年 8 月", "2026 年 7 月"]);
@@ -1338,7 +1276,7 @@ describe("dashboard and capacity analytics", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  it("uses backend ranks and excludes missing actuals from the actual ranking", async () => {
+  it("shows planned and actual project rankings together without a ranking mode switch", async () => {
     installHarness({ plans: [examplePlan] });
     const user = userEvent.setup();
     render(<App />);
@@ -1346,20 +1284,71 @@ describe("dashboard and capacity analytics", () => {
     await user.click(await screen.findByText("2026 年 8 月"));
 
     expect(await screen.findByRole("heading", { name: "月度执行结果" })).toBeInTheDocument();
-    expect(screen.getByText("2/3 项已确认")).toBeInTheDocument();
-    expect(screen.queryByText(/完整度/)).not.toBeInTheDocument();
+    expect(screen.getByText("3 个类目")).toBeInTheDocument();
     expect(screen.getAllByText("固定承诺支出").length).toBeGreaterThan(0);
     expect(screen.getByText("房租")).toBeInTheDocument();
     const categoryTable = screen.getByRole("table", { name: "分类结构图对应数据" });
-    expect(within(categoryTable).getByRole("columnheader", { name: "未确认" })).toBeInTheDocument();
-    expect(within(categoryTable).queryByRole("columnheader", { name: "未录入" })).not.toBeInTheDocument();
-    await user.click(screen.getByLabelText("排名依据"));
-    await user.click(screen.getByRole("option", { name: "实际金额" }));
-    expect(screen.queryByText("房租")).not.toBeInTheDocument();
-    const rankingTable = screen.getByRole("table", { name: "项目排名图对应数据" });
-    expect(within(rankingTable).getByText("电费")).toBeInTheDocument();
-    expect(within(rankingTable).getByText("¥ 427.00")).toBeInTheDocument();
+    expect(within(categoryTable).queryByRole("columnheader", { name: "未确认" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("排名依据")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "支出项目" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("计划、实际、占比与排名同屏")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /支出项目.*金额对照图/ })).not.toBeInTheDocument();
+
+    const rankingTable = screen.getByRole("table", { name: "项目计划与实际对照数据" });
+    const electricityRow = within(rankingTable).getByRole("row", { name: /电费/ });
+    expect(electricityRow).toHaveTextContent("#1");
+    expect(electricityRow).toHaveTextContent("计划 #2 · ↑1");
+    expect(electricityRow).toHaveTextContent(/¥\s?300\.00/);
+    expect(electricityRow).toHaveTextContent(/¥\s?427\.00/);
+    expect(electricityRow).toHaveTextContent(/¥\s?127\.00/);
+    expect(electricityRow).toHaveTextContent("5.07%");
+
+    const rentRow = within(rankingTable).getByRole("row", { name: /房租/ });
+    expect(rentRow).toHaveTextContent("计划 #1 · 未录入");
+    expect(rentRow).toHaveTextContent(/¥\s?6,000\.00/);
+    expect(rentRow).toHaveTextContent("未录入");
+    expect(rentRow).toHaveTextContent("不按零参与排名");
+    expect(within(rankingTable).getAllByRole("row")[1]).toHaveTextContent("电费");
+
+    await user.click(within(rankingTable).getByRole("button", { name: "计划金额" }));
+    expect(within(rankingTable).getAllByRole("row")[1]).toHaveTextContent("房租");
+
+    await user.click(screen.getByRole("button", { name: "收入项目" }));
+    expect(screen.queryByRole("img", { name: /收入项目.*金额对照图/ })).not.toBeInTheDocument();
+    expect(within(rankingTable).getByText("工资")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
+  });
+
+  it("degrades project comparison to actual-only when the month has no plan baseline", async () => {
+    installHarness({
+      analytics: monthAnalytics({
+        planned_item_count: 0,
+        projects: [{
+          monthly_item_id: "manual-coffee",
+          name: "临时餐饮",
+          category: "DISCRETIONARY_BUDGET",
+          flow_type: "EXPENSE",
+          planned_amount: "0.00",
+          actual_amount: "88.00",
+          variance_amount: null,
+          variance_effect: "UNKNOWN",
+          planned_share_percent: null,
+          actual_share_percent: "100.00",
+          planned_rank: 1,
+          actual_rank: 1,
+        }],
+      }),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+    await user.click(await screen.findByText("2026 年 8 月"));
+
+    expect(screen.queryByRole("img", { name: /支出项目.*金额对照图/ })).not.toBeInTheDocument();
+    const rankingTable = screen.getByRole("table", { name: "项目计划与实际对照数据" });
+    expect(within(rankingTable).queryByRole("button", { name: "计划金额" })).not.toBeInTheDocument();
+    expect(within(rankingTable).queryByRole("columnheader", { name: "偏差" })).not.toBeInTheDocument();
+    expect(within(rankingTable).getByRole("row", { name: /临时餐饮/ })).toHaveTextContent(/¥\s?88\.00/);
   });
 
   it("invalidates month analytics after an actual entry is added", async () => {

@@ -7,16 +7,15 @@ import type {
   ProjectBreakdown,
 } from "../../shared/api/finance";
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
-import { Select } from "../../shared/components/Select";
 import { formatMoney, formatPercent } from "../../shared/formatting/finance";
 import { categoryLabel, flowLabel } from "../../shared/formatting/labels";
 
 type FlowFilter = "INCOME" | "EXPENSE";
-type RankingMode = "PLANNED" | "ACTUAL";
+type ProjectTableSort = "PLANNED" | "ACTUAL";
 
 export function MonthReportDetail({ analytics }: { analytics: MonthAnalytics }) {
   const hasPlanBaseline = analytics.planned_item_count > 0;
-  const actualLabel = analytics.actual_status === "COMPLETE" ? "最终实际" : "当前已录";
+  const actualLabel = "实际记录";
 
   return (
     <div className="month-report-detail">
@@ -148,8 +147,8 @@ function CategoryAnalysis({
         <div className="table-scroll">
           <table className="data-table">
             <caption className="sr-only">分类结构图对应数据</caption>
-            <thead><tr><th>类别</th><th>计划金额</th><th>计划占比</th><th>{actualLabel}</th><th>实际占比</th><th>未确认</th></tr></thead>
-            <tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, analytics.currency) : "—"}</td><td>{hasPlanBaseline ? formatPercent(item.planned_share_percent) : "—"}</td><td>{formatMoney(item.actual_to_date, analytics.currency)}</td><td>{formatPercent(item.actual_share_percent)}</td><td>{item.unconfirmed_item_count}</td></tr>)}</tbody>
+            <thead><tr><th>类别</th><th>计划金额</th><th>计划占比</th><th>{actualLabel}</th><th>实际占比</th></tr></thead>
+            <tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, analytics.currency) : "—"}</td><td>{hasPlanBaseline ? formatPercent(item.planned_share_percent) : "—"}</td><td>{formatMoney(item.actual_to_date, analytics.currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody>
           </table>
         </div>
       </section>
@@ -159,33 +158,86 @@ function CategoryAnalysis({
 
 function ProjectRanking({ analytics, hasPlanBaseline }: { analytics: MonthAnalytics; hasPlanBaseline: boolean }) {
   const [flow, setFlow] = useState<FlowFilter>("EXPENSE");
-  const [mode, setMode] = useState<RankingMode>(hasPlanBaseline ? "PLANNED" : "ACTUAL");
-  const effectiveMode = hasPlanBaseline ? mode : "ACTUAL";
-  const projects = analytics.projects
-    .filter((project) => project.flow_type === flow)
-    .filter((project) => effectiveMode === "PLANNED" || project.actual_rank !== null)
-    .sort((left, right) => effectiveMode === "PLANNED"
-      ? left.planned_rank - right.planned_rank
-      : (left.actual_rank ?? Number.MAX_SAFE_INTEGER) - (right.actual_rank ?? Number.MAX_SAFE_INTEGER));
-  const option = useMemo(() => projectRankingOption(projects, effectiveMode), [effectiveMode, projects]);
-  const amountLabel = effectiveMode === "PLANNED" ? "计划金额" : "实际金额";
+  const [tableSort, setTableSort] = useState<ProjectTableSort>("ACTUAL");
+  const flowProjects = analytics.projects.filter((project) => project.flow_type === flow);
+  const hasFlowPlan = hasPlanBaseline && flowProjects.some(projectHasPlan);
+  const tableProjects = [...flowProjects].sort(tableSort === "PLANNED" && hasFlowPlan
+    ? compareByPlannedRank
+    : compareByActualRank);
 
   return (
     <section className="analysis-section">
       <header className="section-heading ranking-heading">
         <div><p className="section-label">Item Ranking</p><h2>项目占比与排名</h2></div>
-        <div className="ranking-controls">
-          <label>方向<Select ariaLabel="方向" value={flow} onChange={(value) => setFlow(value as FlowFilter)} options={[{ value: "EXPENSE", label: "支出项目" }, { value: "INCOME", label: "收入项目" }]} /></label>
-          <label>排名依据<Select ariaLabel="排名依据" value={effectiveMode} onChange={(value) => setMode(value as RankingMode)} options={hasPlanBaseline ? [{ value: "PLANNED", label: "计划金额" }, { value: "ACTUAL", label: "实际金额" }] : [{ value: "ACTUAL", label: "实际金额" }]} /></label>
+        <div className="segmented-control" aria-label="项目方向" role="group">
+          <button aria-pressed={flow === "EXPENSE"} className={flow === "EXPENSE" ? "segment-active" : ""} onClick={() => setFlow("EXPENSE")} type="button">支出项目</button>
+          <button aria-pressed={flow === "INCOME"} className={flow === "INCOME" ? "segment-active" : ""} onClick={() => setFlow("INCOME")} type="button">收入项目</button>
         </div>
       </header>
       <section className="analysis-card ranking-card">
-        {projects.length === 0 ? <p className="empty-copy">当前筛选没有可排名项目；未录入的实际金额不会按零参与排名。</p> : <>
-          <AnalyticsChart option={option} label={`${analytics.month}${flowLabel(flow)}项目按${amountLabel}排名图`} height={Math.max(300, projects.length * 44)} />
-          <div className="table-scroll"><table className="data-table"><caption className="sr-only">项目排名图对应数据</caption><thead><tr><th>排名</th><th>项目</th><th>类别</th><th>{amountLabel}</th><th>占比</th><th>偏差</th></tr></thead><tbody>{projects.map((project) => <tr key={project.monthly_item_id}><td>{effectiveMode === "PLANNED" ? project.planned_rank : project.actual_rank}</td><th>{project.name}</th><td>{categoryLabel(project.category)}</td><td>{formatMoney(effectiveMode === "PLANNED" ? project.planned_amount : project.actual_amount, analytics.currency)}</td><td>{formatPercent(effectiveMode === "PLANNED" ? project.planned_share_percent : project.actual_share_percent)}</td><td>{hasPlanBaseline ? formatMoney(project.variance_amount, analytics.currency) : "—"}</td></tr>)}</tbody></table></div>
+        <header className="ranking-card-header">
+          <div><h3>{flowLabel(flow)}项目对照</h3><span>计划、实际、占比与排名同屏</span></div>
+          {flowProjects.length > 0 && <small>共 {flowProjects.length} 项 · 默认按实际金额排序</small>}
+        </header>
+        {flowProjects.length === 0 ? <p className="empty-copy">该月份没有{flowLabel(flow)}项目。</p> : <>
+          <div className="table-scroll ranking-table-scroll">
+            <table className="data-table ranking-comparison-table">
+              <caption className="sr-only">项目计划与实际对照数据</caption>
+              <thead><tr>
+                <th>实际排名</th>
+                <th>项目 / 类别</th>
+                {hasFlowPlan && <th><button aria-pressed={tableSort === "PLANNED"} className="table-sort-button" onClick={() => setTableSort("PLANNED")} type="button">计划金额</button></th>}
+                <th><button aria-pressed={tableSort === "ACTUAL" || !hasFlowPlan} className="table-sort-button" onClick={() => setTableSort("ACTUAL")} type="button">实际金额</button></th>
+                {hasFlowPlan && <th>偏差</th>}
+              </tr></thead>
+              <tbody>{tableProjects.map((project) => (
+                <ProjectComparisonRow
+                  currency={analytics.currency}
+                  hasFlowPlan={hasFlowPlan}
+                  key={project.monthly_item_id}
+                  project={project}
+                />
+              ))}</tbody>
+            </table>
+          </div>
         </>}
       </section>
     </section>
+  );
+}
+
+function ProjectComparisonRow({
+  project,
+  currency,
+  hasFlowPlan,
+}: {
+  project: ProjectBreakdown;
+  currency: string;
+  hasFlowPlan: boolean;
+}) {
+  const hasPlan = projectHasPlan(project);
+  return (
+    <tr>
+      <td className="ranking-rank-cell">
+        <strong>{project.actual_rank === null ? "—" : `#${project.actual_rank}`}</strong>
+        {hasFlowPlan && <small>{rankComparisonLabel(project, hasPlan)}</small>}
+      </td>
+      <th className="ranking-project-cell" scope="row"><strong>{project.name}</strong><small>{categoryLabel(project.category)}</small></th>
+      {hasFlowPlan && <td className="ranking-value-cell">
+        {hasPlan
+          ? <><strong>{formatMoney(project.planned_amount, currency)}</strong><small>{formatPercent(project.planned_share_percent)}</small></>
+          : <><strong>计划外</strong><small>无计划基准</small></>}
+      </td>}
+      <td className={`ranking-value-cell${project.actual_amount === null ? " ranking-value-missing" : ""}`}>
+        {project.actual_amount === null
+          ? <><strong>未录入</strong><small>不按零参与排名</small></>
+          : <><strong>{formatMoney(project.actual_amount, currency)}</strong><small>{formatPercent(project.actual_share_percent)}</small></>}
+      </td>
+      {hasFlowPlan && <td className="ranking-value-cell">
+        <strong>{hasPlan && project.actual_amount !== null ? formatMoney(project.variance_amount, currency) : "—"}</strong>
+        <small>{hasPlan ? varianceLabel(project.variance_effect, project.actual_amount) : "计划外项目"}</small>
+      </td>}
+    </tr>
   );
 }
 
@@ -211,14 +263,40 @@ function categoryStructureOption(categories: CategoryBreakdown[], hasPlanBaselin
   };
 }
 
-function projectRankingOption(projects: ProjectBreakdown[], mode: RankingMode) {
-  return {
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-    grid: { left: 105, right: 24, top: 25, bottom: 35 },
-    xAxis: { type: "value" },
-    yAxis: { type: "category", inverse: true, data: projects.map((item) => item.name) },
-    series: [{ name: mode === "PLANNED" ? "计划金额" : "实际金额", type: "bar", data: projects.map((item) => mode === "PLANNED" ? item.planned_amount : item.actual_amount), itemStyle: { color: mode === "PLANNED" ? "#94a3b8" : "#2563eb" } }],
-  };
+function projectHasPlan(project: ProjectBreakdown) {
+  return !/^0(?:\.0+)?$/.test(project.planned_amount);
+}
+
+function compareByActualRank(left: ProjectBreakdown, right: ProjectBreakdown) {
+  return (left.actual_rank ?? Number.MAX_SAFE_INTEGER) - (right.actual_rank ?? Number.MAX_SAFE_INTEGER)
+    || left.planned_rank - right.planned_rank
+    || left.name.localeCompare(right.name, "zh-CN");
+}
+
+function compareByPlannedRank(left: ProjectBreakdown, right: ProjectBreakdown) {
+  return left.planned_rank - right.planned_rank
+    || (left.actual_rank ?? Number.MAX_SAFE_INTEGER) - (right.actual_rank ?? Number.MAX_SAFE_INTEGER)
+    || left.name.localeCompare(right.name, "zh-CN");
+}
+
+function rankComparisonLabel(project: ProjectBreakdown, hasPlan: boolean) {
+  if (!hasPlan) return project.actual_rank === null ? "计划外 · 未录入" : "计划外新增";
+  if (project.actual_rank === null) return `计划 #${project.planned_rank} · 未录入`;
+  const movement = project.planned_rank - project.actual_rank;
+  if (movement > 0) return `计划 #${project.planned_rank} · ↑${movement}`;
+  if (movement < 0) return `计划 #${project.planned_rank} · ↓${Math.abs(movement)}`;
+  return `计划 #${project.planned_rank} · 持平`;
+}
+
+function varianceLabel(effect: ProjectBreakdown["variance_effect"], actualAmount: string | null) {
+  if (actualAmount === null) return "等待实际数据";
+  return effect === "FAVORABLE"
+    ? "有利"
+    : effect === "UNFAVORABLE"
+      ? "需关注"
+      : effect === "ON_PLAN"
+        ? "符合计划"
+        : "无计划基准";
 }
 
 const chartLegendText = { color: "#64748b", fontSize: 11 };

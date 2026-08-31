@@ -1,6 +1,6 @@
 # Aplena 数据库 Schema
 
-当前正式 schema：1
+当前正式 schema：2
 数据库：SQLite STRICT tables + foreign keys + WAL
 
 ## 1. 存储约定
@@ -16,7 +16,7 @@ RATE_SCALE   = 100_000_000
 - 日期为规范 `YYYY-MM-DD` 文本；月份为当月第一日；
 - 时间戳为 UTC ISO 8601 文本；
 - UUID 存为 36 字符文本；
-- `NULL` 确认时间与确认零有不同含义。
+- 没有实际条目时派生实际为 `NULL`，不能擅自解释为零。
 
 六张核心业务表以外，SQLx 自有迁移表不属于业务模型。
 
@@ -90,7 +90,6 @@ RATE_SCALE   = 100_000_000
 | `item_origin` | TEXT | 否 | `PLAN_LINKED` / `MANUAL` |
 | `scheduled_date` | TEXT | 是 | 同月日级支付日期 |
 | `planned_amount_scaled` | INTEGER | 否 | 非负本位币分 |
-| `actual_confirmed_at` | TEXT | 是 | 最终核对标记 |
 | `currency_code` | TEXT | 否 | 创建时本位币 |
 | `note` | TEXT | 是 | 月度备注 |
 | `created_at` / `updated_at` | TEXT | 否 | 审计字段 |
@@ -130,7 +129,7 @@ PLANNED + PAYMENT => scheduled_date IS NOT NULL
 | `note` | TEXT | 是 | 备注或迁移说明 |
 | `created_at` / `updated_at` | TEXT | 否 | 审计字段 |
 
-插入和更新触发器检查 `occurred_on` 与月度项目同月。插入、更新和删除触发器均把所属月度项目的 `actual_confirmed_at` 清空，并更新审计时间。
+插入和更新触发器检查 `occurred_on` 与月度项目同月。
 
 索引：月度项目+日期+ID、发生日期。
 
@@ -140,18 +139,18 @@ PLANNED + PAYMENT => scheduled_date IS NOT NULL
 
 ```sql
 CASE
-  WHEN COUNT(e.id) > 0 OR m.actual_confirmed_at IS NOT NULL
-  THEN COALESCE(SUM(
+  WHEN COUNT(e.id) > 0
+  THEN SUM(
     CASE e.effect
       WHEN 'INCREASE' THEN e.amount_scaled
       ELSE -e.amount_scaled
     END
-  ), 0)
+  )
   ELSE NULL
 END AS derived_actual_amount_scaled
 ```
 
-同时返回 `COUNT(e.id)`，应用层据此和确认时间推导 `MISSING`、`IN_PROGRESS`、`CONFIRMED_ZERO`、`FINAL`。
+同时返回 `COUNT(e.id)`。应用层不再推导类目的确认或完成状态。
 
 实际净额可为负，不能套用计划金额的非负约束。
 
@@ -163,19 +162,20 @@ END AS derived_actual_amount_scaled
 | 停止计划 | `end_date` | 历史保留 |
 | 删除计划 | 删除计划、快照来源置空 | 快照/条目保留 |
 | 初始化 | 新增正式快照 | 事务、唯一键、汇率完整 |
-| 原位提升 | 仅实际快照变正式快照字段 | 条目、ID、确认保留 |
+| 原位提升 | 仅实际快照变正式快照字段 | 条目、ID 保留 |
 | 更新月度备注 | `note` | 快照计划字段只读 |
 | 条目 CRUD | 用户条目字段 | 日期同月、正金额、禁止改挂 |
-| 确认 | `actual_confirmed_at` | 不创建条目或总额 |
+| 删除临时类目 | `MANUAL + ACTUAL_ONLY` 类目及其条目 | 事务、预算快照拒绝删除 |
 | 分析 | 无写入 | 实时查询 |
 
 ## 9. 正式迁移基线
 
 - `0001_initial_release.sql`：首个公开版的完整六表结构、7 个业务索引和 12 个触发器；
-- 新安装的 `_sqlx_migrations` 只记录该正式基线；
+- `0002_remove_monthly_item_status.sql`：移除 `actual_confirmed_at` 及 3 个条目变更重开触发器，保留 9 个业务触发器；
+- 新安装的 `_sqlx_migrations` 顺序记录 schema 1 与 schema 2；
 - 基线不包含旧金额转换、临时表、过渡列或数据搬运语句；
 - 正式发布后的变更只允许追加迁移，不再改写 schema 1。
 
-预发布六段迁移的最终结构已冻结为测试夹具。自动测试同时比较 `sqlite_schema`、列、类型、默认值、非空与主键、外键、索引列、触发器和 STRICT 属性，并验证高版本预发布库会在不修改内容的前提下被拒绝。现有本地预发布数据必须遵循[独立换轨方案](08-pre-release-database-transition.md)，不能直接修改 `_sqlx_migrations`。
+预发布六段迁移的最终结构已冻结为测试夹具。自动测试先把 schema 2 变更应用到冻结夹具，再比较 `sqlite_schema`、列、类型、默认值、非空与主键、外键、索引列、触发器和 STRICT 属性；同时验证高版本预发布库会在不修改内容的前提下被拒绝。现有本地预发布数据必须遵循[独立换轨方案](08-pre-release-database-transition.md)，不能直接修改 `_sqlx_migrations`。
 
 发现未来 schema 时拒绝启动，不做降级写入。任何正式迁移失败都会阻止应用进入业务流程。

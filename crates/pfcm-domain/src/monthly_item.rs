@@ -6,25 +6,6 @@ use crate::{
     MonthlyItemSource, PlanItem, RecognitionMode, SignedAmount, YearMonth,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActualDataStatus {
-    Missing,
-    InProgress,
-    ConfirmedZero,
-    Final,
-}
-
-impl ActualDataStatus {
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::Missing => "MISSING",
-            Self::InProgress => "IN_PROGRESS",
-            Self::ConfirmedZero => "CONFIRMED_ZERO",
-            Self::Final => "FINAL",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MonthlyItem {
     id: Uuid,
@@ -40,7 +21,6 @@ pub struct MonthlyItem {
     planned_amount: Amount,
     actual_amount: Option<SignedAmount>,
     actual_entry_count: u64,
-    actual_confirmed_at: Option<String>,
     currency: CurrencyCode,
     note: Option<String>,
 }
@@ -104,7 +84,6 @@ impl MonthlyItem {
             planned_amount,
             actual_amount: None,
             actual_entry_count: 0,
-            actual_confirmed_at: None,
             currency: base_currency,
             note: source.note().map(str::to_owned),
             item_origin: MonthlyItemOrigin::PlanLinked,
@@ -138,7 +117,6 @@ impl MonthlyItem {
             planned_amount: Amount::zero(),
             actual_amount: None,
             actual_entry_count: 0,
-            actual_confirmed_at: None,
             currency: base_currency,
             note: note
                 .map(|value| value.trim().to_owned())
@@ -161,7 +139,6 @@ impl MonthlyItem {
         planned_amount: Amount,
         actual_amount: Option<SignedAmount>,
         actual_entry_count: u64,
-        actual_confirmed_at: Option<String>,
         currency: CurrencyCode,
         note: Option<String>,
     ) -> Self {
@@ -179,7 +156,6 @@ impl MonthlyItem {
             planned_amount,
             actual_amount,
             actual_entry_count,
-            actual_confirmed_at,
             currency,
             note,
         }
@@ -224,22 +200,10 @@ impl MonthlyItem {
     pub const fn actual_entry_count(&self) -> u64 {
         self.actual_entry_count
     }
-    pub fn actual_confirmed_at(&self) -> Option<&str> {
-        self.actual_confirmed_at.as_deref()
-    }
     pub fn currency(&self) -> &CurrencyCode {
         &self.currency
     }
     pub fn note(&self) -> Option<&str> {
         self.note.as_deref()
-    }
-
-    pub fn actual_data_status(&self) -> ActualDataStatus {
-        match (self.actual_entry_count, self.actual_confirmed_at.is_some()) {
-            (0, false) => ActualDataStatus::Missing,
-            (_, false) => ActualDataStatus::InProgress,
-            (0, true) => ActualDataStatus::ConfirmedZero,
-            (_, true) => ActualDataStatus::Final,
-        }
     }
 }

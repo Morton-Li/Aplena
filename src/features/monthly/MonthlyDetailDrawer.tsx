@@ -3,8 +3,8 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 
 import {
-  confirmMonthlyItem,
   deleteActualEntry,
+  deleteManualMonthlyItem,
   listActualEntries,
   queryKeys,
   updateMonthlyNote,
@@ -15,11 +15,12 @@ import { describeError } from "../../shared/formatting/errors";
 import { formatMoney, formatPercent } from "../../shared/formatting/finance";
 import { categoryLabel, flowLabel, recognitionLabel } from "../../shared/formatting/labels";
 import { Dialog } from "../../shared/components/Dialog";
-import { isActualOnly, isConfirmed } from "./monthlyWorkspace";
+import { isActualOnly, isTemporaryItem } from "./monthlyWorkspace";
 
 interface MonthlyDetailDrawerProps {
   item: MonthlyItem;
   onClose: () => void;
+  onDeleted: () => Promise<void>;
   onSaved: () => Promise<void>;
   onAddEntry: (item: MonthlyItem) => void;
   onEditEntry: (item: MonthlyItem, entry: ActualEntry) => void;
@@ -33,7 +34,7 @@ const focusableSelector = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function MonthlyDetailDrawer({ item, onClose, onSaved, onAddEntry, onEditEntry }: MonthlyDetailDrawerProps) {
+export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEntry, onEditEntry }: MonthlyDetailDrawerProps) {
   const queryClient = useQueryClient();
   const titleId = useId();
   const drawerRef = useRef<HTMLElement>(null);
@@ -41,11 +42,11 @@ export function MonthlyDetailDrawer({ item, onClose, onSaved, onAddEntry, onEdit
   const [note, setNote] = useState(item.note ?? "");
   const [editingNote, setEditingNote] = useState(false);
   const [entryPendingDeletion, setEntryPendingDeletion] = useState<ActualEntry | null>(null);
+  const [categoryPendingDeletion, setCategoryPendingDeletion] = useState(false);
   const entriesQuery = useQuery({
     queryKey: queryKeys.actualEntries(item.id),
     queryFn: () => listActualEntries(item.id),
   });
-  const confirmMutation = useMutation({ mutationFn: () => confirmMonthlyItem(item.id), onSuccess: onSaved });
   const noteMutation = useMutation({
     mutationFn: () => updateMonthlyNote({ id: item.id, note: note.trim() || null }),
     onSuccess: async () => { setEditingNote(false); await onSaved(); },
@@ -57,6 +58,10 @@ export function MonthlyDetailDrawer({ item, onClose, onSaved, onAddEntry, onEdit
       await queryClient.invalidateQueries({ queryKey: queryKeys.actualEntries(item.id) });
       await onSaved();
     },
+  });
+  const deleteCategoryMutation = useMutation({
+    mutationFn: () => deleteManualMonthlyItem(item.id),
+    onSuccess: onDeleted,
   });
 
   useEffect(() => {
@@ -126,9 +131,8 @@ export function MonthlyDetailDrawer({ item, onClose, onSaved, onAddEntry, onEdit
           </section>
 
           <div className="monthly-drawer-context">
-            <span className={`monthly-status-badge monthly-status-${item.data_status.toLowerCase()}`}><i aria-hidden="true" />{statusLabel(item.data_status)}</span>
             <span>{item.actual_entry_count} 条实际记录</span>
-            {isActualOnly(item) && <span>计划外项目</span>}
+            <span>{isTemporaryItem(item) ? "临时类目" : isActualOnly(item) ? "计划外预算类目" : "预算类目"}</span>
             {item.scheduled_date && <span>计划支付 {item.scheduled_date}</span>}
           </div>
 
@@ -160,17 +164,15 @@ export function MonthlyDetailDrawer({ item, onClose, onSaved, onAddEntry, onEdit
             ) : <p className={item.note ? "monthly-drawer-note" : "monthly-drawer-note monthly-drawer-note-empty"}>{item.note ?? "尚未添加月度备注。"}</p>}
           </section>
 
-          {(confirmMutation.isError || noteMutation.isError || deleteMutation.isError) && (
-            <div className="inline-error" role="alert">{describeError(confirmMutation.error ?? noteMutation.error ?? deleteMutation.error)}</div>
+          {(noteMutation.isError || deleteMutation.isError || deleteCategoryMutation.isError) && (
+            <div className="inline-error" role="alert">{describeError(noteMutation.error ?? deleteMutation.error ?? deleteCategoryMutation.error)}</div>
           )}
         </div>
 
-        <footer className="monthly-drawer-footer">
-          <span>{isConfirmed(item) ? "该项目已完成核对" : "确认后仍可通过编辑实际条目重新打开状态"}</span>
-          <button className="button button-secondary" disabled={confirmMutation.isPending || isConfirmed(item)} onClick={() => confirmMutation.mutate()} type="button">
-            {confirmMutation.isPending ? "确认中…" : "确认项目已完成"}
-          </button>
-        </footer>
+        {isTemporaryItem(item) && <footer className="monthly-drawer-footer">
+          <span>临时类目只属于本月，可连同其中的实际条目一起删除。</span>
+          <button className="button button-danger" onClick={() => setCategoryPendingDeletion(true)} type="button">删除临时类目</button>
+        </footer>}
       </aside>
     </div>,
       document.body,
@@ -187,13 +189,26 @@ export function MonthlyDetailDrawer({ item, onClose, onSaved, onAddEntry, onEdit
         </button>
       </>}
     >
-      <p>删除后无法在应用内撤销，该项目会重新变为待确认。</p>
+      <p>删除后无法在应用内撤销，但不会影响该类目的其他实际条目。</p>
       <dl className="delete-entry-summary">
         <div><dt>日期</dt><dd>{entryPendingDeletion.occurred_on}</dd></div>
         <div><dt>类型</dt><dd>{entryPendingDeletion.effect === "INCREASE" ? (item.flow_type === "EXPENSE" ? "支出" : "收入") : (item.flow_type === "EXPENSE" ? "退款" : "冲减")}</dd></div>
         <div><dt>金额</dt><dd>{formatMoney(entryPendingDeletion.source_amount, entryPendingDeletion.source_currency)}</dd></div>
       </dl>
       {deleteMutation.isError && <div className="inline-error" role="alert">{describeError(deleteMutation.error)}</div>}
+    </Dialog>}
+    {categoryPendingDeletion && <Dialog
+      className="delete-category-dialog"
+      eyebrow="删除临时类目"
+      title={`确认删除“${item.item_name}”？`}
+      onClose={() => !deleteCategoryMutation.isPending && setCategoryPendingDeletion(false)}
+      footer={<>
+        <button className="button button-quiet" disabled={deleteCategoryMutation.isPending} onClick={() => setCategoryPendingDeletion(false)} type="button">取消</button>
+        <button className="button button-danger" disabled={deleteCategoryMutation.isPending} onClick={() => deleteCategoryMutation.mutate()} type="button">{deleteCategoryMutation.isPending ? "删除中…" : "确认删除临时类目"}</button>
+      </>}
+    >
+      <p>该临时类目及其中 <strong>{item.actual_entry_count}</strong> 条实际记录会被永久删除，预算类目和周期规则不会受到影响。</p>
+      {deleteCategoryMutation.isError && <div className="inline-error" role="alert">{describeError(deleteCategoryMutation.error)}</div>}
     </Dialog>}
   </>;
 }
@@ -212,7 +227,7 @@ function ActualEntryList({ item, entries, pending, error, onEdit, onDelete }: {
 }) {
   if (pending) return <div className="monthly-drawer-loading">正在读取实际条目…</div>;
   if (error) return <div className="inline-error" role="alert">{describeError(error)}</div>;
-  if (entries.length === 0) return <div className="monthly-drawer-empty"><strong>还没有实际条目</strong><p>最终确认为零时无需创建虚假条目。</p></div>;
+  if (entries.length === 0) return <div className="monthly-drawer-empty"><strong>还没有实际条目</strong><p>没有发生额时无需创建零金额条目。</p></div>;
   return <div className="monthly-drawer-entry-list">{entries.map((entry) => (
     <article className="monthly-drawer-entry" key={entry.id}>
       <div><time dateTime={entry.occurred_on}>{entry.occurred_on}</time><strong>{formatMoney(`${entry.effect === "INCREASE" ? "+" : "-"}${entry.source_amount}`, entry.source_currency)}</strong></div>
@@ -221,8 +236,4 @@ function ActualEntryList({ item, entries, pending, error, onEdit, onDelete }: {
       {entry.origin === "USER" && <div><button className="text-button" onClick={() => onEdit(entry)} type="button">编辑</button><button className="text-button danger-text" onClick={() => onDelete(entry)} type="button">删除</button></div>}
     </article>
   ))}</div>;
-}
-
-function statusLabel(status: MonthlyItem["data_status"]) {
-  return { MISSING: "待录入", IN_PROGRESS: "记录中", CONFIRMED_ZERO: "已确认零", FINAL: "已确认" }[status];
 }
