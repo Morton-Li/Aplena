@@ -8,8 +8,8 @@ import {
   defaultMonthlyWorkspaceFilters,
   hasActiveMonthlyFilters,
   isActualOnly,
-  isConfirmed,
-  monthlyStatusCounts,
+  isTemporaryItem,
+  monthlyItemCounts,
   type MonthlyWorkspaceFilters,
 } from "./monthlyWorkspace";
 
@@ -20,18 +20,7 @@ interface MonthlyWorkspaceProps {
   onFiltersChange: (filters: MonthlyWorkspaceFilters) => void;
   onSelectItem: (id: string) => void;
   selectedItemId: string | null;
-  batchCategory: string;
-  onBatchCategoryChange: (category: string) => void;
-  onBatchConfirm: () => void;
-  batchPending: boolean;
 }
-
-const statusLabels: Record<MonthlyItem["data_status"], string> = {
-  MISSING: "待录入",
-  IN_PROGRESS: "记录中",
-  CONFIRMED_ZERO: "已确认零",
-  FINAL: "已确认",
-};
 
 const varianceLabels: Record<MonthlyItem["variance_effect"], string> = {
   UNKNOWN: "待形成",
@@ -47,17 +36,9 @@ export function MonthlyWorkspace({
   onFiltersChange,
   onSelectItem,
   selectedItemId,
-  batchCategory,
-  onBatchCategoryChange,
-  onBatchConfirm,
-  batchPending,
 }: MonthlyWorkspaceProps) {
-  const counts = monthlyStatusCounts(items);
+  const counts = monthlyItemCounts(items);
   const categories = Array.from(new Set(items.map((item) => item.category)));
-  const eligibleBatchItems = items.filter(
-    (item) => !isConfirmed(item) && (batchCategory === "ALL" || item.category === batchCategory),
-  );
-  const batchScope = batchCategory === "ALL" ? "整月" : categoryLabel(batchCategory);
 
   const update = <Key extends keyof MonthlyWorkspaceFilters>(
     key: Key,
@@ -66,23 +47,14 @@ export function MonthlyWorkspace({
 
   return (
     <section aria-label="本月项目工作台" className="monthly-workspace">
-      <div aria-label="本月项目状态摘要" className="monthly-status-summary">
-        <SummaryMetric label="项目总数" value={counts.total} />
-        <SummaryMetric label="已确认" tone="complete" value={counts.confirmed} />
-        <SummaryMetric label="记录中" tone="progress" value={counts.inProgress} />
-        <SummaryMetric label="待录入" tone="attention" value={counts.missing} />
-        <SummaryMetric label="计划外项目" value={counts.actualOnly} />
+      <div aria-label="本月类目摘要" className="monthly-item-summary">
+        <SummaryMetric label="类目总数" value={counts.total} />
+        <SummaryMetric label="预算类目" value={counts.planned} />
+        <SummaryMetric label="临时类目" value={counts.temporary} />
+        <SummaryMetric label="实际条目" value={counts.entries} />
       </div>
 
       <div className="monthly-workspace-controls">
-        <div aria-label="项目状态筛选" className="monthly-status-tabs" role="tablist">
-          <StatusTab active={filters.status === "ALL"} count={counts.total} label="全部" onClick={() => update("status", "ALL")} />
-          <StatusTab active={filters.status === "ATTENTION"} count={counts.missing} label="待处理" onClick={() => update("status", "ATTENTION")} />
-          <StatusTab active={filters.status === "IN_PROGRESS"} count={counts.inProgress} label="记录中" onClick={() => update("status", "IN_PROGRESS")} />
-          <StatusTab active={filters.status === "CONFIRMED"} count={counts.confirmed} label="已确认" onClick={() => update("status", "CONFIRMED")} />
-          <StatusTab active={filters.status === "ACTUAL_ONLY"} count={counts.actualOnly} label="计划外实际" onClick={() => update("status", "ACTUAL_ONLY")} />
-        </div>
-
         <div className="monthly-filter-grid">
           <label className="monthly-search-field">
             <span className="sr-only">搜索项目、分类或备注</span>
@@ -127,45 +99,21 @@ export function MonthlyWorkspace({
             className="monthly-sort-select"
             onChange={(value) => update("sort", value as MonthlyWorkspaceFilters["sort"])}
             options={[
-              { value: "PRIORITY", label: "待处理优先" },
+              { value: "UPDATED", label: "最近更新" },
               { value: "NAME", label: "项目名称" },
               { value: "ACTUAL", label: "实际金额" },
               { value: "VARIANCE", label: "偏差绝对值" },
               { value: "COMPLETION", label: "完成率" },
-              { value: "UPDATED", label: "最近更新" },
             ]}
             value={filters.sort}
           />
         </div>
 
-        <div className="monthly-toolbar-footer">
-          <div className="monthly-result-summary">
-            <div className="monthly-result-count" aria-live="polite">
-              显示 <strong>{visibleItems.length}</strong> / {items.length} 项
-              {hasActiveMonthlyFilters(filters) && (
-                <button className="text-button" onClick={() => onFiltersChange(defaultMonthlyWorkspaceFilters)} type="button">清除筛选</button>
-              )}
-            </div>
-            <p className="monthly-confirmation-note">确认只标记条目已核对，不会补写计划金额或创建虚假实际。</p>
-          </div>
-          <div className="monthly-batch-controls">
-            <span>批量确认范围</span>
-            <Select
-              ariaLabel="批量确认范围"
-              className="monthly-batch-select"
-              onChange={onBatchCategoryChange}
-              options={[{ value: "ALL", label: "整月全部类别" }, ...categories.map((value) => ({ value, label: categoryLabel(value) }))]}
-              value={batchCategory}
-            />
-            <button
-              className="button button-secondary"
-              disabled={batchPending || eligibleBatchItems.length === 0}
-              onClick={onBatchConfirm}
-              type="button"
-            >
-              {batchPending ? "确认中…" : `确认${batchScope}待处理 ${eligibleBatchItems.length} 项`}
-            </button>
-          </div>
+        <div className="monthly-result-count" aria-live="polite">
+          显示 <strong>{visibleItems.length}</strong> / {items.length} 项
+          {hasActiveMonthlyFilters(filters) && (
+            <button className="text-button" onClick={() => onFiltersChange(defaultMonthlyWorkspaceFilters)} type="button">清除筛选</button>
+          )}
         </div>
       </div>
 
@@ -181,10 +129,9 @@ export function MonthlyWorkspace({
           style={{ overflow: "auto", overscrollBehaviorX: "contain", overscrollBehaviorY: "auto" }}
         >
           <table className="monthly-data-table">
-            <caption className="sr-only">本月项目、计划金额、实际金额、偏差、完成率和实际条目数量</caption>
+            <caption className="sr-only">本月类目、计划金额、实际金额、偏差、完成率和实际条目数量</caption>
             <thead>
               <tr>
-                <th>状态</th>
                 <th>项目 / 分类</th>
                 <th className="numeric-column">计划</th>
                 <th className="numeric-column">实际</th>
@@ -211,16 +158,8 @@ export function MonthlyWorkspace({
   );
 }
 
-function SummaryMetric({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "neutral" | "complete" | "progress" | "attention" }) {
-  return <div className={`monthly-summary-metric summary-${tone}`}><span>{label}</span><strong>{value}</strong></div>;
-}
-
-function StatusTab({ active, count, label, onClick }: { active: boolean; count: number; label: string; onClick: () => void }) {
-  return (
-    <button aria-selected={active} className={active ? "active" : ""} onClick={onClick} role="tab" type="button">
-      <span>{label}</span><small>{count}</small>
-    </button>
-  );
+function SummaryMetric({ label, value }: { label: string; value: number }) {
+  return <div className="monthly-summary-metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function MonthlyTableRow({ item, selected, onSelect }: { item: MonthlyItem; selected: boolean; onSelect: () => void }) {
@@ -239,10 +178,9 @@ function MonthlyTableRow({ item, selected, onSelect }: { item: MonthlyItem; sele
       onKeyDown={handleKeyDown}
       tabIndex={0}
     >
-      <td><span className={`monthly-status-badge monthly-status-${item.data_status.toLowerCase()}`}><i aria-hidden="true" />{statusLabels[item.data_status]}</span></td>
       <th scope="row">
         <span className="monthly-item-name">{item.item_name}</span>
-        <small>{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{isActualOnly(item) ? " · 计划外" : ""}</small>
+        <small>{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{isTemporaryItem(item) ? " · 临时类目" : isActualOnly(item) ? " · 计划外预算类目" : ""}</small>
       </th>
       <td className="numeric-column">{item.item_origin === "MANUAL" ? "—" : formatMoney(item.planned_amount, item.currency)}</td>
       <td className="numeric-column monthly-actual-value">{formatMoney(item.actual_amount, item.currency)}</td>

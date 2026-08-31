@@ -35,7 +35,7 @@ ensure_month_initialized(month, trigger, optional_rate_overrides)
 - 先验证全部应计项目，再进行首次插入；
 - `UNIQUE(source_plan_item_id, month)` 是最终幂等屏障；
 - 已有正式快照的冲突只增加 `skipped`，不执行 UPDATE；
-- 已有同来源、同月 `ACTUAL_ONLY` 时，只允许在事务内原位提升为 `PLANNED`，保留 ID、实际条目和确认事实；
+- 已有同来源、同月 `ACTUAL_ONLY` 时，只允许在事务内原位提升为 `PLANNED`，保留 ID 和实际条目；
 - 缺失汇率或非法计划导致整批回滚；
 - 返回 `created`、`skipped`、`excluded` 和警告。
 

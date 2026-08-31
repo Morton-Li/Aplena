@@ -90,7 +90,7 @@ function HistoryYearSection({ group, expanded, onToggle }: { group: HistoryYearG
           type="button"
         >
           <span aria-hidden="true" className="history-year-chevron" />
-          <span><strong>{group.year} 年</strong><small>{group.monthCount} 个月 · {group.confirmedMonthCount} 个月最终确认</small></span>
+          <span><strong>{group.year} 年</strong><small>{group.monthCount} 个月度报告</small></span>
         </button>
         <dl className="history-year-summary" aria-label={`${group.year} 年度汇总`}>
           <YearMetric label="实际收入" value={formatMoney(group.actualIncome, group.currency)} />
@@ -103,7 +103,7 @@ function HistoryYearSection({ group, expanded, onToggle }: { group: HistoryYearG
         <div className="history-year-table-frame" id={panelId}>
           <table className="history-year-table">
             <caption className="sr-only">{group.year} 年月度详细报告</caption>
-            <thead><tr><th>月份</th><th>数据状态</th><th className="numeric-column history-secondary-column">实际收入</th><th className="numeric-column history-secondary-column">实际支出</th><th className="numeric-column">实际净结余</th><th className="numeric-column history-secondary-column">储蓄率</th><th className="history-plan-column">计划 / 实际状态</th><th><span className="sr-only">操作</span></th></tr></thead>
+            <thead><tr><th>月份</th><th className="numeric-column history-secondary-column">实际收入</th><th className="numeric-column history-secondary-column">实际支出</th><th className="numeric-column">实际净结余</th><th className="numeric-column history-secondary-column">储蓄率</th><th className="history-plan-column">数据基准</th><th><span className="sr-only">操作</span></th></tr></thead>
             <tbody>{group.months.map((item) => <HistoryMonthRow analytics={item} key={item.month} />)}</tbody>
           </table>
         </div>
@@ -121,12 +121,11 @@ function HistoryMonthRow({ analytics }: { analytics: MonthAnalytics }) {
   return (
     <tr>
       <th scope="row"><Link className="table-link history-month-link" to={reportPath}>{monthLabel(analytics.month)}</Link></th>
-      <td><span className={`history-status-badge status-${analytics.actual_status.toLowerCase()}`}><i aria-hidden="true" />{statusLabel(analytics.actual_status)}</span></td>
       <td className="numeric-column history-secondary-column">{formatMoney(analytics.income.actual_to_date, analytics.currency)}</td>
       <td className="numeric-column history-secondary-column">{formatMoney(analytics.expense.actual_to_date, analytics.currency)}</td>
       <td className="numeric-column history-net-value">{formatMoney(analytics.net_balance.actual_to_date, analytics.currency)}</td>
       <td className="numeric-column history-secondary-column">{formatPercent(analytics.actual_savings_rate_percent)}</td>
-      <td className="history-plan-column"><span className="history-plan-state">{analytics.planned_item_count > 0 ? "有计划基准" : "仅实际"}</span><small>{analytics.confirmed_item_count}/{analytics.total_item_count} 项已确认</small></td>
+      <td className="history-plan-column"><span className="history-plan-state">{analytics.planned_item_count > 0 ? "有计划基准" : "仅实际"}</span><small>{analytics.total_item_count} 个类目</small></td>
       <td><Link aria-label={`查看 ${monthLabel(analytics.month)} 详细报告`} className="history-row-action" to={reportPath}>查看报告</Link></td>
     </tr>
   );
@@ -150,8 +149,8 @@ function MonthReportPage({ requestedMonth, months }: { requestedMonth: string; m
           <p>该月份的核心指标、计划执行、分类结构、项目排名与重要偏差。</p>
         </div>
         <div className="history-report-context">
-          <span className={`context-chip status-${selected.actual_status.toLowerCase()}`}>{statusLabel(selected.actual_status)}</span>
-          <strong>{selected.confirmed_item_count}/{selected.total_item_count} 项已确认</strong>
+          <span className="context-chip">{selected.planned_item_count > 0 ? "有计划基准" : "仅实际"}</span>
+          <strong>{selected.total_item_count} 个类目</strong>
         </div>
       </header>
       {(previous || next) && <nav className="month-report-navigation" aria-label="相邻月份">
@@ -161,8 +160,4 @@ function MonthReportPage({ requestedMonth, months }: { requestedMonth: string; m
       <MonthReportDetail analytics={selected} />
     </>
   );
-}
-
-function statusLabel(status: MonthAnalytics["actual_status"]) {
-  return status === "COMPLETE" ? "最终实际" : status === "PARTIAL" ? "当前已录" : "空月份";
 }

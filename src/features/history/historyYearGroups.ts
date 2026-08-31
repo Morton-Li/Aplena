@@ -5,7 +5,6 @@ export interface HistoryYearGroup {
   currency: string;
   months: MonthAnalytics[];
   monthCount: number;
-  confirmedMonthCount: number;
   actualIncome: string | null;
   actualExpense: string | null;
   actualNetBalance: string | null;
@@ -41,7 +40,6 @@ function buildYearGroup(year: string, months: MonthAnalytics[]): HistoryYearGrou
     currency: sortedMonths[0]?.currency ?? "CNY",
     months: sortedMonths,
     monthCount: sortedMonths.length,
-    confirmedMonthCount: sortedMonths.filter((month) => month.actual_status === "COMPLETE").length,
     actualIncome: formatCents(incomeCents),
     actualExpense: formatCents(expenseCents),
     actualNetBalance: formatCents(netCents),

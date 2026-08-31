@@ -48,7 +48,7 @@ docs/                 产品、领域、架构、数据库和发行决策
 
 ### 2.2 数据库
 
-首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1。正式发布后，已发布迁移不可修改，只能追加。预发布数据库迁移链不属于公开兼容范围，换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
+首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1；当前应用继续执行 `0002_remove_monthly_item_status.sql` 到 schema 2。已发布迁移不可修改，只能追加。预发布数据库迁移链不属于公开兼容范围，换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
 
 本地 SQLite 使用外键、STRICT 表和 WAL，并将数据目录限制为 `0700`、数据库及 WAL/SHM 限制为 `0600`。数据库文件未静态加密，具体决策见 [ADR 0006](adr/0006-database-encryption-release-gate.md)。
 

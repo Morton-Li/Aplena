@@ -23,14 +23,14 @@ use crate::infrastructure::{
 use super::{
     analytics::build_month_analytics,
     dto::{
-        ActualEntryDto, ActualEntryInputDto, ConfirmActualsDto, ConfirmActualsInputDto,
-        ConfirmMonthlyItemInputDto, DeletePlanItemDto, EnsureActualOnlyInputDto, ExchangeRateDto,
-        ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
-        InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
-        MonthInitializationStatusDto, MonthPreviewDto, MonthPreviewItemDto, MonthlyItemDto,
-        MonthlyNoteInputDto, NextMonthGoalDto, NextMonthGoalInputDto, PlanItemDto,
-        PlanItemInputDto, RateOverrideDto, ReferenceRateImportDto, SettingsDto, SettingsInputDto,
-        StartupStatusDto, StopPlanItemRequestDto,
+        ActualEntryDto, ActualEntryInputDto, DeleteManualMonthlyItemInputDto, DeletePlanItemDto,
+        EnsureActualOnlyInputDto, ExchangeRateDto, ExchangeRateUpsertDto, FinancialCapacityDto,
+        HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto,
+        ManualMonthlyItemInputDto, MonthAnalyticsDto, MonthInitializationStatusDto,
+        MonthPreviewDto, MonthPreviewItemDto, MonthlyItemDto, MonthlyNoteInputDto,
+        NextMonthGoalDto, NextMonthGoalInputDto, PlanItemDto, PlanItemInputDto, RateOverrideDto,
+        ReferenceRateImportDto, SettingsDto, SettingsInputDto, StartupStatusDto,
+        StopPlanItemRequestDto,
     },
     error::AppError,
 };
@@ -521,6 +521,18 @@ impl FinanceService {
             .map(monthly_item_dto)
     }
 
+    pub async fn delete_manual_monthly_item(
+        &self,
+        input: DeleteManualMonthlyItemInputDto,
+    ) -> Result<(), AppError> {
+        let _operation = self.operation_gate.read().await;
+        self.current_store()
+            .await
+            .delete_manual_monthly_item(parse_uuid(&input.id, "id")?)
+            .await
+            .map_err(AppError::from)
+    }
+
     pub async fn list_actual_entries(
         &self,
         monthly_item_id: String,
@@ -627,19 +639,6 @@ impl FinanceService {
             .map_err(AppError::from)
     }
 
-    pub async fn confirm_monthly_item(
-        &self,
-        input: ConfirmMonthlyItemInputDto,
-    ) -> Result<MonthlyItemDto, AppError> {
-        let _operation = self.operation_gate.read().await;
-        self.current_store()
-            .await
-            .confirm_monthly_item(parse_uuid(&input.id, "id")?, &timestamp())
-            .await
-            .map_err(AppError::from)
-            .map(monthly_item_dto)
-    }
-
     pub async fn update_monthly_note(
         &self,
         input: MonthlyNoteInputDto,
@@ -655,27 +654,6 @@ impl FinanceService {
             .await
             .map_err(AppError::from)
             .map(monthly_item_dto)
-    }
-
-    pub async fn confirm_actuals(
-        &self,
-        input: ConfirmActualsInputDto,
-    ) -> Result<ConfirmActualsDto, AppError> {
-        let _operation = self.operation_gate.read().await;
-        let month = parse_month(&input.month, "month")?;
-        let category = input
-            .category
-            .as_deref()
-            .map(Category::from_str)
-            .transpose()
-            .map_err(|error| AppError::from_domain(error, Some("category")))?;
-        let updated_count = self
-            .current_store()
-            .await
-            .confirm_actuals(month, category, &timestamp())
-            .await
-            .map_err(AppError::from)?;
-        Ok(ConfirmActualsDto { updated_count })
     }
 
     pub async fn list_existing_months(&self) -> Result<Vec<String>, AppError> {
@@ -1356,7 +1334,6 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
             ))
         }
     });
-    let data_status = value.actual_data_status().code();
     let variance_effect = match actual.filter(|_| has_plan_baseline) {
         None => "UNKNOWN",
         Some(actual) if actual.as_decimal() == value.planned_amount().as_decimal() => "ON_PLAN",
@@ -1389,10 +1366,8 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
         planned_amount: value.planned_amount().decimal_string(),
         actual_amount: actual.map(pfcm_domain::SignedAmount::decimal_string),
         actual_entry_count: value.actual_entry_count(),
-        actual_confirmed_at: value.actual_confirmed_at().map(str::to_owned),
         variance_amount,
         completion_rate_percent,
-        data_status: data_status.to_owned(),
         variance_effect: variance_effect.to_owned(),
         currency: value.currency().to_string(),
         note: value.note().map(str::to_owned),

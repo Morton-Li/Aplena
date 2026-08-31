@@ -1,11 +1,11 @@
 use std::str::FromStr;
 
 use pfcm_domain::{
-    ActualDataStatus, ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate,
-    CapacityInput, Category, CurrencyCode, DomainError, ExchangeRate, FlowType, MonthlyItem,
-    MonthlyItemSource, PlanItem, RecognitionMode, SavingsRate, SignedAmount, YearMonth,
-    aggregate_actual_entries, calculate_financial_capacity, create_monthly_snapshot,
-    is_effective_in, monthly_equivalent, recognized_amount, scheduled_date_for_month,
+    ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, CapacityInput,
+    Category, CurrencyCode, DomainError, ExchangeRate, MonthlyItem, MonthlyItemSource, PlanItem,
+    RecognitionMode, SavingsRate, YearMonth, aggregate_actual_entries,
+    calculate_financial_capacity, create_monthly_snapshot, is_effective_in, monthly_equivalent,
+    recognized_amount, scheduled_date_for_month,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -266,47 +266,6 @@ fn actual_entries_are_positive_effects_and_can_aggregate_to_a_negative_net() {
             None,
         ),
         Err(DomainError::ZeroActualEntryAmount),
-    );
-}
-
-fn monthly_with_state(entry_count: u64, confirmed: bool, actual: Option<&str>) -> MonthlyItem {
-    MonthlyItem::rehydrate(
-        Uuid::new_v4(),
-        Some(Uuid::new_v4()),
-        "项目".into(),
-        month("2026-06"),
-        Category::EssentialExpense,
-        FlowType::Expense,
-        RecognitionMode::Amortized,
-        MonthlyItemSource::Planned,
-        pfcm_domain::MonthlyItemOrigin::PlanLinked,
-        None,
-        amount("10"),
-        actual.map(|value| SignedAmount::from_decimal(value.parse().unwrap()).unwrap()),
-        entry_count,
-        confirmed.then(|| "2026-07-01T00:00:00Z".into()),
-        currency("CNY"),
-        None,
-    )
-}
-
-#[test]
-fn actual_completeness_distinguishes_missing_progress_zero_and_final() {
-    assert_eq!(
-        monthly_with_state(0, false, None).actual_data_status(),
-        ActualDataStatus::Missing
-    );
-    assert_eq!(
-        monthly_with_state(1, false, Some("5")).actual_data_status(),
-        ActualDataStatus::InProgress
-    );
-    assert_eq!(
-        monthly_with_state(0, true, Some("0")).actual_data_status(),
-        ActualDataStatus::ConfirmedZero
-    );
-    assert_eq!(
-        monthly_with_state(2, true, Some("4")).actual_data_status(),
-        ActualDataStatus::Final
     );
 }
 

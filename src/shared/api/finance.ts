@@ -74,10 +74,8 @@ export interface MonthlyItem {
   planned_amount: string;
   actual_amount: string | null;
   actual_entry_count: number;
-  actual_confirmed_at: string | null;
   variance_amount: string | null;
   completion_rate_percent: string | null;
-  data_status: "MISSING" | "IN_PROGRESS" | "CONFIRMED_ZERO" | "FINAL";
   variance_effect: "UNKNOWN" | "ON_PLAN" | "FAVORABLE" | "UNFAVORABLE";
   currency: string;
   note: string | null;
@@ -192,7 +190,6 @@ export interface CategoryBreakdown {
   actual_to_date: string | null;
   planned_share_percent: string | null;
   actual_share_percent: string | null;
-  unconfirmed_item_count: number;
 }
 
 export interface ProjectBreakdown {
@@ -213,10 +210,8 @@ export interface ProjectBreakdown {
 export interface MonthAnalytics {
   month: string;
   currency: string;
-  actual_status: "EMPTY" | "PARTIAL" | "COMPLETE";
   total_item_count: number;
   planned_item_count: number;
-  confirmed_item_count: number;
   income: AmountComparison;
   expense: AmountComparison;
   net_balance: AmountComparison;
@@ -440,6 +435,13 @@ export function createManualMonthlyItem(
   return invokeCommand<MonthlyItem>("create_manual_monthly_item", { input });
 }
 
+export function deleteManualMonthlyItem(
+  id: string,
+  invokeCommand: Invoke = invoke,
+): Promise<void> {
+  return invokeCommand<void>("delete_manual_monthly_item", { input: { id } });
+}
+
 export function listActualEntries(
   monthlyItemId: string,
   invokeCommand: Invoke = invoke,
@@ -468,25 +470,11 @@ export function deleteActualEntry(
   return invokeCommand<void>("delete_actual_entry", { id });
 }
 
-export function confirmMonthlyItem(
-  id: string,
-  invokeCommand: Invoke = invoke,
-): Promise<MonthlyItem> {
-  return invokeCommand<MonthlyItem>("confirm_monthly_item", { input: { id } });
-}
-
 export function updateMonthlyNote(
   input: { id: string; note: string | null },
   invokeCommand: Invoke = invoke,
 ): Promise<MonthlyItem> {
   return invokeCommand<MonthlyItem>("update_monthly_note", { input });
-}
-
-export function confirmMonthlyActuals(
-  input: { month: string; category: string | null },
-  invokeCommand: Invoke = invoke,
-): Promise<{ updated_count: number }> {
-  return invokeCommand<{ updated_count: number }>("confirm_monthly_actuals", { input });
 }
 
 export function getMonthAnalytics(
