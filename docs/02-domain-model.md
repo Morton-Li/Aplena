@@ -123,11 +123,10 @@ MonthlyItem + ActualEntry ──> Analytics
 | `item_origin` | `PLAN_LINKED` / `MANUAL` |
 | `scheduled_date` | 仅正式 PAYMENT 快照有值 |
 | `planned_amount` | 已完成汇率与周期计算的本位币金额 |
-| `actual_confirmed_at` | 可空的最终核对标记 |
 | `currency` | 创建时的本位币 |
 | `note` | 月度备注 |
 
-`actual_amount`、条目数、偏差、完成率和数据状态是查询投影，不是持久化字段。
+`actual_amount`、条目数、偏差和完成率是查询投影，不是持久化字段。月度类目没有确认或完成状态。
 
 ### 4.5 `ActualEntry`
 
@@ -199,7 +198,7 @@ planned = ROUND_HALF_UP(amount × rate, 2)
 5. 遇到同来源、同月 `ACTUAL_ONLY` 时原位提升；
 6. 唯一键和事务保证并发及重复执行幂等。
 
-原位提升不改变月度项目 ID，不删除实际条目，也不重置确认标记。
+原位提升不改变月度项目 ID，也不删除实际条目。
 
 ## 7. 实际条目用例
 
@@ -212,7 +211,7 @@ planned = ROUND_HALF_UP(amount × rate, 2)
 - 计划已结束：允许并提示迟到事实；
 - 计划已删除或快照已脱离来源：拒绝新条目。
 
-用户也可不选择长期计划，直接创建 `MANUAL + ACTUAL_ONLY` 月度项目。它允许新增实际条目并参与实际汇总，但不计算计划偏差；这与计划删除后留下的 `PLAN_LINKED` 脱离快照是不同状态。
+用户也可不选择长期计划，直接创建 `MANUAL + ACTUAL_ONLY` 临时类目。它允许新增实际条目并参与实际汇总，但不计算计划偏差；这与计划删除后留下的 `PLAN_LINKED` 脱离快照是不同来源。临时类目可以连同其实际条目一起删除，预算快照不能通过该入口删除。
 
 ### 7.2 上下文添加
 
@@ -220,34 +219,19 @@ planned = ROUND_HALF_UP(amount × rate, 2)
 
 ### 7.3 编辑与删除
 
-只允许 `USER` 条目；禁止把条目改挂其他月度项目。领域层验证日期与月份，数据库触发器再次防守。每次 CRUD 都自动清空 `actual_confirmed_at`。
+只允许 `USER` 条目；禁止把条目改挂其他月度项目。领域层验证日期与月份，数据库触发器再次防守。
 
-## 8. 完整状态机
+## 8. 实际存在性
 
-```text
-MISSING --添加条目--> IN_PROGRESS
-MISSING --确认------> CONFIRMED_ZERO
-IN_PROGRESS --确认--> FINAL
-CONFIRMED_ZERO --添加条目--> IN_PROGRESS
-FINAL --编辑/删除/添加--> IN_PROGRESS 或 MISSING
-```
-
-状态判定：
-
-| 条目数 | 确认时间 | 状态 |
-|---:|---|---|
-| 0 | 空 | `MISSING` |
-| >0 | 空 | `IN_PROGRESS` |
-| 0 | 非空 | `CONFIRMED_ZERO` |
-| >0 | 非空 | `FINAL` |
-
-批量确认只写确认时间，不创建条目、不复制计划金额。
+- 条目数为 0 时，`actual_amount` 为 `null`；
+- 条目数大于 0 时，`actual_amount` 为增加条目减去减少条目的净额；
+- 净额可以是零或负数；
+- 类目不具有待处理、已确认或已完成状态，也没有单项或批量确认命令。
 
 ## 9. 分析投影
 
 - 计划汇总包含 `PLANNED` 和零计划的 `ACTUAL_ONLY`；
-- 实际汇总使用有条目或已确认的项目；
-- 完整项目只包括 `FINAL` 与 `CONFIRMED_ZERO`；
+- 实际汇总只使用有条目的项目；
 - 退款减少实际支出，冲减减少实际收入；
 - 项目、类别、月度、历史趋势和重要偏差均从同一查询口径派生；
 - 除数为零时比例为 `null`，不得输出 NaN 或无穷大。
@@ -261,7 +245,8 @@ FINAL --编辑/删除/添加--> IN_PROGRESS 或 MISSING
 5. 实际条目日期与所属月一致且金额为正；
 6. 用户不可修改系统快照字段或迁移条目；
 7. 删除长期计划不删除历史快照与条目；
-8. 所有权威金额在分精度内表达，派生净额可带符号。
+8. 只有无计划来源的 `MANUAL + ACTUAL_ONLY` 临时类目可由用户删除，删除与其条目在同一事务完成；
+9. 所有权威金额在分精度内表达，派生净额可带符号。
 
 ## 11. 应用服务接口
 
@@ -271,9 +256,8 @@ FINAL --编辑/删除/添加--> IN_PROGRESS 或 MISSING
 - `preview_month`、`initialize_month`、自动当前月初始化；
 - `list_monthly_items`、`update_monthly_note`；
 - `ensure_actual_only_monthly_item`；
-- `create_manual_monthly_item`；
+- `create_manual_monthly_item`、`delete_manual_monthly_item`；
 - `list/create/update/delete_actual_entry`；
-- `confirm_monthly_item`、`confirm_monthly_actuals`；
 - 月度、历史与承载能力查询。
 
 所有金额跨 IPC 使用字符串，错误返回稳定错误码、可选字段名和本地化消息键。

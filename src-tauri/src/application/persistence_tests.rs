@@ -11,10 +11,10 @@ use crate::infrastructure::{StoreError, open_database, open_memory_database};
 
 use super::{
     dto::{
-        ActualEntryInputDto, ConfirmActualsInputDto, ConfirmMonthlyItemInputDto,
-        EnsureActualOnlyInputDto, ExchangeRateUpsertDto, InitializeMonthInputDto,
-        ManualMonthlyItemInputDto, NextMonthGoalInputDto, PlanItemInputDto, RateOverrideDto,
-        ReferenceRateImportDto, ReferenceRateObservationDto, SettingsInputDto,
+        ActualEntryInputDto, DeleteManualMonthlyItemInputDto, EnsureActualOnlyInputDto,
+        ExchangeRateUpsertDto, InitializeMonthInputDto, ManualMonthlyItemInputDto,
+        NextMonthGoalInputDto, PlanItemInputDto, RateOverrideDto, ReferenceRateImportDto,
+        ReferenceRateObservationDto, SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -175,7 +175,10 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
     .unwrap();
     assert_eq!(
         migration_history,
-        vec![(1, "initial release".to_owned(), 1)]
+        vec![
+            (1, "initial release".to_owned(), 1),
+            (2, "remove monthly item status".to_owned(), 1),
+        ]
     );
 
     let tables = sqlx::query("PRAGMA table_list")
@@ -225,6 +228,24 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
     assert!(indexes.contains(&"idx_plan_items_active_dates".to_owned()));
     assert!(indexes.contains(&"idx_monthly_items_month_category_flow".to_owned()));
 
+    let monthly_columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('monthly_items')")
+            .fetch_all(store.pool())
+            .await
+            .unwrap();
+    assert!(
+        !monthly_columns
+            .iter()
+            .any(|name| name == "actual_confirmed_at")
+    );
+    let status_triggers: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'actual_entry_reopens_%'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(status_triggers, 0);
+
     let strict_error = sqlx::query(
         "INSERT INTO exchange_rates (currency_code, rate_scaled, updated_at) \
          VALUES ('USD', 'not-an-integer', '2026-01-01T00:00:00Z')",
@@ -248,7 +269,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
 }
 
 #[tokio::test]
-async fn initial_release_schema_matches_frozen_pre_release_final_schema() {
+async fn current_schema_matches_the_frozen_pre_release_schema_after_status_removal() {
     let baseline = open_memory_database().await.unwrap();
     let options = SqliteConnectOptions::from_str("sqlite::memory:")
         .unwrap()
@@ -260,6 +281,12 @@ async fn initial_release_schema_matches_frozen_pre_release_final_schema() {
         .unwrap();
     sqlx::raw_sql(include_str!(
         "../../tests/fixtures/pre_release_final_schema.sql"
+    ))
+    .execute(&pre_release)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0002_remove_monthly_item_status.sql"
     ))
     .execute(&pre_release)
     .await
@@ -716,7 +743,7 @@ async fn manual_monthly_item_accepts_actual_entries_without_a_plan() {
     assert_eq!(item.item_origin, "MANUAL");
     assert_eq!(item.variance_effect, "UNKNOWN");
 
-    service
+    let entry = service
         .create_actual_entry(ActualEntryInputDto {
             id: None,
             monthly_item_id: item.id.clone(),
@@ -742,6 +769,37 @@ async fn manual_monthly_item_accepts_actual_entries_without_a_plan() {
     assert_eq!(refreshed.actual_amount.as_deref(), Some("3200.00"));
     assert_eq!(refreshed.variance_amount, None);
     assert_eq!(refreshed.variance_effect, "UNKNOWN");
+
+    service
+        .delete_manual_monthly_item(DeleteManualMonthlyItemInputDto {
+            id: item.id.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        service
+            .list_monthly_items(current.to_string())
+            .await
+            .unwrap()
+            .iter()
+            .all(|candidate| candidate.id != item.id)
+    );
+    assert!(
+        service
+            .list_actual_entries(item.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let stored_entry_count: i64 = {
+        let store = service.test_store().await;
+        sqlx::query_scalar("SELECT COUNT(*) FROM actual_entries WHERE id = ?")
+            .bind(entry.id)
+            .fetch_one(store.pool())
+            .await
+            .unwrap()
+    };
+    assert_eq!(stored_entry_count, 0);
 }
 
 #[tokio::test]
@@ -1190,7 +1248,7 @@ async fn plan_rate_changes_and_deletion_never_rewrite_history() {
 }
 
 #[tokio::test]
-async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distinct_and_safe() {
+async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_safe() {
     let service = test_service().await;
     let current = current_month();
     service
@@ -1213,27 +1271,16 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
         .unwrap()
         .remove(0);
     assert_eq!(item.actual_amount, None);
-    assert_eq!(item.data_status, "MISSING");
     assert_eq!(item.variance_amount, None);
-    let before_actual = service.month_analytics(current.to_string()).await.unwrap();
-    assert_eq!(before_actual.actual_status, "EMPTY");
-    assert_eq!(before_actual.expense.actual_to_date, None);
-
-    let zero = service
-        .confirm_monthly_item(ConfirmMonthlyItemInputDto {
+    let protected_plan_item = service
+        .delete_manual_monthly_item(DeleteManualMonthlyItemInputDto {
             id: item.id.clone(),
         })
         .await
-        .unwrap();
-    assert_eq!(zero.actual_amount.as_deref(), Some("0.00"));
-    assert_eq!(zero.variance_amount.as_deref(), Some("-300.00"));
-    assert_eq!(zero.completion_rate_percent.as_deref(), Some("0.00"));
-    assert_eq!(zero.data_status, "CONFIRMED_ZERO");
-    assert_eq!(zero.variance_effect, "FAVORABLE");
-    let after_zero = service.month_analytics(current.to_string()).await.unwrap();
-    assert_eq!(after_zero.actual_status, "COMPLETE");
-    assert_eq!(after_zero.expense.actual_to_date.as_deref(), Some("0.00"));
-    assert_eq!(after_zero.expense.variance.as_deref(), Some("-300.00"));
+        .unwrap_err();
+    assert_eq!(protected_plan_item.error_code, "NOT_FOUND");
+    let before_actual = service.month_analytics(current.to_string()).await.unwrap();
+    assert_eq!(before_actual.expense.actual_to_date, None);
 
     let expense_entry = service
         .create_actual_entry(ActualEntryInputDto {
@@ -1250,13 +1297,12 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
         })
         .await
         .unwrap();
-    let reopened = service
+    let with_expense = service
         .list_monthly_items(current.to_string())
         .await
         .unwrap()
         .remove(0);
-    assert_eq!(reopened.data_status, "IN_PROGRESS");
-    assert_eq!(reopened.actual_amount.as_deref(), Some("427.00"));
+    assert_eq!(with_expense.actual_amount.as_deref(), Some("427.00"));
     let refund_entry = service
         .create_actual_entry(ActualEntryInputDto {
             id: None,
@@ -1278,22 +1324,6 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
         .unwrap()
         .remove(0);
     assert_eq!(negative.actual_amount.as_deref(), Some("-73.00"));
-    let confirmed = service
-        .confirm_actuals(ConfirmActualsInputDto {
-            month: current.to_string(),
-            category: None,
-        })
-        .await
-        .unwrap();
-    assert_eq!(confirmed.updated_count, 1);
-    let confirmed_item = service
-        .list_monthly_items(current.to_string())
-        .await
-        .unwrap()
-        .remove(0);
-    assert_eq!(confirmed_item.actual_amount.as_deref(), Some("-73.00"));
-    assert_eq!(confirmed_item.data_status, "FINAL");
-
     let wrong_month = current.next_month().unwrap();
     let wrong_date = service
         .update_actual_entry(ActualEntryInputDto {
@@ -1335,14 +1365,6 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
         .unwrap()
         .remove(0);
     assert_eq!(after_edit.actual_amount.as_deref(), Some("27.00"));
-    assert_eq!(after_edit.data_status, "IN_PROGRESS");
-
-    service
-        .confirm_monthly_item(ConfirmMonthlyItemInputDto {
-            id: item.id.clone(),
-        })
-        .await
-        .unwrap();
     service.delete_actual_entry(refund_entry.id).await.unwrap();
     let after_delete = service
         .list_monthly_items(current.to_string())
@@ -1350,7 +1372,6 @@ async fn actual_entries_confirmation_reopening_and_base_currency_lock_are_distin
         .unwrap()
         .remove(0);
     assert_eq!(after_delete.actual_amount.as_deref(), Some("427.00"));
-    assert_eq!(after_delete.data_status, "IN_PROGRESS");
     let entries = service.list_actual_entries(item.id).await.unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].id, expense_entry.id);

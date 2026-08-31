@@ -15,7 +15,7 @@ type ProjectTableSort = "PLANNED" | "ACTUAL";
 
 export function MonthReportDetail({ analytics }: { analytics: MonthAnalytics }) {
   const hasPlanBaseline = analytics.planned_item_count > 0;
-  const actualLabel = analytics.actual_status === "COMPLETE" ? "最终实际" : "当前已录";
+  const actualLabel = "实际记录";
 
   return (
     <div className="month-report-detail">
@@ -147,8 +147,8 @@ function CategoryAnalysis({
         <div className="table-scroll">
           <table className="data-table">
             <caption className="sr-only">分类结构图对应数据</caption>
-            <thead><tr><th>类别</th><th>计划金额</th><th>计划占比</th><th>{actualLabel}</th><th>实际占比</th><th>未确认</th></tr></thead>
-            <tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, analytics.currency) : "—"}</td><td>{hasPlanBaseline ? formatPercent(item.planned_share_percent) : "—"}</td><td>{formatMoney(item.actual_to_date, analytics.currency)}</td><td>{formatPercent(item.actual_share_percent)}</td><td>{item.unconfirmed_item_count}</td></tr>)}</tbody>
+            <thead><tr><th>类别</th><th>计划金额</th><th>计划占比</th><th>{actualLabel}</th><th>实际占比</th></tr></thead>
+            <tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, analytics.currency) : "—"}</td><td>{hasPlanBaseline ? formatPercent(item.planned_share_percent) : "—"}</td><td>{formatMoney(item.actual_to_date, analytics.currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody>
           </table>
         </div>
       </section>
@@ -296,7 +296,7 @@ function varianceLabel(effect: ProjectBreakdown["variance_effect"], actualAmount
       ? "需关注"
       : effect === "ON_PLAN"
         ? "符合计划"
-        : "待核对";
+        : "无计划基准";
 }
 
 const chartLegendText = { color: "#64748b", fontSize: 11 };

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { MonthAnalytics } from "../../shared/api/finance";
 import { defaultExpandedHistoryYears, groupHistoryByYear } from "./historyYearGroups";
 
-function month(monthValue: string, income: string | null, expense: string | null, net: string | null, actualStatus: MonthAnalytics["actual_status"] = "COMPLETE"): MonthAnalytics {
+function month(monthValue: string, income: string | null, expense: string | null, net: string | null): MonthAnalytics {
   const comparison = (actual: string | null) => ({
     planned: "0.00",
     actual_to_date: actual,
@@ -14,10 +14,8 @@ function month(monthValue: string, income: string | null, expense: string | null
   return {
     month: monthValue,
     currency: "CNY",
-    actual_status: actualStatus,
     total_item_count: 1,
     planned_item_count: 0,
-    confirmed_item_count: income === null && expense === null && net === null ? 0 : 1,
     income: comparison(income),
     expense: comparison(expense),
     net_balance: comparison(net),
@@ -35,13 +33,12 @@ describe("history year groups", () => {
   it("sorts years and months newest first and expands only the latest year by default", () => {
     const groups = groupHistoryByYear([
       month("2025-12", "100.00", "40.00", "60.00"),
-      month("2026-01", "200.00", "80.00", "120.00", "PARTIAL"),
+      month("2026-01", "200.00", "80.00", "120.00"),
       month("2026-03", "300.00", "100.00", "200.00"),
     ]);
 
     expect(groups.map(({ year }) => year)).toEqual(["2026", "2025"]);
     expect(groups[0].months.map(({ month: value }) => value)).toEqual(["2026-03", "2026-01"]);
-    expect(groups[0].confirmedMonthCount).toBe(1);
     expect(defaultExpandedHistoryYears(groups)).toEqual(["2026"]);
   });
 
@@ -58,7 +55,7 @@ describe("history year groups", () => {
   });
 
   it("keeps unavailable totals and zero-income savings rates explicit", () => {
-    const [empty] = groupHistoryByYear([month("2026-01", null, null, null, "EMPTY")]);
+    const [empty] = groupHistoryByYear([month("2026-01", null, null, null)]);
     expect(empty.actualIncome).toBeNull();
     expect(empty.actualSavingsRatePercent).toBeNull();
 

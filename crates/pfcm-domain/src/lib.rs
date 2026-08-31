@@ -21,7 +21,7 @@ pub use capacity::{CapacityInput, FinancialCapacity, calculate_financial_capacit
 pub use category::{Category, FlowType, MonthlyItemOrigin, MonthlyItemSource, RecognitionMode};
 pub use currency::CurrencyCode;
 pub use error::DomainError;
-pub use monthly_item::{ActualDataStatus, MonthlyItem};
+pub use monthly_item::MonthlyItem;
 pub use next_month_goal::NextMonthGoal;
 pub use plan_item::PlanItem;
 pub use recognition::{

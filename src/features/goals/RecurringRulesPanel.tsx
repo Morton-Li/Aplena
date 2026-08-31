@@ -146,11 +146,11 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
             <caption className="sr-only">周期规则</caption>
             <thead>
               <tr>
-                <th scope="col">规则</th>
-                <th scope="col">计划金额</th>
-                <th scope="col">周期 / 确认</th>
-                <th scope="col">有效期间</th>
-                <th className="recurring-rule-optional" scope="col">历史快照</th>
+                <th className="recurring-rule-identity" scope="col">规则</th>
+                <th className="recurring-rule-amount" scope="col">计划金额</th>
+                <th className="recurring-rule-schedule" scope="col">周期 / 计入方式</th>
+                <th className="recurring-rule-period" scope="col">有效期间</th>
+                <th className="recurring-rule-optional recurring-rule-history" scope="col">历史快照</th>
                 <th className="recurring-rule-actions-heading" scope="col">操作</th>
               </tr>
             </thead>

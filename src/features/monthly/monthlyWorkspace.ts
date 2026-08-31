@@ -1,54 +1,58 @@
 import type { MonthlyItem } from "../../shared/api/finance";
 import { categoryLabel } from "../../shared/formatting/labels";
 
-export type MonthlyStatusFilter = "ALL" | "ATTENTION" | "IN_PROGRESS" | "CONFIRMED" | "ACTUAL_ONLY";
 export type MonthlyFlowFilter = "ALL" | "INCOME" | "EXPENSE";
 export type MonthlyVarianceFilter = "ALL" | MonthlyItem["variance_effect"];
-export type MonthlySort = "PRIORITY" | "NAME" | "ACTUAL" | "VARIANCE" | "COMPLETION" | "UPDATED";
+export type MonthlySort = "UPDATED" | "NAME" | "ACTUAL" | "VARIANCE" | "COMPLETION";
 
 export interface MonthlyWorkspaceFilters {
   search: string;
-  status: MonthlyStatusFilter;
   category: string;
   flow: MonthlyFlowFilter;
   variance: MonthlyVarianceFilter;
   sort: MonthlySort;
 }
 
-export interface MonthlyStatusCounts {
+export interface MonthlyItemCounts {
   total: number;
-  missing: number;
-  inProgress: number;
-  confirmed: number;
-  actualOnly: number;
+  planned: number;
+  temporary: number;
+  entries: number;
 }
 
 export const defaultMonthlyWorkspaceFilters: MonthlyWorkspaceFilters = {
   search: "",
-  status: "ALL",
   category: "ALL",
   flow: "ALL",
   variance: "ALL",
-  sort: "PRIORITY",
+  sort: "UPDATED",
 };
 
-export function isConfirmed(item: MonthlyItem) {
-  return item.data_status === "FINAL" || item.data_status === "CONFIRMED_ZERO";
+export function defaultActualEntryDate(month: string, now = new Date()) {
+  const localDate = [
+    String(now.getFullYear()).padStart(4, "0"),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+  return localDate.startsWith(`${month}-`) ? localDate : `${month}-01`;
 }
 
 export function isActualOnly(item: MonthlyItem) {
-  return item.item_origin === "MANUAL" || item.item_source === "ACTUAL_ONLY";
+  return item.item_source === "ACTUAL_ONLY";
 }
 
-export function monthlyStatusCounts(items: MonthlyItem[]): MonthlyStatusCounts {
-  return items.reduce<MonthlyStatusCounts>((counts, item) => {
+export function isTemporaryItem(item: MonthlyItem) {
+  return item.item_origin === "MANUAL";
+}
+
+export function monthlyItemCounts(items: MonthlyItem[]): MonthlyItemCounts {
+  return items.reduce<MonthlyItemCounts>((counts, item) => {
     counts.total += 1;
-    if (item.data_status === "MISSING") counts.missing += 1;
-    if (item.data_status === "IN_PROGRESS") counts.inProgress += 1;
-    if (isConfirmed(item)) counts.confirmed += 1;
-    if (isActualOnly(item)) counts.actualOnly += 1;
+    if (item.item_origin === "PLAN_LINKED") counts.planned += 1;
+    if (isTemporaryItem(item)) counts.temporary += 1;
+    counts.entries += item.actual_entry_count;
     return counts;
-  }, { total: 0, missing: 0, inProgress: 0, confirmed: 0, actualOnly: 0 });
+  }, { total: 0, planned: 0, temporary: 0, entries: 0 });
 }
 
 export function filterAndSortMonthlyItems(
@@ -64,10 +68,6 @@ export function filterAndSortMonthlyItems(
           .toLocaleLowerCase("zh-CN");
         if (!searchable.includes(search)) return false;
       }
-      if (filters.status === "ATTENTION" && item.data_status !== "MISSING") return false;
-      if (filters.status === "IN_PROGRESS" && item.data_status !== "IN_PROGRESS") return false;
-      if (filters.status === "CONFIRMED" && !isConfirmed(item)) return false;
-      if (filters.status === "ACTUAL_ONLY" && !isActualOnly(item)) return false;
       if (filters.category !== "ALL" && item.category !== filters.category) return false;
       if (filters.flow !== "ALL" && item.flow_type !== filters.flow) return false;
       if (filters.variance !== "ALL" && item.variance_effect !== filters.variance) return false;
@@ -78,37 +78,23 @@ export function filterAndSortMonthlyItems(
 
 export function hasActiveMonthlyFilters(filters: MonthlyWorkspaceFilters) {
   return filters.search.trim() !== "" ||
-    filters.status !== "ALL" ||
     filters.category !== "ALL" ||
     filters.flow !== "ALL" ||
     filters.variance !== "ALL" ||
-    filters.sort !== "PRIORITY";
+    filters.sort !== "UPDATED";
 }
 
 function compareMonthlyItems(left: MonthlyItem, right: MonthlyItem, sort: MonthlySort) {
-  let result = 0;
-  if (sort === "PRIORITY") {
-    result = priority(left) - priority(right) ||
-      numeric(right.actual_amount) - numeric(left.actual_amount);
-  } else if (sort === "NAME") {
-    result = left.item_name.localeCompare(right.item_name, "zh-CN");
-  } else if (sort === "ACTUAL") {
-    result = numeric(right.actual_amount) - numeric(left.actual_amount);
-  } else if (sort === "VARIANCE") {
-    result = absoluteNumeric(right.variance_amount) - absoluteNumeric(left.variance_amount);
-  } else if (sort === "COMPLETION") {
-    result = numeric(right.completion_rate_percent) - numeric(left.completion_rate_percent);
-  } else if (sort === "UPDATED") {
-    result = right.updated_at.localeCompare(left.updated_at);
-  }
+  const result = sort === "NAME"
+    ? left.item_name.localeCompare(right.item_name, "zh-CN")
+    : sort === "ACTUAL"
+      ? numeric(right.actual_amount) - numeric(left.actual_amount)
+      : sort === "VARIANCE"
+        ? absoluteNumeric(right.variance_amount) - absoluteNumeric(left.variance_amount)
+        : sort === "COMPLETION"
+          ? numeric(right.completion_rate_percent) - numeric(left.completion_rate_percent)
+          : right.updated_at.localeCompare(left.updated_at);
   return result || left.item_name.localeCompare(right.item_name, "zh-CN");
-}
-
-function priority(item: MonthlyItem) {
-  if (item.data_status === "MISSING") return 0;
-  if (item.data_status === "IN_PROGRESS") return 1;
-  if (item.variance_effect === "UNFAVORABLE") return 2;
-  return 3;
 }
 
 function numeric(value: string | null) {
