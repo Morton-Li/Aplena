@@ -161,12 +161,9 @@ function ProjectRanking({ analytics, hasPlanBaseline }: { analytics: MonthAnalyt
   const [tableSort, setTableSort] = useState<ProjectTableSort>("ACTUAL");
   const flowProjects = analytics.projects.filter((project) => project.flow_type === flow);
   const hasFlowPlan = hasPlanBaseline && flowProjects.some(projectHasPlan);
-  const actualSortedProjects = [...flowProjects].sort(compareByActualRank);
-  const chartProjects = actualSortedProjects.slice(0, 10);
   const tableProjects = [...flowProjects].sort(tableSort === "PLANNED" && hasFlowPlan
     ? compareByPlannedRank
     : compareByActualRank);
-  const option = projectRankingOption(chartProjects, analytics.currency, hasFlowPlan);
 
   return (
     <section className="analysis-section">
@@ -179,15 +176,10 @@ function ProjectRanking({ analytics, hasPlanBaseline }: { analytics: MonthAnalyt
       </header>
       <section className="analysis-card ranking-card">
         <header className="ranking-card-header">
-          <div><h3>{flowLabel(flow)}项目对照</h3><span>图表按实际金额排序 · 计划与实际同屏</span></div>
-          {flowProjects.length > 10 && <small>图表显示前 10 项，表格保留全部 {flowProjects.length} 项</small>}
+          <div><h3>{flowLabel(flow)}项目对照</h3><span>计划、实际、占比与排名同屏</span></div>
+          {flowProjects.length > 0 && <small>共 {flowProjects.length} 项 · 默认按实际金额排序</small>}
         </header>
         {flowProjects.length === 0 ? <p className="empty-copy">该月份没有{flowLabel(flow)}项目。</p> : <>
-          <AnalyticsChart
-            option={option}
-            label={`${analytics.month}${flowLabel(flow)}项目${hasFlowPlan ? "计划与实际" : "实际"}金额对照图`}
-            height={Math.max(300, chartProjects.length * 44)}
-          />
           <div className="table-scroll ranking-table-scroll">
             <table className="data-table ranking-comparison-table">
               <caption className="sr-only">项目计划与实际对照数据</caption>
@@ -268,59 +260,6 @@ function categoryStructureOption(categories: CategoryBreakdown[], hasPlanBaselin
     xAxis: { type: "category", data: categories.map((item) => categoryLabel(item.category)), axisLabel: { interval: 0, rotate: 18 } },
     yAxis: { type: "value", axisLabel: { formatter: "{value}%" } },
     series: hasPlanBaseline ? [{ name: "计划占比", type: "bar", data: categories.map((item) => item.planned_share_percent), itemStyle: { color: "#94a3b8" } }, actualSeries] : [actualSeries],
-  };
-}
-
-function projectRankingOption(projects: ProjectBreakdown[], currency: string, hasFlowPlan: boolean) {
-  const actualSeries = {
-    name: "实际金额",
-    type: "bar",
-    data: projects.map((item) => item.actual_amount),
-    barMaxWidth: 14,
-    itemStyle: { color: "#2563eb", borderRadius: [0, 3, 3, 0] },
-  };
-  return {
-    tooltip: {
-      trigger: "axis",
-      axisPointer: { type: "shadow" },
-      renderMode: "richText",
-      formatter: projectRankingTooltip(projects, currency, hasFlowPlan),
-    },
-    legend: { top: 0, data: hasFlowPlan ? ["计划金额", "实际金额"] : ["实际金额"], textStyle: chartLegendText },
-    grid: { left: 105, right: 24, top: 46, bottom: 35 },
-    xAxis: { type: "value" },
-    yAxis: { type: "category", inverse: true, data: projects.map((item) => item.name) },
-    series: hasFlowPlan ? [{
-      name: "计划金额",
-      type: "bar",
-      data: projects.map((item) => projectHasPlan(item) ? item.planned_amount : null),
-      barMaxWidth: 14,
-      itemStyle: { color: "#e2e8f0", borderColor: "#94a3b8", borderWidth: 1, borderRadius: [0, 3, 3, 0] },
-    }, actualSeries] : [actualSeries],
-  };
-}
-
-function projectRankingTooltip(projects: ProjectBreakdown[], currency: string, hasFlowPlan: boolean) {
-  return (parameters: unknown) => {
-    const parameter = Array.isArray(parameters) ? parameters[0] : parameters;
-    const dataIndex = parameter && typeof parameter === "object" && "dataIndex" in parameter
-      ? Number((parameter as { dataIndex: unknown }).dataIndex)
-      : -1;
-    const project = projects[dataIndex];
-    if (!project) return "";
-    const lines = [project.name];
-    if (hasFlowPlan) {
-      lines.push(projectHasPlan(project)
-        ? `计划 ${formatMoney(project.planned_amount, currency)} · ${formatPercent(project.planned_share_percent)}`
-        : "计划 计划外");
-    }
-    lines.push(project.actual_amount === null
-      ? "实际 未录入"
-      : `实际 ${formatMoney(project.actual_amount, currency)} · ${formatPercent(project.actual_share_percent)}`);
-    if (hasFlowPlan && projectHasPlan(project) && project.actual_amount !== null) {
-      lines.push(`偏差 ${formatMoney(project.variance_amount, currency)}`);
-    }
-    return lines.join("\n");
   };
 }
 

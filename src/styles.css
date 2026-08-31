@@ -4926,10 +4926,6 @@ textarea:focus,
   text-align: right;
 }
 
-.ranking-table-scroll {
-  border-top: 1px solid #e5eaf1;
-}
-
 .ranking-comparison-table {
   min-width: 760px;
 }

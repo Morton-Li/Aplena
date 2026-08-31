@@ -1355,7 +1355,8 @@ describe("dashboard and capacity analytics", () => {
     expect(within(categoryTable).queryByRole("columnheader", { name: "未录入" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("排名依据")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "支出项目" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("img", { name: "2026-08支出项目计划与实际金额对照图" })).toBeInTheDocument();
+    expect(screen.getByText("计划、实际、占比与排名同屏")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /支出项目.*金额对照图/ })).not.toBeInTheDocument();
 
     const rankingTable = screen.getByRole("table", { name: "项目计划与实际对照数据" });
     const electricityRow = within(rankingTable).getByRole("row", { name: /电费/ });
@@ -1377,7 +1378,7 @@ describe("dashboard and capacity analytics", () => {
     expect(within(rankingTable).getAllByRole("row")[1]).toHaveTextContent("房租");
 
     await user.click(screen.getByRole("button", { name: "收入项目" }));
-    expect(screen.getByRole("img", { name: "2026-08收入项目计划与实际金额对照图" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /收入项目.*金额对照图/ })).not.toBeInTheDocument();
     expect(within(rankingTable).getByText("工资")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
   });
@@ -1407,7 +1408,7 @@ describe("dashboard and capacity analytics", () => {
     await user.click(await screen.findByRole("link", { name: "历史报表" }));
     await user.click(await screen.findByText("2026 年 8 月"));
 
-    expect(screen.getByRole("img", { name: "2026-08支出项目实际金额对照图" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /支出项目.*金额对照图/ })).not.toBeInTheDocument();
     const rankingTable = screen.getByRole("table", { name: "项目计划与实际对照数据" });
     expect(within(rankingTable).queryByRole("button", { name: "计划金额" })).not.toBeInTheDocument();
     expect(within(rankingTable).queryByRole("columnheader", { name: "偏差" })).not.toBeInTheDocument();
