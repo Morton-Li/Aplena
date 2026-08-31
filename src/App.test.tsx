@@ -1338,7 +1338,7 @@ describe("dashboard and capacity analytics", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  it("uses backend ranks and excludes missing actuals from the actual ranking", async () => {
+  it("shows planned and actual project rankings together without a ranking mode switch", async () => {
     installHarness({ plans: [examplePlan] });
     const user = userEvent.setup();
     render(<App />);
@@ -1353,13 +1353,65 @@ describe("dashboard and capacity analytics", () => {
     const categoryTable = screen.getByRole("table", { name: "分类结构图对应数据" });
     expect(within(categoryTable).getByRole("columnheader", { name: "未确认" })).toBeInTheDocument();
     expect(within(categoryTable).queryByRole("columnheader", { name: "未录入" })).not.toBeInTheDocument();
-    await user.click(screen.getByLabelText("排名依据"));
-    await user.click(screen.getByRole("option", { name: "实际金额" }));
-    expect(screen.queryByText("房租")).not.toBeInTheDocument();
-    const rankingTable = screen.getByRole("table", { name: "项目排名图对应数据" });
-    expect(within(rankingTable).getByText("电费")).toBeInTheDocument();
-    expect(within(rankingTable).getByText("¥ 427.00")).toBeInTheDocument();
+    expect(screen.queryByLabelText("排名依据")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "支出项目" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("img", { name: "2026-08支出项目计划与实际金额对照图" })).toBeInTheDocument();
+
+    const rankingTable = screen.getByRole("table", { name: "项目计划与实际对照数据" });
+    const electricityRow = within(rankingTable).getByRole("row", { name: /电费/ });
+    expect(electricityRow).toHaveTextContent("#1");
+    expect(electricityRow).toHaveTextContent("计划 #2 · ↑1");
+    expect(electricityRow).toHaveTextContent(/¥\s?300\.00/);
+    expect(electricityRow).toHaveTextContent(/¥\s?427\.00/);
+    expect(electricityRow).toHaveTextContent(/¥\s?127\.00/);
+    expect(electricityRow).toHaveTextContent("5.07%");
+
+    const rentRow = within(rankingTable).getByRole("row", { name: /房租/ });
+    expect(rentRow).toHaveTextContent("计划 #1 · 未录入");
+    expect(rentRow).toHaveTextContent(/¥\s?6,000\.00/);
+    expect(rentRow).toHaveTextContent("未录入");
+    expect(rentRow).toHaveTextContent("不按零参与排名");
+    expect(within(rankingTable).getAllByRole("row")[1]).toHaveTextContent("电费");
+
+    await user.click(within(rankingTable).getByRole("button", { name: "计划金额" }));
+    expect(within(rankingTable).getAllByRole("row")[1]).toHaveTextContent("房租");
+
+    await user.click(screen.getByRole("button", { name: "收入项目" }));
+    expect(screen.getByRole("img", { name: "2026-08收入项目计划与实际金额对照图" })).toBeInTheDocument();
+    expect(within(rankingTable).getByText("工资")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
+  });
+
+  it("degrades project comparison to actual-only when the month has no plan baseline", async () => {
+    installHarness({
+      analytics: monthAnalytics({
+        planned_item_count: 0,
+        projects: [{
+          monthly_item_id: "manual-coffee",
+          name: "临时餐饮",
+          category: "DISCRETIONARY_BUDGET",
+          flow_type: "EXPENSE",
+          planned_amount: "0.00",
+          actual_amount: "88.00",
+          variance_amount: null,
+          variance_effect: "UNKNOWN",
+          planned_share_percent: null,
+          actual_share_percent: "100.00",
+          planned_rank: 1,
+          actual_rank: 1,
+        }],
+      }),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+    await user.click(await screen.findByText("2026 年 8 月"));
+
+    expect(screen.getByRole("img", { name: "2026-08支出项目实际金额对照图" })).toBeInTheDocument();
+    const rankingTable = screen.getByRole("table", { name: "项目计划与实际对照数据" });
+    expect(within(rankingTable).queryByRole("button", { name: "计划金额" })).not.toBeInTheDocument();
+    expect(within(rankingTable).queryByRole("columnheader", { name: "偏差" })).not.toBeInTheDocument();
+    expect(within(rankingTable).getByRole("row", { name: /临时餐饮/ })).toHaveTextContent(/¥\s?88\.00/);
   });
 
   it("invalidates month analytics after an actual entry is added", async () => {
