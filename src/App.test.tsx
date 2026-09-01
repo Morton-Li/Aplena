@@ -25,7 +25,15 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("./shared/components/AnalyticsChart", () => ({
-  AnalyticsChart: ({ label }: { label: string }) => <div role="img" aria-label={label} />,
+  AnalyticsChart: ({ label, option }: { label: string; option: unknown }) => (
+    <div role="img" aria-label={label} data-chart-option={JSON.stringify(option)} />
+  ),
+}));
+
+vi.mock("./shared/components/PieAnalyticsChart", () => ({
+  PieAnalyticsChart: ({ label, option }: { label: string; option: unknown }) => (
+    <div role="img" aria-label={label} data-chart-option={JSON.stringify(option)} />
+  ),
 }));
 
 function BrokenScreen(): never {
@@ -672,6 +680,17 @@ describe("planning workflows", () => {
     expect(ruleRow).toHaveTextContent("2026-08-31");
     expect(ruleRow).toHaveTextContent("长期有效");
     expect(screen.getByRole("img", { name: "2026-09稳定收入分配与剩余承载力瀑布图" })).toBeInTheDocument();
+    const categoryChart = screen.getByRole("img", { name: "2026-09预算类型金额占比饼图" });
+    const categoryOption = JSON.parse(categoryChart.dataset.chartOption ?? "{}") as {
+      series: Array<{ data: Array<{ name: string; value: number }> }>;
+    };
+    expect(categoryOption.series[0].data.map(({ name, value }) => [name, value])).toEqual([
+      ["固定收入", 30000],
+      ["浮动收入", 3000],
+      ["必要支出", 6000],
+      ["固定承诺支出", 3000],
+      ["自主性预算", 2000],
+    ]);
     const input = screen.getByLabelText("下月目标储蓄率");
     await user.clear(input);
     await user.type(input, "25");
@@ -1149,6 +1168,30 @@ describe("dashboard and capacity analytics", () => {
     expect(screen.queryByText("¥ 13,000.00")).not.toBeInTheDocument();
   });
 
+  it("plots missing plan and actual comparison values as zero", async () => {
+    installHarness({
+      analytics: monthAnalytics({
+        income: {
+          planned: "30000.00",
+          actual_to_date: null,
+          variance: null,
+          completion_percent: null,
+          variance_effect: "UNKNOWN",
+        },
+      }),
+    });
+    render(<App />);
+
+    const chart = await screen.findByRole("img", {
+      name: "2026-08收入、支出与净结余计划实际分组柱状图",
+    });
+    const option = JSON.parse(chart.dataset.chartOption ?? "{}") as {
+      series: Array<{ name: string; data: number[] }>;
+    };
+    expect(option.series.find((series) => series.name === "实际")?.data).toEqual([0, 8427, 20273]);
+    expect(screen.getByText("灰蓝代表计划，蓝色代表当前实际；没有实际数据的指标按 0 绘制。")).toBeInTheDocument();
+  });
+
   it("does not present an unknown variance as a currency-only amount", async () => {
     installHarness({
       analytics: monthAnalytics({
@@ -1317,6 +1360,56 @@ describe("dashboard and capacity analytics", () => {
     expect(screen.queryByRole("img", { name: /收入项目.*金额对照图/ })).not.toBeInTheDocument();
     expect(within(rankingTable).getByText("工资")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
+  });
+
+  it("opens a historical project for adjustment and explains invalid amounts before saving", async () => {
+    const historicalItem = monthlyItem({ month: "2026-07" });
+    installHarness({
+      history: [monthAnalytics({
+        month: "2026-07",
+        projects: [{
+          ...monthAnalytics().projects[2],
+          monthly_item_id: historicalItem.id,
+        }],
+      })],
+      monthly: { "2026-07": [historicalItem] },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+    await user.click(await screen.findByText("2026 年 7 月"));
+    expect(screen.getByRole("link", { name: "调整该月数据" })).toHaveAttribute("href", "#/monthly?month=2026-07");
+
+    const rankingTable = screen.getByRole("table", { name: "项目计划与实际对照数据" });
+    const electricityRow = within(rankingTable).getByRole("row", { name: /电费/ });
+    await user.click(within(electricityRow).getByRole("link", { name: "调整条目" }));
+
+    expect(await screen.findByText("历史月调整")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← 返回该月报表" })).toHaveAttribute("href", "#/history/2026-07");
+    expect(invokeMock).toHaveBeenCalledWith("list_monthly_items", { month: "2026-07" });
+    expect(await screen.findByRole("dialog", { name: "电费" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "添加支出或退款" }));
+    const save = screen.getByRole("button", { name: "保存条目" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(screen.getByRole("alert")).toHaveTextContent("请输入大于 0、最多两位小数的金额");
+    expect(invokeMock.mock.calls.some(([command]) => command === "create_actual_entry")).toBe(false);
+
+    await user.type(screen.getByLabelText("原币金额"), "20.00");
+    await user.click(screen.getByLabelText("类型"));
+    await user.click(screen.getByRole("option", { name: "退款" }));
+    await user.click(save);
+
+    expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({
+        monthlyItemId: historicalItem.id,
+        occurredOn: "2026-07-01",
+        effect: "DECREASE",
+        amount: "20.00",
+      }),
+    });
   });
 
   it("degrades project comparison to actual-only when the month has no plan baseline", async () => {

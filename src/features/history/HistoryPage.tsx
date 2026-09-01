@@ -26,7 +26,7 @@ export function HistoryPage() {
   const months = historyQuery.data.months;
   if (month) return <MonthReportPage requestedMonth={month} months={months} />;
   if (months.length === 0) {
-    return <EmptyState eyebrow="历史保持只读" title="还没有可查看的月份" description="录入第一个月份的实际数据后，月度详细报告会自动出现在这里；浏览历史不会创建或修改数据。" action={<Link className="button button-primary" to="/monthly">录入本月实际</Link>} />;
+    return <EmptyState eyebrow="历史报表" title="还没有可查看的月份" description="录入第一个月份的实际数据后，月度详细报告会自动出现在这里；只有进入明确的调整操作才会修改数据。" action={<Link className="button button-primary" to="/monthly">录入本月实际</Link>} />;
   }
   return <HistoryIndex months={months} />;
 }
@@ -51,7 +51,7 @@ function HistoryIndex({ months }: { months: MonthAnalytics[] }) {
         <div>
           <p className="eyebrow">历史归档</p>
           <h1>历史报表</h1>
-          <p>按年份浏览月度财务结果，再进入某个月查看完整分析；所有历史数据保持只读。</p>
+          <p>按年份浏览月度财务结果，再进入某个月查看完整分析；实际条目可在明确的调整入口中补录、编辑或删除。</p>
         </div>
         <span className="context-chip">{groups.length} 个年度 · {months.length} 个月份</span>
       </header>
@@ -151,6 +151,7 @@ function MonthReportPage({ requestedMonth, months }: { requestedMonth: string; m
         <div className="history-report-context">
           <span className="context-chip">{selected.planned_item_count > 0 ? "有计划基准" : "仅实际"}</span>
           <strong>{selected.total_item_count} 个类目</strong>
+          <Link className="button button-secondary" to={`/monthly?month=${selected.month}`}>调整该月数据</Link>
         </div>
       </header>
       {(previous || next) && <nav className="month-report-navigation" aria-label="相邻月份">

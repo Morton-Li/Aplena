@@ -249,7 +249,7 @@ function DashboardCharts({
         </ReportCard>
         <ReportCard eyebrow="本月执行" title={hasPlanBaseline ? "计划与实际" : "实际收支概览"}>
           <AnalyticsChart option={comparisonOption} label={`${analytics.month}收入、支出与净结余${hasPlanBaseline ? "计划实际分组" : "实际"}柱状图`} height={244} />
-          <p className="chart-note">{hasPlanBaseline ? "灰蓝代表计划，蓝色代表当前实际；缺失实际不会按 0 绘制。" : "当前仅展示实际数据；配置周期规则后可增加计划对比。"}</p>
+          <p className="chart-note">{hasPlanBaseline ? "灰蓝代表计划，蓝色代表当前实际；没有实际数据的指标按 0 绘制。" : "当前仅展示实际数据；没有数据的指标按 0 绘制。"}</p>
         </ReportCard>
       </div>
       <div className="dashboard-chart-grid">
@@ -434,7 +434,8 @@ function savingsTrendOption(months: MonthAnalytics[]) {
 }
 
 function planActualOption(analytics: MonthAnalytics, hasPlanBaseline: boolean) {
-  const actualSeries = { name: "实际", type: "bar", barMaxWidth: 34, data: [analytics.income.actual_to_date, analytics.expense.actual_to_date, analytics.net_balance.actual_to_date].map(decimalValue), itemStyle: { color: "#2563eb", borderRadius: [3, 3, 0, 0] } };
+  const chartValue = (value: string | null) => decimalValue(value) ?? 0;
+  const actualSeries = { name: "实际", type: "bar", barMaxWidth: 34, data: [analytics.income.actual_to_date, analytics.expense.actual_to_date, analytics.net_balance.actual_to_date].map(chartValue), itemStyle: { color: "#2563eb", borderRadius: [3, 3, 0, 0] } };
   return {
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: number | string) => formatMoney(String(value), analytics.currency) },
     legend: { top: 0, data: hasPlanBaseline ? ["计划", "实际"] : ["实际"], textStyle: chartText },
@@ -442,7 +443,7 @@ function planActualOption(analytics: MonthAnalytics, hasPlanBaseline: boolean) {
     xAxis: { type: "category", data: ["收入", "支出", "净结余"], axisLabel: chartText, axisLine },
     yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => compactMoney(value, analytics.currency) }, splitLine },
     series: hasPlanBaseline ? [
-      { name: "计划", type: "bar", barMaxWidth: 34, data: [analytics.income.planned, analytics.expense.planned, analytics.net_balance.planned].map(decimalValue), itemStyle: { color: "#94a3b8", borderRadius: [3, 3, 0, 0] } },
+      { name: "计划", type: "bar", barMaxWidth: 34, data: [analytics.income.planned, analytics.expense.planned, analytics.net_balance.planned].map(chartValue), itemStyle: { color: "#94a3b8", borderRadius: [3, 3, 0, 0] } },
       actualSeries,
     ] : [actualSeries],
   };

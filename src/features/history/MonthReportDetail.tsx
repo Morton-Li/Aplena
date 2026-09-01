@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import type {
   AmountComparison,
@@ -189,12 +190,14 @@ function ProjectRanking({ analytics, hasPlanBaseline }: { analytics: MonthAnalyt
                 {hasFlowPlan && <th><button aria-pressed={tableSort === "PLANNED"} className="table-sort-button" onClick={() => setTableSort("PLANNED")} type="button">计划金额</button></th>}
                 <th><button aria-pressed={tableSort === "ACTUAL" || !hasFlowPlan} className="table-sort-button" onClick={() => setTableSort("ACTUAL")} type="button">实际金额</button></th>
                 {hasFlowPlan && <th>偏差</th>}
+                <th><span className="sr-only">操作</span></th>
               </tr></thead>
               <tbody>{tableProjects.map((project) => (
                 <ProjectComparisonRow
                   currency={analytics.currency}
                   hasFlowPlan={hasFlowPlan}
                   key={project.monthly_item_id}
+                  month={analytics.month}
                   project={project}
                 />
               ))}</tbody>
@@ -210,10 +213,12 @@ function ProjectComparisonRow({
   project,
   currency,
   hasFlowPlan,
+  month,
 }: {
   project: ProjectBreakdown;
   currency: string;
   hasFlowPlan: boolean;
+  month: string;
 }) {
   const hasPlan = projectHasPlan(project);
   return (
@@ -237,6 +242,7 @@ function ProjectComparisonRow({
         <strong>{hasPlan && project.actual_amount !== null ? formatMoney(project.variance_amount, currency) : "—"}</strong>
         <small>{hasPlan ? varianceLabel(project.variance_effect, project.actual_amount) : "计划外项目"}</small>
       </td>}
+      <td><Link className="history-row-action" to={`/monthly?month=${month}&item=${project.monthly_item_id}`}>调整条目</Link></td>
     </tr>
   );
 }

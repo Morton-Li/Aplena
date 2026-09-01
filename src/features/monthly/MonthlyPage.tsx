@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import {
   createActualEntry,
@@ -44,10 +44,15 @@ type EntryDialogRequest = { item: MonthlyItem; existing?: ActualEntry } | null;
 
 export function MonthlyPage() {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
   const startupQuery = useQuery({ queryKey: queryKeys.startup, queryFn: () => getStartupStatus() });
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
   const [previewOverrides, setPreviewOverrides] = useState<RateOverrideInput[]>([]);
-  const month = startupQuery.data?.current_month ?? "";
+  const currentMonth = startupQuery.data?.current_month ?? "";
+  const requestedMonth = searchParams.get("month");
+  const month = validMonth(requestedMonth) ? requestedMonth : currentMonth;
+  const isCurrentMonth = month === currentMonth;
+  const isHistoricalMonth = Boolean(currentMonth && month < currentMonth);
   const itemsQuery = useQuery({
     queryKey: queryKeys.monthly(month),
     queryFn: () => listMonthlyItems(month),
@@ -60,7 +65,7 @@ export function MonthlyPage() {
   });
   const [initializing, setInitializing] = useState(false);
   const [filters, setFilters] = useState<MonthlyWorkspaceFilters>(defaultMonthlyWorkspaceFilters);
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(() => searchParams.get("item"));
   const [creatingTemporaryCategory, setCreatingTemporaryCategory] = useState(false);
   const [entryDialog, setEntryDialog] = useState<EntryDialogRequest>(null);
 
@@ -81,9 +86,12 @@ export function MonthlyPage() {
     <div className="monthly-page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">月度执行</p>
+          {isHistoricalMonth && <Link className="back-link" to={`/history/${month}`}>← 返回该月报表</Link>}
+          <p className="eyebrow">{isHistoricalMonth ? "历史月调整" : "月度执行"}</p>
           <h1>{month ? monthLabel(month) : "正在读取本月"}</h1>
-          <p>只处理当前自然月：查看预算类目、补充临时类目并记录实际收支。</p>
+          <p>{isHistoricalMonth
+            ? "按实际归属月份补录、编辑或删除条目；计划快照仍保持冻结。"
+            : "查看预算类目、补充临时类目并记录实际收支。"}</p>
         </div>
         <div className="header-actions"><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button></div>
       </header>
@@ -93,7 +101,7 @@ export function MonthlyPage() {
           当前自然月自动初始化失败：{describeError(startupQuery.data.error)}
         </div>
       )}
-      {startupQuery.data?.initialization && startupQuery.data.initialization.created_count > 0 && month === startupQuery.data.current_month && (
+      {startupQuery.data?.initialization && startupQuery.data.initialization.created_count > 0 && isCurrentMonth && (
         <div className="success-banner" role="status">
           当前月已自动检查：新增 {startupQuery.data.initialization.created_count} 项，保留 {startupQuery.data.initialization.skipped_existing_count} 项。
         </div>
@@ -115,6 +123,7 @@ export function MonthlyPage() {
         <MonthlyWorkspace
           filters={filters}
           items={itemsQuery.data}
+          month={isHistoricalMonth ? month : undefined}
           onFiltersChange={setFilters}
           onSelectItem={setSelectedItemId}
           selectedItemId={selectedItemId}
@@ -123,7 +132,7 @@ export function MonthlyPage() {
       )}
 
       {itemsQuery.data?.length === 0 && previewQuery.data?.candidate_count === 0 && previewQuery.data.missing_currencies.length === 0 && (
-        <EmptyState eyebrow="本月还没有数据" title="先添加一个临时类目" description="临时类目只属于本月，创建后可在详情中记录收入、支出、退款或冲减。周期规则不是开始使用 Aplena 的前置条件。" action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button><Link className="button button-secondary" to="/goals">设置下月目标（可选）</Link></div>} />
+        <EmptyState eyebrow="该月还没有数据" title="先添加一个临时类目" description={`临时类目只属于 ${month}，创建后可在详情中记录收入、支出、退款或冲减。`} action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button>{isCurrentMonth && <Link className="button button-secondary" to="/goals">设置下月目标（可选）</Link>}</div>} />
       )}
 
       {initializing && previewQuery.data && ratesQuery.data && (
@@ -184,9 +193,19 @@ export function MonthlyPage() {
 
 function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPreview; hasItems: boolean; onInitialize: () => void }) {
   const canInitialize = preview.candidate_count > 0 || preview.missing_currencies.length > 0;
+  const contextLabel = preview.direction === "HISTORICAL"
+    ? "历史月份"
+    : preview.direction === "FUTURE"
+      ? "未来月份"
+      : "当前自然月";
+  const contextCopy = preview.direction === "HISTORICAL"
+    ? "可调整已有实际条目；补齐计划快照仍需显式确认，且不会覆盖既有快照。"
+    : preview.direction === "FUTURE"
+      ? "计划快照只有在显式确认后创建，创建后保持冻结。"
+      : "本月计划快照在生成后保持冻结，不随下月目标变化。";
   return (
-    <section className="month-context context-current">
-      <div><span className="section-label">当前自然月</span><strong>本月计划快照在生成后保持冻结，不随下月目标变化。</strong></div>
+    <section className={`month-context context-${preview.direction.toLowerCase()}`}>
+      <div><span className="section-label">{contextLabel}</span><strong>{contextCopy}</strong></div>
       <dl>
         <div><dt>已存在</dt><dd>{preview.existing_count}</dd></div>
         <div><dt>可新增</dt><dd>{preview.candidate_count}</dd></div>
@@ -195,7 +214,7 @@ function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPrevi
       {preview.missing_currencies.length > 0 && <p className="warning-text">缺少汇率：{preview.missing_currencies.join("、")}</p>}
       {canInitialize && (
         <button className="button button-primary" type="button" onClick={onInitialize}>
-          {hasItems ? "补齐符合本月的规则" : "初始化本月"}
+          {hasItems ? "补齐符合该月的规则" : "初始化该月"}
         </button>
       )}
     </section>
@@ -254,6 +273,7 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
     staleTime: 0,
   });
   const [amount, setAmount] = useState(existing?.source_amount ?? "");
+  const [saveAttempted, setSaveAttempted] = useState(false);
   const [note, setNote] = useState(existing?.note ?? "");
   const cachedRate = rates.find((rate) => rate.currency === currency);
   const officialRate = useMemo(
@@ -313,12 +333,16 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
   const increaseLabel = flow === "EXPENSE" ? "支出" : "收入";
   const decreaseLabel = flow === "EXPENSE" ? "退款" : "冲减";
   const entryLabel = flow === "EXPENSE" ? "支出或退款" : "收入或冲减";
+  const saveEntry = () => {
+    setSaveAttempted(true);
+    if (!amountIsInvalid) mutation.mutate();
+  };
   return <Dialog
     className="entry-dialog"
     eyebrow={item.item_name}
     title={existing ? `编辑${entryLabel}` : `添加${entryLabel}`}
     onClose={onClose}
-    footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending || amountIsInvalid || !ratePreview || (!existing && currency !== baseCurrency && referenceQuery.isFetching)} type="button" onClick={() => mutation.mutate()}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
+    footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending} type="button" onClick={saveEntry}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
   >
     <div className="entry-detail-grid">
       <label>日期<input autoFocus data-dialog-initial-focus type="date" min={`${month}-01`} max={`${month}-${new Date(Number(month.slice(0,4)), Number(month.slice(5,7)), 0).getDate()}`} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
@@ -326,7 +350,7 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
     </div>
     <div className="entry-money-grid">
       <label>币种<Select ariaLabel="实际条目币种" disabled={Boolean(existing)} value={currency} onChange={setCurrency} options={currencyOptions} /></label>
-      <label>原币金额<input inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
+      <label>原币金额<input aria-label="原币金额" aria-invalid={(saveAttempted && amountIsInvalid) || undefined} inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} />{saveAttempted && amountIsInvalid && <em role="alert">请输入大于 0、最多两位小数的金额。</em>}</label>
     </div>
     <div className="entry-rate-snapshot" aria-live="polite">
       <span>本次换算基准</span>
@@ -335,6 +359,14 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
     <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
     {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
   </Dialog>;
+}
+
+function validMonth(value: string | null): value is string {
+  if (!value) return false;
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const numericMonth = Number(match[2]);
+  return Number(match[1]) > 0 && numericMonth >= 1 && numericMonth <= 12;
 }
 
 function flowForCategory(category: string): "INCOME" | "EXPENSE" {
