@@ -3131,6 +3131,7 @@ textarea:focus,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  align-items: start;
 }
 
 .dashboard-chart-grid-primary {
@@ -3191,6 +3192,81 @@ textarea:focus,
 
 .chart-data-details .data-table {
   margin-top: 4px;
+}
+
+.chart-data-flip {
+  margin-top: 4px;
+  perspective: 1200px;
+}
+
+.chart-data-flip-stage,
+.chart-data-flip-inner {
+  height: var(--chart-data-flip-height);
+}
+
+.chart-data-flip-inner {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 360ms cubic-bezier(0.2, 0.72, 0.28, 1);
+}
+
+.chart-data-flip-active .chart-data-flip-inner {
+  transform: rotateY(180deg);
+}
+
+.chart-data-flip-face {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  overflow: hidden;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.chart-data-flip-back {
+  transform: rotateY(180deg);
+}
+
+.chart-data-flip-scroll {
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.chart-data-flip-scroll .data-table {
+  margin-top: 0;
+}
+
+.chart-data-flip-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  margin-top: 4px;
+  padding: 5px 0;
+  color: #475569;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.chart-data-flip-toggle::after {
+  margin-left: 6px;
+  color: #94a3b8;
+  content: "↻";
+  font-size: 12px;
+}
+
+.chart-data-flip-toggle:hover,
+.chart-data-flip-toggle:focus-visible {
+  color: #1d4ed8;
+}
+
+.chart-data-flip-toggle:focus-visible {
+  outline: 2px solid rgb(37 99 235 / 28%);
+  outline-offset: 3px;
 }
 
 .chart-empty {
@@ -4337,49 +4413,21 @@ textarea:focus,
 
 .goal-overview-grid {
   display: grid;
-  grid-template-columns: minmax(270px, 0.72fr) minmax(0, 1.6fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
   gap: 14px;
+  align-items: start;
 }
 
-.goal-settings-card {
-  align-content: start;
-}
-
-.goal-policy-note {
-  padding: 14px;
-  background: #f8fafc;
-  border: 1px solid #e5eaf1;
-  border-radius: 7px;
-}
-
-.goal-policy-note span,
-.goal-policy-note small {
-  display: block;
-  color: #64748b;
-  font-size: 10px;
-}
-
-.goal-policy-note strong {
-  display: block;
-  margin: 5px 0;
-  color: #111827;
-  font-size: 24px;
-  font-variant-numeric: tabular-nums lining-nums;
-}
-
-.goal-capacity-card {
+.goal-projection-card,
+.goal-category-card {
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
 }
 
-.goal-category-card {
-  margin-top: 14px;
-}
-
 .goal-category-empty {
-  min-height: 220px;
+  min-height: 374px;
 }
 
 .goal-category-empty p {
@@ -4387,41 +4435,49 @@ textarea:focus,
   line-height: 1.6;
 }
 
-.goal-capacity-metrics {
+.goal-projection-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
-  margin: 16px 0 4px;
+  margin: 8px 0 2px;
   overflow: hidden;
   background: var(--border);
   border: 1px solid var(--border);
   border-radius: 7px;
 }
 
-.goal-capacity-metrics div {
+.projection-metric {
   min-width: 0;
-  padding: 12px;
+  padding: 10px;
   background: #f8fafc;
 }
 
-.goal-capacity-metrics span,
-.goal-capacity-metrics small {
+.projection-metric span,
+.projection-metric small {
   display: block;
   color: #64748b;
   font-size: 9px;
 }
 
-.goal-capacity-metrics strong {
+.projection-metric strong {
   display: block;
   margin: 5px 0;
   color: #111827;
-  font-size: 17px;
+  font-size: clamp(14px, 1.35vw, 17px);
   font-variant-numeric: tabular-nums lining-nums;
   overflow-wrap: anywhere;
 }
 
+.projection-metric-positive strong {
+  color: #315f55;
+}
+
+.projection-metric-negative strong {
+  color: #b42334;
+}
+
 .goal-chart-empty {
-  min-height: 250px;
+  min-height: 374px;
 }
 
 .goal-chart-empty p {
@@ -5006,9 +5062,12 @@ textarea:focus,
 
   .kpi-grid,
   .workspace-skeleton-grid,
-  .empty-ledger-header,
-  .goal-capacity-metrics {
+  .empty-ledger-header {
     grid-template-columns: 1fr;
+  }
+
+  .goal-projection-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .monthly-page .monthly-card {
@@ -5173,5 +5232,25 @@ textarea:focus,
 @media (prefers-reduced-motion: reduce) {
   .workspace-skeleton {
     animation: none;
+  }
+
+  .chart-data-flip-inner,
+  .chart-data-flip-active .chart-data-flip-inner,
+  .chart-data-flip-back {
+    transform: none;
+    transition: none;
+  }
+
+  .chart-data-flip-face {
+    visibility: hidden;
+  }
+
+  .chart-data-flip-front,
+  .chart-data-flip-active .chart-data-flip-back {
+    visibility: visible;
+  }
+
+  .chart-data-flip-active .chart-data-flip-front {
+    visibility: hidden;
   }
 }

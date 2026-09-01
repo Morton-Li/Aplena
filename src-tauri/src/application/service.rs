@@ -6,9 +6,9 @@ use std::{
 
 use chrono::{Datelike, Local, Utc};
 use pfcm_domain::{
-    ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, CapacityInput,
-    Category, CurrencyCode, ExchangeRate, MonthlyItem, NextMonthGoal, PlanItem, RecognitionMode,
-    Settings, YearMonth, calculate_financial_capacity, create_monthly_snapshot, is_recognized_in,
+    ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, Category,
+    CurrencyCode, ExchangeRate, MonthlyItem, PlanItem, ProjectionInput, RecognitionMode, Settings,
+    YearMonth, calculate_budget_projection, create_monthly_snapshot, is_recognized_in,
 };
 use rust_decimal::{Decimal, RoundingStrategy};
 use sqlx::Executor;
@@ -17,20 +17,19 @@ use uuid::Uuid;
 
 use crate::infrastructure::{
     ActualEntryExchangeSnapshot, DeletePlanResult, Store, StoredActualEntry, StoredExchangeRate,
-    StoredMonthlyItem, StoredNextMonthGoal, StoredPlanItem, StoredSettings,
+    StoredMonthlyItem, StoredPlanItem, StoredSettings,
 };
 
 use super::{
     analytics::build_month_analytics,
     dto::{
-        ActualEntryDto, ActualEntryInputDto, DeleteManualMonthlyItemInputDto, DeletePlanItemDto,
-        EnsureActualOnlyInputDto, ExchangeRateDto, ExchangeRateUpsertDto, FinancialCapacityDto,
+        ActualEntryDto, ActualEntryInputDto, BudgetProjectionDto, DeleteManualMonthlyItemInputDto,
+        DeletePlanItemDto, EnsureActualOnlyInputDto, ExchangeRateDto, ExchangeRateUpsertDto,
         HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto,
         ManualMonthlyItemInputDto, MonthAnalyticsDto, MonthInitializationStatusDto,
-        MonthPreviewDto, MonthPreviewItemDto, MonthlyItemDto, MonthlyNoteInputDto,
-        NextMonthGoalDto, NextMonthGoalInputDto, PlanItemDto, PlanItemInputDto, RateOverrideDto,
-        ReferenceRateImportDto, SettingsDto, SettingsInputDto, StartupStatusDto,
-        StopPlanItemRequestDto,
+        MonthPreviewDto, MonthPreviewItemDto, MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto,
+        PlanItemInputDto, RateOverrideDto, ReferenceRateImportDto, SettingsDto, SettingsInputDto,
+        StartupStatusDto, StopPlanItemRequestDto,
     },
     error::AppError,
 };
@@ -75,7 +74,6 @@ impl FinanceService {
         let _operation = self.operation_gate.read().await;
         let result = async {
             self.ensure_default_settings_unlocked().await?;
-            self.ensure_next_month_goal_unlocked().await?;
             self.ensure_month_initialized(
                 current_natural_month().expect("local calendar month must be valid"),
                 InitializationTrigger::AppStartup,
@@ -161,48 +159,6 @@ impl FinanceService {
         .map_err(AppError::from)?;
 
         Ok(settings_dto(stored))
-    }
-
-    pub async fn get_next_month_goal(&self) -> Result<NextMonthGoalDto, AppError> {
-        let _operation = self.operation_gate.read().await;
-        self.ensure_next_month_goal_unlocked()
-            .await
-            .map(next_month_goal_dto)
-    }
-
-    pub async fn save_next_month_goal(
-        &self,
-        input: NextMonthGoalInputDto,
-    ) -> Result<NextMonthGoalDto, AppError> {
-        let _operation = self.operation_gate.read().await;
-        self.require_settings().await?;
-        let goal = NextMonthGoal::new(
-            next_natural_month()?,
-            input.minimum_savings_rate_basis_points,
-        )
-        .map_err(|error| AppError::from_domain(error, Some("minimumSavingsRateBasisPoints")))?;
-        self.current_store()
-            .await
-            .upsert_next_month_goal(&goal, &timestamp())
-            .await
-            .map_err(AppError::from)
-            .map(next_month_goal_dto)
-    }
-
-    async fn ensure_next_month_goal_unlocked(&self) -> Result<StoredNextMonthGoal, AppError> {
-        let store = self.current_store().await;
-        let target_month = next_natural_month()?;
-        if let Some(goal) = store.get_next_month_goal().await.map_err(AppError::from)?
-            && goal.value.target_month() == target_month
-        {
-            return Ok(goal);
-        }
-        let goal = NextMonthGoal::new(target_month, 2_000)
-            .map_err(|error| AppError::from_domain(error, None))?;
-        store
-            .upsert_next_month_goal(&goal, &timestamp())
-            .await
-            .map_err(AppError::from)
     }
 
     pub async fn list_exchange_rates(&self) -> Result<Vec<ExchangeRateDto>, AppError> {
@@ -716,11 +672,10 @@ impl FinanceService {
         Ok(HistoryAnalyticsDto { months: analytics })
     }
 
-    pub async fn financial_capacity(&self) -> Result<FinancialCapacityDto, AppError> {
+    pub async fn budget_projection(&self) -> Result<BudgetProjectionDto, AppError> {
         let _operation = self.operation_gate.read().await;
         let settings = self.require_settings().await?;
-        let goal = self.ensure_next_month_goal_unlocked().await?;
-        let target_month = goal.value.target_month();
+        let target_month = next_natural_month()?;
         let plans = self
             .current_store()
             .await
@@ -748,33 +703,31 @@ impl FinanceService {
         }
         let inputs = parsed
             .iter()
-            .map(|(plan_item, exchange_rate)| CapacityInput {
+            .map(|(plan_item, exchange_rate)| ProjectionInput {
                 plan_item,
                 exchange_rate,
             })
             .collect::<Vec<_>>();
-        let result = calculate_financial_capacity(
+        let result = calculate_budget_projection(
             target_month,
-            goal.value.minimum_savings_rate(),
             settings.value.base_currency().clone(),
             &inputs,
         )
         .map_err(|error| AppError::from_domain(error, None))?;
-        Ok(FinancialCapacityDto {
+        Ok(BudgetProjectionDto {
             target_month: target_month.to_string(),
             base_currency: result.base_currency().to_string(),
-            minimum_savings_rate_percent: format_decimal(
-                goal.value.minimum_savings_rate().factor() * Decimal::ONE_HUNDRED,
-                2,
-            ),
             stable_income: result.stable_income().decimal_string(),
             variable_income: result.variable_income().decimal_string(),
             essential_expenses: result.essential_expenses().decimal_string(),
             fixed_commitments: result.fixed_commitments().decimal_string(),
             discretionary_budget: result.discretionary_budget().decimal_string(),
-            minimum_savings_amount: result.minimum_savings_amount().decimal_string(),
-            preserved_capacity: result.preserved_capacity().decimal_string(),
-            maximum_capacity: result.maximum_capacity().decimal_string(),
+            projected_income: result.projected_income().decimal_string(),
+            projected_expenses: result.projected_expenses().decimal_string(),
+            projected_savings: result.projected_savings().decimal_string(),
+            projected_savings_rate_percent: result
+                .projected_savings_rate()
+                .map(|ratio| format_decimal(ratio.as_decimal() * Decimal::ONE_HUNDRED, 2)),
             fixed_commitment_ratio_percent: result
                 .fixed_commitment_ratio()
                 .map(|ratio| format_decimal(ratio.as_decimal() * Decimal::ONE_HUNDRED, 2)),
@@ -1260,15 +1213,6 @@ fn missing_rate_error(currency: &CurrencyCode) -> AppError {
 fn settings_dto(stored: StoredSettings) -> SettingsDto {
     SettingsDto {
         base_currency: stored.value.base_currency().to_string(),
-        created_at: stored.created_at,
-        updated_at: stored.updated_at,
-    }
-}
-
-fn next_month_goal_dto(stored: StoredNextMonthGoal) -> NextMonthGoalDto {
-    NextMonthGoalDto {
-        target_month: stored.value.target_month().to_string(),
-        minimum_savings_rate_basis_points: stored.value.minimum_savings_rate().basis_points(),
         created_at: stored.created_at,
         updated_at: stored.updated_at,
     }

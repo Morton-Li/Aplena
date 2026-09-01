@@ -7,13 +7,12 @@ import { defaultActualEntryDate } from "./features/monthly/monthlyWorkspace";
 import type { Invoke } from "./shared/api/domain";
 import type {
   ActualEntry,
+  BudgetProjection,
   InitializeMonthResult,
   ExchangeRate,
-  FinancialCapacity,
   MonthAnalytics,
   MonthPreview,
   MonthlyItem,
-  NextMonthGoal,
   PlanItem,
   Settings,
 } from "./shared/api/finance";
@@ -80,13 +79,6 @@ const contract = {
 
 const settings: Settings = {
   base_currency: "CNY",
-  created_at: "2026-08-01T00:00:00Z",
-  updated_at: "2026-08-01T00:00:00Z",
-};
-
-const nextMonthGoal: NextMonthGoal = {
-  target_month: "2026-09",
-  minimum_savings_rate_basis_points: 2000,
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-01T00:00:00Z",
 };
@@ -313,18 +305,18 @@ function monthAnalytics(overrides: Partial<MonthAnalytics> = {}): MonthAnalytics
   };
 }
 
-const capacity: FinancialCapacity = {
+const projection: BudgetProjection = {
   target_month: "2026-09",
   base_currency: "CNY",
-  minimum_savings_rate_percent: "20.00",
   stable_income: "30000.00",
   variable_income: "3000.00",
   essential_expenses: "6000.00",
   fixed_commitments: "3000.00",
   discretionary_budget: "2000.00",
-  minimum_savings_amount: "6000.00",
-  preserved_capacity: "13000.00",
-  maximum_capacity: "15000.00",
+  projected_income: "33000.00",
+  projected_expenses: "11000.00",
+  projected_savings: "22000.00",
+  projected_savings_rate_percent: "66.67",
   fixed_commitment_ratio_percent: "10.00",
   stable_income_coverage_ratio: "3.33",
 };
@@ -339,14 +331,12 @@ interface HarnessOptions {
   rejectCommand?: { command: string; error: unknown };
   analytics?: MonthAnalytics;
   history?: MonthAnalytics[];
-  capacity?: FinancialCapacity;
-  goal?: NextMonthGoal;
+  projection?: BudgetProjection;
   actualEntries?: Record<string, ActualEntry[]>;
 }
 
 function installHarness(options: HarnessOptions = {}) {
   let storedSettings = options.settings === undefined ? settings : options.settings;
-  let storedGoal = options.goal ?? nextMonthGoal;
   let storedRates = [...(options.rates ?? [baseRate])];
   const plans = [...(options.plans ?? [])];
   const monthly = { ...(options.monthly ?? {}) };
@@ -381,13 +371,6 @@ function installHarness(options: HarnessOptions = {}) {
           updated_at: "2026-08-01T00:00:00Z",
         };
         return storedSettings as T;
-      }
-      case "get_next_month_goal":
-        return storedGoal as T;
-      case "save_next_month_goal": {
-        const input = args?.input as { minimumSavingsRateBasisPoints: number };
-        storedGoal = { ...storedGoal, minimum_savings_rate_basis_points: input.minimumSavingsRateBasisPoints };
-        return storedGoal as T;
       }
       case "get_startup_status":
         return {
@@ -438,8 +421,8 @@ function installHarness(options: HarnessOptions = {}) {
       }
       case "get_history_analytics":
         return { months: options.history ?? [options.analytics ?? monthAnalytics()] } as T;
-      case "get_financial_capacity":
-        return (options.capacity ?? capacity) as T;
+      case "get_budget_projection":
+        return (options.projection ?? projection) as T;
       case "preview_plan_item": {
         const request = args?.request as {
           planItem: { recognitionMode: string };
@@ -658,7 +641,7 @@ describe("planning workflows", () => {
     }
   });
 
-  it("keeps the goal isolated to the next natural month and saves its policy", async () => {
+  it("derives the next-month budget projection and expense mix from recurring rules", async () => {
     installHarness({ plans: [examplePlan] });
     const user = userEvent.setup();
     window.location.hash = "#/goals";
@@ -667,11 +650,10 @@ describe("planning workflows", () => {
     await screen.findByRole("heading", { name: "配置预算" });
     await screen.findByText("2026-09", { selector: ".goal-month-badge strong" });
     expect(screen.getByRole("heading", { name: "配置预算" }).parentElement).toHaveTextContent("2026 年 9 月");
-    expect(screen.queryByLabelText("目标适用范围")).not.toBeInTheDocument();
-    expect(screen.queryByText("当前月")).not.toBeInTheDocument();
-    expect(screen.queryByText("历史月")).not.toBeInTheDocument();
-    expect(screen.queryByText("生效范围")).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "自动月度基准" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "下月预算概览" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "支出类型占比" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("下月目标储蓄率")).not.toBeInTheDocument();
+    expect(screen.queryByText("剩余能力")).not.toBeInTheDocument();
     const rulesTable = screen.getByRole("table", { name: "周期规则" });
     const ruleRow = within(rulesTable).getByRole("row", { name: /年度保险/ });
     expect(ruleRow).toHaveTextContent("¥ 1,200.00");
@@ -679,26 +661,26 @@ describe("planning workflows", () => {
     expect(ruleRow).toHaveTextContent("按支付月份确认");
     expect(ruleRow).toHaveTextContent("2026-08-31");
     expect(ruleRow).toHaveTextContent("长期有效");
-    expect(screen.getByRole("img", { name: "2026-09稳定收入分配与剩余承载力瀑布图" })).toBeInTheDocument();
-    const categoryChart = screen.getByRole("img", { name: "2026-09预算类型金额占比饼图" });
+    const projectionChart = screen.getByRole("img", { name: "2026-09预计收入、支出与储蓄柱状图" });
+    const projectionOption = JSON.parse(projectionChart.dataset.chartOption ?? "{}") as {
+      series: Array<{ data: number[] }>;
+    };
+    expect(projectionOption.series[0].data).toEqual([33000, 11000, 22000]);
+    const categoryChart = screen.getByRole("img", { name: "2026-09支出类型金额占比饼图" });
     const categoryOption = JSON.parse(categoryChart.dataset.chartOption ?? "{}") as {
       series: Array<{ data: Array<{ name: string; value: number }> }>;
     };
     expect(categoryOption.series[0].data.map(({ name, value }) => [name, value])).toEqual([
-      ["固定收入", 30000],
-      ["浮动收入", 3000],
       ["必要支出", 6000],
-      ["固定承诺支出", 3000],
-      ["自主性预算", 2000],
+      ["固定承诺", 3000],
+      ["自主预算", 2000],
     ]);
-    const input = screen.getByLabelText("下月目标储蓄率");
-    await user.clear(input);
-    await user.type(input, "25");
-    await user.click(screen.getByRole("button", { name: "保存下月目标" }));
-    await screen.findByText("下月目标已保存，本月与历史数据未作修改。");
-    expect(invokeMock).toHaveBeenCalledWith("save_next_month_goal", {
-      input: { minimumSavingsRateBasisPoints: 2500 },
-    });
+    const overviewCard = screen.getByRole("heading", { name: "下月预算概览" }).closest("section");
+    expect(overviewCard).not.toBeNull();
+    await user.click(within(overviewCard!).getByRole("button", { name: "查看精确数据" }));
+    expect(within(overviewCard!).getByRole("table", { name: "2026-09预算测算明细" })).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith("get_next_month_goal");
+    expect(invokeMock).not.toHaveBeenCalledWith("save_next_month_goal", expect.anything());
   });
 
   it("previews and creates an AMORTIZED plan without frontend financial arithmetic", async () => {
@@ -734,7 +716,7 @@ describe("planning workflows", () => {
     expect(screen.getByText("只在以开始日期为锚点的支付月计入完整金额。")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "预览并检查" }));
     expect(await screen.findByText("不会")).toBeInTheDocument();
-    expect(screen.getByText("无论哪种模式，财务承载能力都按月均负担计算。")).toBeInTheDocument();
+    expect(screen.getByText("无论哪种模式，下月预算概览都按月均等价金额计算。")).toBeInTheDocument();
   });
 
   it("keeps the detail drawer open while a new entry defaults to today", async () => {
@@ -1143,7 +1125,7 @@ describe("planning workflows", () => {
 
 });
 
-describe("dashboard and capacity analytics", () => {
+describe("dashboard and budget projection analytics", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     window.location.hash = "";
@@ -1168,7 +1150,7 @@ describe("dashboard and capacity analytics", () => {
     expect(screen.queryByText("¥ 13,000.00")).not.toBeInTheDocument();
   });
 
-  it("plots missing plan and actual comparison values as zero", async () => {
+  it("plots missing comparison, category, and savings trend values as zero", async () => {
     installHarness({
       analytics: monthAnalytics({
         income: {
@@ -1179,6 +1161,14 @@ describe("dashboard and capacity analytics", () => {
           variance_effect: "UNKNOWN",
         },
       }),
+      history: [
+        monthAnalytics({
+          month: "2026-07",
+          planned_savings_rate_percent: null,
+          actual_savings_rate_percent: null,
+        }),
+        monthAnalytics(),
+      ],
     });
     render(<App />);
 
@@ -1189,6 +1179,21 @@ describe("dashboard and capacity analytics", () => {
       series: Array<{ name: string; data: number[] }>;
     };
     expect(option.series.find((series) => series.name === "实际")?.data).toEqual([0, 8427, 20273]);
+    const categoryChart = screen.getByRole("img", {
+      name: "2026-08支出分类计划与实际横向条形图",
+    });
+    const categoryOption = JSON.parse(categoryChart.dataset.chartOption ?? "{}") as {
+      series: Array<{ name: string; data: number[] }>;
+    };
+    expect(categoryOption.series.find((series) => series.name === "实际")?.data).toEqual([6427, 2000, 0]);
+    const savingsChart = screen.getByRole("img", {
+      name: "近八个月计划储蓄率与实际储蓄率趋势图",
+    });
+    const savingsOption = JSON.parse(savingsChart.dataset.chartOption ?? "{}") as {
+      series: Array<{ name: string; data: number[] }>;
+    };
+    expect(savingsOption.series.find((series) => series.name === "计划储蓄率")?.data).toEqual([0, 69]);
+    expect(savingsOption.series.find((series) => series.name === "实际储蓄率")?.data).toEqual([0, 70.64]);
     expect(screen.getByText("灰蓝代表计划，蓝色代表当前实际；没有实际数据的指标按 0 绘制。")).toBeInTheDocument();
   });
 
@@ -1229,8 +1234,8 @@ describe("dashboard and capacity analytics", () => {
         savings_rate_plan_completion_percent: null,
         important_variances: [],
       }),
-      capacity: {
-        ...capacity,
+      projection: {
+        ...projection,
         stable_income: "0.00",
         fixed_commitment_ratio_percent: null,
         stable_income_coverage_ratio: null,

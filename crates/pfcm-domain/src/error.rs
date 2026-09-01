@@ -18,8 +18,6 @@ pub enum DomainError {
     InvalidExchangeRate,
     #[error("exchange rate is outside the supported i64 scaled range")]
     ExchangeRateOutOfRange,
-    #[error("savings rate must be between 0 and 10000 basis points")]
-    InvalidSavingsRate,
     #[error("ratio cannot be negative")]
     InvalidRatio,
     #[error("plan item name cannot be empty")]
@@ -54,7 +52,7 @@ pub enum DomainError {
     InvalidMonthlyItemOrigin,
     #[error("exchange rate currency pair does not match the requested conversion")]
     CurrencyMismatch,
-    #[error("all capacity inputs must use the same base currency")]
+    #[error("all projection inputs must use the same base currency")]
     BaseCurrencyMismatch,
     #[error("base currency exchange rate must equal one")]
     InvalidBaseCurrencyRate,

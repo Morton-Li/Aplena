@@ -2,15 +2,15 @@ mod application;
 mod infrastructure;
 
 use application::{
-    FinanceService, calculate_capacity, create_actual_entry, create_manual_monthly_item,
+    FinanceService, calculate_budget_projection, create_actual_entry, create_manual_monthly_item,
     create_plan_item, delete_actual_entry, delete_exchange_rate, delete_manual_monthly_item,
     delete_plan_item, ensure_actual_only_monthly_item, ensure_default_settings,
-    get_domain_contract, get_financial_capacity, get_history_analytics, get_month_analytics,
-    get_month_initialization_status, get_next_month_goal, get_settings, get_startup_status,
-    import_reference_rates, initialize_month, list_actual_entries, list_exchange_rates,
-    list_existing_months, list_monthly_items, list_plan_items, preview_month, preview_plan_item,
-    save_next_month_goal, save_settings, stop_plan_item, update_actual_entry, update_monthly_note,
-    update_plan_item, upsert_exchange_rate,
+    get_budget_projection, get_domain_contract, get_history_analytics, get_month_analytics,
+    get_month_initialization_status, get_settings, get_startup_status, import_reference_rates,
+    initialize_month, list_actual_entries, list_exchange_rates, list_existing_months,
+    list_monthly_items, list_plan_items, preview_month, preview_plan_item, save_settings,
+    stop_plan_item, update_actual_entry, update_monthly_note, update_plan_item,
+    upsert_exchange_rate,
 };
 use infrastructure::open_database;
 use std::path::{Path, PathBuf};
@@ -69,13 +69,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_domain_contract,
             preview_plan_item,
-            calculate_capacity,
+            calculate_budget_projection,
             get_startup_status,
             get_settings,
             ensure_default_settings,
             save_settings,
-            get_next_month_goal,
-            save_next_month_goal,
             list_exchange_rates,
             upsert_exchange_rate,
             import_reference_rates,
@@ -100,7 +98,7 @@ pub fn run() {
             initialize_month,
             get_month_analytics,
             get_history_analytics,
-            get_financial_capacity
+            get_budget_projection
         ])
         // Keep the compiled application context colocated with the startup pipeline so release
         // builds always embed the matching hashed frontend assets.

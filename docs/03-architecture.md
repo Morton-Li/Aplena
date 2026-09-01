@@ -16,7 +16,7 @@
 
 ```text
 crates/pfcm-domain
-  纯领域类型、日期/金额规则、计入与承载公式
+  纯领域类型、日期/金额规则、计入与预算投影公式
 
 src-tauri/src/application
   DTO、用例编排、分析投影、稳定错误协议
@@ -44,7 +44,7 @@ React -> Tauri IPC -> Application -> Domain
 
 ## 3. 权威计算边界
 
-Rust 后端是金额、日期计入、偏差、比例和承载能力的唯一权威实现。前端只验证显而易见的输入形状、调用命令、展示结果，不复制财务公式。
+Rust 后端是金额、日期计入、偏差、比例和预算投影的唯一权威实现。前端只验证显而易见的输入形状、调用命令、展示结果，不复制财务公式。
 
 金额协议：
 
@@ -63,11 +63,10 @@ Rust 后端是金额、日期计入、偏差、比例和承载能力的唯一权
 
 ## 4. 持久化与派生数据
 
-持久化六张核心业务表：
+持久化五张核心业务表：
 
 ```text
 settings
-next_month_goal
 exchange_rates
 plan_items
 monthly_items
@@ -116,10 +115,10 @@ actual_entries
 - 设置、下月目标、汇率、周期规则；
 - 月份预览与月度项目；
 - 某月度项目的实际条目；
-- 月度分析、历史分析、仅下月承载能力；
+- 月度分析、历史分析、仅下月预算投影；
 - 现有月份列表和启动状态。
 
-条目 CRUD 或临时类目变更后同时失效月度项目、该项目条目、目标月分析、历史分析和月份列表。计划变更还失效预览及承载能力。
+条目 CRUD 或临时类目变更后同时失效月度项目、该项目条目、目标月分析、历史分析和月份列表。计划或汇率变更还失效预览及下月预算投影。
 
 ## 8. IPC 命令面
 
@@ -127,8 +126,7 @@ actual_entries
 
 ```text
 settings / exchange rates / plan items
-get_next_month_goal / save_next_month_goal
-preview_plan_item / get_financial_capacity
+preview_plan_item / get_budget_projection
 preview_month / initialize_month / get_startup_status
 list_monthly_items / update_monthly_note
 create_manual_monthly_item / delete_manual_monthly_item
@@ -151,7 +149,7 @@ DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `fiel
 5. 启用 foreign keys、WAL 和同步策略；
 6. 启动当前自然月自动初始化。
 
-首个公开版把尚未发布的六段演进迁移压缩为 `0001_initial_release.sql`。公开兼容性从 schema 1 开始；schema 2 追加移除类目状态字段与重开触发器。已发布迁移不可修改，只能追加。高于当前应用支持版本的数据库会在迁移前被拒绝，预发布库换轨必须使用隔离副本和显式数据复制流程。
+首个公开版把尚未发布的六段演进迁移压缩为 `0001_initial_release.sql`。公开兼容性从 schema 1 开始；schema 2 追加移除类目状态字段与重开触发器，schema 3 直接删除旧下月目标表及数据。已发布迁移不可修改，只能追加。高于当前应用支持版本的数据库会在迁移前被拒绝，预发布库换轨必须使用隔离副本和显式数据复制流程。
 
 ## 10. 安全边界
 
@@ -167,11 +165,11 @@ DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `fiel
 
 ### 11.1 领域层
 
-验证两位输入、溢出、闰年、日级交集、1 月 31 日锚点、结束日、退款导致负净额和承载公式。
+验证两位输入、溢出、闰年、日级交集、1 月 31 日锚点、结束日、退款导致负净额和预算投影公式。
 
 ### 11.2 应用与数据库层
 
-验证 schema 1 到 schema 2 的追加迁移、旧预发布库无修改拒绝、WAL、事务回滚、并发幂等、快照不可变、条目 CRUD、临时类目事务删除及预算快照保护、仅实际原位提升、已删除计划拒绝、分析口径和本位币锁。
+验证 schema 1 到 schema 3 的追加迁移与目标表删除、旧预发布库无修改拒绝、WAL、事务回滚、并发幂等、快照不可变、条目 CRUD、临时类目事务删除及预算快照保护、仅实际原位提升、已删除计划拒绝、分析口径和本位币锁。
 
 ### 11.3 前端
 

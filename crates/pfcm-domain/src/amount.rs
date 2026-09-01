@@ -220,26 +220,6 @@ impl ExchangeRate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SavingsRate(u16);
-
-impl SavingsRate {
-    pub fn from_basis_points(value: u16) -> Result<Self, DomainError> {
-        if value > 10_000 {
-            return Err(DomainError::InvalidSavingsRate);
-        }
-        Ok(Self(value))
-    }
-
-    pub const fn basis_points(self) -> u16 {
-        self.0
-    }
-
-    pub fn factor(self) -> Decimal {
-        Decimal::from(self.0) / Decimal::from(10_000_u16)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Ratio(Decimal);
 
 impl Ratio {
@@ -247,6 +227,23 @@ impl Ratio {
         if value.is_sign_negative() {
             return Err(DomainError::InvalidRatio);
         }
+        Ok(Self(rounded(value, RATE_SCALE)?))
+    }
+
+    pub const fn as_decimal(self) -> Decimal {
+        self.0
+    }
+
+    pub fn decimal_string(self) -> String {
+        format!("{:.8}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SignedRatio(Decimal);
+
+impl SignedRatio {
+    pub fn from_decimal(value: Decimal) -> Result<Self, DomainError> {
         Ok(Self(rounded(value, RATE_SCALE)?))
     }
 
