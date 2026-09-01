@@ -1319,6 +1319,56 @@ describe("dashboard and capacity analytics", () => {
     expect(screen.getByRole("link", { name: "← 返回历史报表" })).toBeInTheDocument();
   });
 
+  it("opens a historical project for adjustment and explains invalid amounts before saving", async () => {
+    const historicalItem = monthlyItem({ month: "2026-07" });
+    installHarness({
+      history: [monthAnalytics({
+        month: "2026-07",
+        projects: [{
+          ...monthAnalytics().projects[2],
+          monthly_item_id: historicalItem.id,
+        }],
+      })],
+      monthly: { "2026-07": [historicalItem] },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("link", { name: "历史报表" }));
+    await user.click(await screen.findByText("2026 年 7 月"));
+    expect(screen.getByRole("link", { name: "调整该月数据" })).toHaveAttribute("href", "#/monthly?month=2026-07");
+
+    const rankingTable = screen.getByRole("table", { name: "项目计划与实际对照数据" });
+    const electricityRow = within(rankingTable).getByRole("row", { name: /电费/ });
+    await user.click(within(electricityRow).getByRole("link", { name: "调整条目" }));
+
+    expect(await screen.findByText("历史月调整")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← 返回该月报表" })).toHaveAttribute("href", "#/history/2026-07");
+    expect(invokeMock).toHaveBeenCalledWith("list_monthly_items", { month: "2026-07" });
+    expect(await screen.findByRole("dialog", { name: "电费" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "添加支出或退款" }));
+    const save = screen.getByRole("button", { name: "保存条目" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(screen.getByRole("alert")).toHaveTextContent("请输入大于 0、最多两位小数的金额");
+    expect(invokeMock.mock.calls.some(([command]) => command === "create_actual_entry")).toBe(false);
+
+    await user.type(screen.getByLabelText("原币金额"), "20.00");
+    await user.click(screen.getByLabelText("类型"));
+    await user.click(screen.getByRole("option", { name: "退款" }));
+    await user.click(save);
+
+    expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({
+        monthlyItemId: historicalItem.id,
+        occurredOn: "2026-07-01",
+        effect: "DECREASE",
+        amount: "20.00",
+      }),
+    });
+  });
+
   it("degrades project comparison to actual-only when the month has no plan baseline", async () => {
     installHarness({
       analytics: monthAnalytics({

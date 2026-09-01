@@ -14,6 +14,7 @@ import {
 } from "./monthlyWorkspace";
 
 interface MonthlyWorkspaceProps {
+  month?: string;
   items: MonthlyItem[];
   visibleItems: MonthlyItem[];
   filters: MonthlyWorkspaceFilters;
@@ -30,6 +31,7 @@ const varianceLabels: Record<MonthlyItem["variance_effect"], string> = {
 };
 
 export function MonthlyWorkspace({
+  month,
   items,
   visibleItems,
   filters,
@@ -46,8 +48,8 @@ export function MonthlyWorkspace({
   ) => onFiltersChange({ ...filters, [key]: value });
 
   return (
-    <section aria-label="本月项目工作台" className="monthly-workspace">
-      <div aria-label="本月类目摘要" className="monthly-item-summary">
+    <section aria-label={`${month ?? "本月"}项目工作台`} className="monthly-workspace">
+      <div aria-label={`${month ?? "本月"}类目摘要`} className="monthly-item-summary">
         <SummaryMetric label="类目总数" value={counts.total} />
         <SummaryMetric label="预算类目" value={counts.planned} />
         <SummaryMetric label="临时类目" value={counts.temporary} />
@@ -129,7 +131,7 @@ export function MonthlyWorkspace({
           style={{ overflow: "auto", overscrollBehaviorX: "contain", overscrollBehaviorY: "auto" }}
         >
           <table className="monthly-data-table">
-            <caption className="sr-only">本月类目、计划金额、实际金额、偏差、完成率和实际条目数量</caption>
+            <caption className="sr-only">{month ?? "本月"}类目、计划金额、实际金额、偏差、完成率和实际条目数量</caption>
             <thead>
               <tr>
                 <th>项目 / 分类</th>
