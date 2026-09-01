@@ -4374,6 +4374,19 @@ textarea:focus,
   box-shadow: var(--shadow-card);
 }
 
+.goal-category-card {
+  margin-top: 14px;
+}
+
+.goal-category-empty {
+  min-height: 220px;
+}
+
+.goal-category-empty p {
+  margin: 0;
+  line-height: 1.6;
+}
+
 .goal-capacity-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
