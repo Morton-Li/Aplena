@@ -14,6 +14,7 @@ import {
   type NextMonthGoal,
 } from "../../shared/api/finance";
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
+import { PieAnalyticsChart } from "../../shared/components/PieAnalyticsChart";
 import { describeError } from "../../shared/formatting/errors";
 import {
   compactMoney,
@@ -22,6 +23,7 @@ import {
   formatPercent,
   monthLabel,
 } from "../../shared/formatting/finance";
+import { categoryLabel } from "../../shared/formatting/labels";
 import { RecurringRulesPanel } from "./RecurringRulesPanel";
 
 const goalSchema = z.object({
@@ -62,9 +64,113 @@ export function GoalsPage() {
         <CapacitySummary capacity={capacity} hasRules={hasRules} />
       </div>
 
+      <BudgetCategorySummary capacity={capacity} hasRules={hasRules} />
       <RecurringRulesPanel targetMonth={goal.target_month} />
     </>
   );
+}
+
+interface BudgetCategorySlice {
+  code: string;
+  label: string;
+  amount: string;
+  value: number;
+  color: string;
+}
+
+function BudgetCategorySummary({ capacity, hasRules }: { capacity: FinancialCapacity; hasRules: boolean }) {
+  const slices = useMemo(() => budgetCategorySlices(capacity), [capacity]);
+  const option = useMemo(
+    () => budgetCategoryOption(slices, capacity.base_currency),
+    [capacity.base_currency, slices],
+  );
+
+  return (
+    <section className="report-card goal-category-card">
+      <header>
+        <div><p className="section-label">Budget Mix</p><h2>预算类型占比</h2></div>
+        <span className="report-context">{monthLabel(capacity.target_month)} · {capacity.base_currency}</span>
+      </header>
+      {slices.length > 0 ? (
+        <>
+          <PieAnalyticsChart option={option} label={`${capacity.target_month}预算类型金额占比饼图`} height={300} />
+          <p className="chart-note">按目标月份的月度等价金额和本位币汇总；图中仅展示金额大于 0 的预算类型。</p>
+          <BudgetCategoryDataTable slices={slices} currency={capacity.base_currency} />
+        </>
+      ) : (
+        <div className="chart-empty goal-category-empty">
+          <p>{hasRules ? "现有周期规则在目标月份没有可计入的预算金额。" : "添加周期规则后，这里会按预算类型展示金额占比。"}</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BudgetCategoryDataTable({ slices, currency }: { slices: BudgetCategorySlice[]; currency: string }) {
+  const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+  return (
+    <details className="chart-data-details">
+      <summary>查看类型明细</summary>
+      <div className="table-scroll">
+        <table className="data-table">
+          <caption className="sr-only">预算类型占比明细</caption>
+          <thead><tr><th>预算类型</th><th>月度等价金额</th><th>占比</th></tr></thead>
+          <tbody>{slices.map((slice) => (
+            <tr key={slice.code}>
+              <th>{slice.label}</th>
+              <td>{formatMoney(slice.amount, currency)}</td>
+              <td>{formatPercent(((slice.value / total) * 100).toFixed(2))}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
+function budgetCategorySlices(capacity: FinancialCapacity): BudgetCategorySlice[] {
+  const categories = [
+    { code: "FIXED_INCOME", amount: capacity.stable_income, color: "#2563eb" },
+    { code: "VARIABLE_INCOME", amount: capacity.variable_income, color: "#60a5fa" },
+    { code: "ESSENTIAL_EXPENSE", amount: capacity.essential_expenses, color: "#64748b" },
+    { code: "FIXED_COMMITMENT_EXPENSE", amount: capacity.fixed_commitments, color: "#4f46e5" },
+    { code: "DISCRETIONARY_BUDGET", amount: capacity.discretionary_budget, color: "#a78bfa" },
+  ];
+
+  return categories.flatMap((category) => {
+    const value = decimalValue(category.amount) ?? 0;
+    return value > 0 ? [{ ...category, label: categoryLabel(category.code), value }] : [];
+  });
+}
+
+function budgetCategoryOption(slices: BudgetCategorySlice[], currency: string) {
+  return {
+    tooltip: {
+      trigger: "item",
+      valueFormatter: (value: number | string) => formatMoney(String(value), currency),
+    },
+    legend: {
+      type: "scroll",
+      bottom: 0,
+      left: "center",
+      textStyle: { color: "#64748b", fontSize: 11 },
+    },
+    series: [{
+      name: "预算类型",
+      type: "pie",
+      radius: ["42%", "70%"],
+      center: ["50%", "45%"],
+      avoidLabelOverlap: true,
+      itemStyle: { borderColor: "#ffffff", borderWidth: 2, borderRadius: 4 },
+      label: { color: "#475569", fontSize: 11, formatter: "{b}\n{d}%" },
+      labelLine: { length: 12, length2: 8 },
+      data: slices.map((slice) => ({
+        name: slice.label,
+        value: slice.value,
+        itemStyle: { color: slice.color },
+      })),
+    }],
+  };
 }
 
 function GoalSettings({ goal }: { goal: NextMonthGoal }) {

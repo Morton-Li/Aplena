@@ -25,7 +25,15 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("./shared/components/AnalyticsChart", () => ({
-  AnalyticsChart: ({ label }: { label: string }) => <div role="img" aria-label={label} />,
+  AnalyticsChart: ({ label, option }: { label: string; option: unknown }) => (
+    <div role="img" aria-label={label} data-chart-option={JSON.stringify(option)} />
+  ),
+}));
+
+vi.mock("./shared/components/PieAnalyticsChart", () => ({
+  PieAnalyticsChart: ({ label, option }: { label: string; option: unknown }) => (
+    <div role="img" aria-label={label} data-chart-option={JSON.stringify(option)} />
+  ),
 }));
 
 function BrokenScreen(): never {
@@ -672,6 +680,17 @@ describe("planning workflows", () => {
     expect(ruleRow).toHaveTextContent("2026-08-31");
     expect(ruleRow).toHaveTextContent("长期有效");
     expect(screen.getByRole("img", { name: "2026-09稳定收入分配与剩余承载力瀑布图" })).toBeInTheDocument();
+    const categoryChart = screen.getByRole("img", { name: "2026-09预算类型金额占比饼图" });
+    const categoryOption = JSON.parse(categoryChart.dataset.chartOption ?? "{}") as {
+      series: Array<{ data: Array<{ name: string; value: number }> }>;
+    };
+    expect(categoryOption.series[0].data.map(({ name, value }) => [name, value])).toEqual([
+      ["固定收入", 30000],
+      ["浮动收入", 3000],
+      ["必要支出", 6000],
+      ["固定承诺支出", 3000],
+      ["自主性预算", 2000],
+    ]);
     const input = screen.getByLabelText("下月目标储蓄率");
     await user.clear(input);
     await user.type(input, "25");
@@ -1147,6 +1166,30 @@ describe("dashboard and capacity analytics", () => {
     expect(within(comparisonTable).getByText("¥ 8,427.00")).toBeInTheDocument();
     expect(screen.getAllByText("需关注").length).toBeGreaterThan(0);
     expect(screen.queryByText("¥ 13,000.00")).not.toBeInTheDocument();
+  });
+
+  it("plots missing plan and actual comparison values as zero", async () => {
+    installHarness({
+      analytics: monthAnalytics({
+        income: {
+          planned: "30000.00",
+          actual_to_date: null,
+          variance: null,
+          completion_percent: null,
+          variance_effect: "UNKNOWN",
+        },
+      }),
+    });
+    render(<App />);
+
+    const chart = await screen.findByRole("img", {
+      name: "2026-08收入、支出与净结余计划实际分组柱状图",
+    });
+    const option = JSON.parse(chart.dataset.chartOption ?? "{}") as {
+      series: Array<{ name: string; data: number[] }>;
+    };
+    expect(option.series.find((series) => series.name === "实际")?.data).toEqual([0, 8427, 20273]);
+    expect(screen.getByText("灰蓝代表计划，蓝色代表当前实际；没有实际数据的指标按 0 绘制。")).toBeInTheDocument();
   });
 
   it("does not present an unknown variance as a currency-only amount", async () => {
