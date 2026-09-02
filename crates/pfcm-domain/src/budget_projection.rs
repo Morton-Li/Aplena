@@ -1,32 +1,31 @@
-use rust_decimal::Decimal;
-
 use crate::{
-    Amount, Category, CurrencyCode, DomainError, ExchangeRate, PlanItem, Ratio, SavingsRate,
-    YearMonth, monthly_equivalent,
+    Amount, Category, CurrencyCode, DomainError, ExchangeRate, PlanItem, Ratio, SignedAmount,
+    SignedRatio, YearMonth, monthly_equivalent,
 };
 
 #[derive(Debug, Clone, Copy)]
-pub struct CapacityInput<'a> {
+pub struct ProjectionInput<'a> {
     pub plan_item: &'a PlanItem,
     pub exchange_rate: &'a ExchangeRate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FinancialCapacity {
+pub struct BudgetProjection {
     base_currency: CurrencyCode,
     stable_income: Amount,
     variable_income: Amount,
     essential_expenses: Amount,
     fixed_commitments: Amount,
     discretionary_budget: Amount,
-    minimum_savings_amount: Amount,
-    preserved_capacity: Amount,
-    maximum_capacity: Amount,
+    projected_income: Amount,
+    projected_expenses: Amount,
+    projected_savings: SignedAmount,
+    projected_savings_rate: Option<SignedRatio>,
     fixed_commitment_ratio: Option<Ratio>,
     stable_income_coverage_ratio: Option<Ratio>,
 }
 
-impl FinancialCapacity {
+impl BudgetProjection {
     pub fn base_currency(&self) -> &CurrencyCode {
         &self.base_currency
     }
@@ -51,16 +50,20 @@ impl FinancialCapacity {
         self.discretionary_budget
     }
 
-    pub const fn minimum_savings_amount(&self) -> Amount {
-        self.minimum_savings_amount
+    pub const fn projected_income(&self) -> Amount {
+        self.projected_income
     }
 
-    pub const fn preserved_capacity(&self) -> Amount {
-        self.preserved_capacity
+    pub const fn projected_expenses(&self) -> Amount {
+        self.projected_expenses
     }
 
-    pub const fn maximum_capacity(&self) -> Amount {
-        self.maximum_capacity
+    pub const fn projected_savings(&self) -> SignedAmount {
+        self.projected_savings
+    }
+
+    pub const fn projected_savings_rate(&self) -> Option<SignedRatio> {
+        self.projected_savings_rate
     }
 
     pub const fn fixed_commitment_ratio(&self) -> Option<Ratio> {
@@ -72,12 +75,11 @@ impl FinancialCapacity {
     }
 }
 
-pub fn calculate_financial_capacity(
+pub fn calculate_budget_projection(
     month: YearMonth,
-    target_savings_rate: SavingsRate,
     base_currency: CurrencyCode,
-    inputs: &[CapacityInput<'_>],
-) -> Result<FinancialCapacity, DomainError> {
+    inputs: &[ProjectionInput<'_>],
+) -> Result<BudgetProjection, DomainError> {
     let mut stable_income = Amount::zero();
     let mut variable_income = Amount::zero();
     let mut essential_expenses = Amount::zero();
@@ -109,30 +111,20 @@ pub fn calculate_financial_capacity(
         }
     }
 
-    let minimum_savings_amount = stable_income
-        .as_decimal()
-        .checked_mul(target_savings_rate.factor())
-        .ok_or(DomainError::ArithmeticOverflow)?;
-    let retained_income = stable_income
-        .as_decimal()
-        .checked_sub(minimum_savings_amount)
-        .ok_or(DomainError::ArithmeticOverflow)?;
-    let preserved_capacity = non_negative_difference(
-        retained_income,
-        &[
-            essential_expenses.as_decimal(),
-            fixed_commitments.as_decimal(),
-            discretionary_budget.as_decimal(),
-        ],
+    let projected_income = stable_income.checked_add(variable_income)?;
+    let projected_expenses = essential_expenses
+        .checked_add(fixed_commitments)?
+        .checked_add(discretionary_budget)?;
+    let projected_savings = SignedAmount::from_decimal(
+        projected_income
+            .as_decimal()
+            .checked_sub(projected_expenses.as_decimal())
+            .ok_or(DomainError::ArithmeticOverflow)?,
     )?;
-    let maximum_capacity = non_negative_difference(
-        retained_income,
-        &[
-            essential_expenses.as_decimal(),
-            fixed_commitments.as_decimal(),
-        ],
+    let projected_savings_rate = signed_ratio(
+        projected_savings.as_decimal(),
+        projected_income.as_decimal(),
     )?;
-
     let fixed_commitment_ratio = ratio(fixed_commitments.as_decimal(), stable_income.as_decimal())?;
     let committed_costs = essential_expenses
         .as_decimal()
@@ -140,36 +132,46 @@ pub fn calculate_financial_capacity(
         .ok_or(DomainError::ArithmeticOverflow)?;
     let stable_income_coverage_ratio = ratio(stable_income.as_decimal(), committed_costs)?;
 
-    Ok(FinancialCapacity {
+    Ok(BudgetProjection {
         base_currency,
         stable_income,
         variable_income,
         essential_expenses,
         fixed_commitments,
         discretionary_budget,
-        minimum_savings_amount: Amount::from_decimal(minimum_savings_amount)?,
-        preserved_capacity,
-        maximum_capacity,
+        projected_income,
+        projected_expenses,
+        projected_savings,
+        projected_savings_rate,
         fixed_commitment_ratio,
         stable_income_coverage_ratio,
     })
 }
 
-fn non_negative_difference(value: Decimal, deductions: &[Decimal]) -> Result<Amount, DomainError> {
-    let remaining = deductions.iter().try_fold(value, |current, deduction| {
-        current
-            .checked_sub(*deduction)
-            .ok_or(DomainError::ArithmeticOverflow)
-    })?;
-    Amount::from_decimal(remaining.max(Decimal::ZERO))
-}
-
-fn ratio(numerator: Decimal, denominator: Decimal) -> Result<Option<Ratio>, DomainError> {
+fn ratio(
+    numerator: rust_decimal::Decimal,
+    denominator: rust_decimal::Decimal,
+) -> Result<Option<Ratio>, DomainError> {
     if denominator.is_zero() {
         return Ok(None);
     }
-    let value = numerator
+    numerator
         .checked_div(denominator)
-        .ok_or(DomainError::ArithmeticOverflow)?;
-    Ratio::from_decimal(value).map(Some)
+        .ok_or(DomainError::ArithmeticOverflow)
+        .and_then(Ratio::from_decimal)
+        .map(Some)
+}
+
+fn signed_ratio(
+    numerator: rust_decimal::Decimal,
+    denominator: rust_decimal::Decimal,
+) -> Result<Option<SignedRatio>, DomainError> {
+    if denominator.is_zero() {
+        return Ok(None);
+    }
+    numerator
+        .checked_div(denominator)
+        .ok_or(DomainError::ArithmeticOverflow)
+        .and_then(SignedRatio::from_decimal)
+        .map(Some)
 }

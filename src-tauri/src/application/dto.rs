@@ -15,20 +15,6 @@ pub struct SettingsDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NextMonthGoalInputDto {
-    pub minimum_savings_rate_basis_points: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct NextMonthGoalDto {
-    pub target_month: String,
-    pub minimum_savings_rate_basis_points: u16,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ExchangeRateUpsertDto {
     pub currency: String,
     pub rate: String,
@@ -301,18 +287,18 @@ pub struct HistoryAnalyticsDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct FinancialCapacityDto {
+pub struct BudgetProjectionDto {
     pub target_month: String,
     pub base_currency: String,
-    pub minimum_savings_rate_percent: String,
     pub stable_income: String,
     pub variable_income: String,
     pub essential_expenses: String,
     pub fixed_commitments: String,
     pub discretionary_budget: String,
-    pub minimum_savings_amount: String,
-    pub preserved_capacity: String,
-    pub maximum_capacity: String,
+    pub projected_income: String,
+    pub projected_expenses: String,
+    pub projected_savings: String,
+    pub projected_savings_rate_percent: Option<String>,
     pub fixed_commitment_ratio_percent: Option<String>,
     pub stable_income_coverage_ratio: Option<String>,
 }
@@ -375,30 +361,15 @@ pub struct PlanPreviewDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CapacityItemInputDto {
+pub struct ProjectionItemInputDto {
     pub plan_item: PlanItemInputDto,
     pub exchange_rate: ExchangeRateInputDto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CapacityRequestDto {
+pub struct BudgetProjectionRequestDto {
     pub target_month: String,
     pub base_currency: String,
-    pub target_savings_rate_basis_points: u16,
-    pub items: Vec<CapacityItemInputDto>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CapacityDto {
-    pub base_currency: String,
-    pub stable_income: String,
-    pub variable_income: String,
-    pub essential_expenses: String,
-    pub fixed_commitments: String,
-    pub discretionary_budget: String,
-    pub preserved_capacity: String,
-    pub maximum_capacity: String,
-    pub fixed_commitment_ratio: Option<String>,
-    pub stable_income_coverage_ratio: Option<String>,
+    pub items: Vec<ProjectionItemInputDto>,
 }

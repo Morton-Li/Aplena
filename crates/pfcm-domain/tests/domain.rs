@@ -1,10 +1,10 @@
 use std::str::FromStr;
 
 use pfcm_domain::{
-    ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, CapacityInput,
-    Category, CurrencyCode, DomainError, ExchangeRate, MonthlyItem, MonthlyItemSource, PlanItem,
-    RecognitionMode, SavingsRate, YearMonth, aggregate_actual_entries,
-    calculate_financial_capacity, create_monthly_snapshot, is_effective_in, monthly_equivalent,
+    ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, Category,
+    CurrencyCode, DomainError, ExchangeRate, MonthlyItem, MonthlyItemSource, PlanItem,
+    ProjectionInput, RecognitionMode, YearMonth, aggregate_actual_entries,
+    calculate_budget_projection, create_monthly_snapshot, is_effective_in, monthly_equivalent,
     recognized_amount, scheduled_date_for_month,
 };
 use rust_decimal::Decimal;
@@ -178,7 +178,7 @@ fn payment_schedule_keeps_original_day_anchor_after_clamping() {
 }
 
 #[test]
-fn payment_snapshot_carries_scheduled_date_and_capacity_still_uses_monthly_equivalent() {
+fn payment_snapshot_carries_scheduled_date_and_projection_uses_monthly_equivalent() {
     let item = plan(
         "年付保险",
         Category::EssentialExpense,
@@ -290,7 +290,7 @@ fn manual_monthly_item_is_independent_from_a_plan_and_normalizes_its_name() {
 }
 
 #[test]
-fn financial_capacity_uses_plan_monthly_equivalents_with_two_decimal_outputs() {
+fn budget_projection_uses_plan_monthly_equivalents_with_two_decimal_outputs() {
     let income = plan(
         "工资",
         Category::FixedIncome,
@@ -312,16 +312,15 @@ fn financial_capacity_uses_plan_monthly_equivalents_with_two_decimal_outputs() {
         RecognitionMode::Payment,
     );
     let one = rate("CNY", "CNY", "1");
-    let result = calculate_financial_capacity(
+    let result = calculate_budget_projection(
         month("2026-02"),
-        SavingsRate::from_basis_points(2000).unwrap(),
         currency("CNY"),
         &[
-            CapacityInput {
+            ProjectionInput {
                 plan_item: &income,
                 exchange_rate: &one,
             },
-            CapacityInput {
+            ProjectionInput {
                 plan_item: &commitment,
                 exchange_rate: &one,
             },
@@ -330,5 +329,57 @@ fn financial_capacity_uses_plan_monthly_equivalents_with_two_decimal_outputs() {
     .unwrap();
     assert_eq!(result.stable_income().decimal_string(), "30000.00");
     assert_eq!(result.fixed_commitments().decimal_string(), "3000.00");
-    assert_eq!(result.maximum_capacity().decimal_string(), "21000.00");
+    assert_eq!(result.projected_income().decimal_string(), "30000.00");
+    assert_eq!(result.projected_expenses().decimal_string(), "3000.00");
+    assert_eq!(result.projected_savings().decimal_string(), "27000.00");
+    assert_eq!(
+        result.projected_savings_rate().unwrap().decimal_string(),
+        "0.90000000"
+    );
+}
+
+#[test]
+fn budget_projection_preserves_a_negative_savings_result() {
+    let income = plan(
+        "工资",
+        Category::FixedIncome,
+        "10000",
+        "CNY",
+        1,
+        "2026-01-01",
+        None,
+        RecognitionMode::Amortized,
+    );
+    let expense = plan(
+        "必要支出",
+        Category::EssentialExpense,
+        "12000",
+        "CNY",
+        1,
+        "2026-01-01",
+        None,
+        RecognitionMode::Amortized,
+    );
+    let one = rate("CNY", "CNY", "1");
+    let result = calculate_budget_projection(
+        month("2026-02"),
+        currency("CNY"),
+        &[
+            ProjectionInput {
+                plan_item: &income,
+                exchange_rate: &one,
+            },
+            ProjectionInput {
+                plan_item: &expense,
+                exchange_rate: &one,
+            },
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(result.projected_savings().decimal_string(), "-2000.00");
+    assert_eq!(
+        result.projected_savings_rate().unwrap().decimal_string(),
+        "-0.20000000"
+    );
 }

@@ -38,17 +38,17 @@ pnpm tauri:dev
 ### 2.1 分层
 
 ```text
-crates/pfcm-domain/   纯 Rust 领域类型、日期、金额与承载公式
+crates/pfcm-domain/   纯 Rust 领域类型、日期、金额与预算投影公式
 src-tauri/            应用服务、SQLite、迁移、IPC 与桌面入口
 src/                  React 页面、查询缓存、交互与图表
 docs/                 产品、领域、架构、数据库和发行决策
 ```
 
-依赖方向为 `React → Tauri IPC → Application → Domain / Infrastructure`。金额、日期计入、偏差、比例和承载能力由 Rust 后端权威计算；前端不复制财务公式，也不直接访问数据库。
+依赖方向为 `React → Tauri IPC → Application → Domain / Infrastructure`。金额、日期计入、偏差、比例和预算投影由 Rust 后端权威计算；前端不复制财务公式，也不直接访问数据库。
 
 ### 2.2 数据库
 
-首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1；当前应用继续执行 `0002_remove_monthly_item_status.sql` 到 schema 2。已发布迁移不可修改，只能追加。预发布数据库迁移链不属于公开兼容范围，换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
+首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1；当前应用继续执行 `0002_remove_monthly_item_status.sql` 与 `0003_remove_next_month_goal.sql` 到 schema 3。schema 3 直接删除旧目标表及数据。已发布迁移不可修改，只能追加。预发布数据库迁移链不属于公开兼容范围，换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
 
 本地 SQLite 使用外键、STRICT 表和 WAL，并将数据目录限制为 `0700`、数据库及 WAL/SHM 限制为 `0600`。数据库文件未静态加密，具体决策见 [ADR 0006](adr/0006-database-encryption-release-gate.md)。
 

@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use pfcm_domain::{
     ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, Category,
-    CurrencyCode, ExchangeRate, FlowType, MonthlyItem, MonthlyItemSource, NextMonthGoal, PlanItem,
+    CurrencyCode, ExchangeRate, FlowType, MonthlyItem, MonthlyItemSource, PlanItem,
     RecognitionMode, Settings, SignedAmount, YearMonth,
 };
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, pool::PoolConnection};
@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::{
     ActualEntryExchangeSnapshot, DeletePlanResult, StoreError, StoredActualEntry,
-    StoredExchangeRate, StoredMonthlyItem, StoredNextMonthGoal, StoredPlanItem, StoredSettings,
+    StoredExchangeRate, StoredMonthlyItem, StoredPlanItem, StoredSettings,
 };
 
 #[derive(Debug, Clone)]
@@ -99,41 +99,6 @@ impl Store {
         require_changed(result.rows_affected())?;
         transaction.commit().await?;
         self.get_settings()
-            .await?
-            .ok_or(StoreError::Database(sqlx::Error::RowNotFound))
-    }
-
-    pub async fn get_next_month_goal(&self) -> Result<Option<StoredNextMonthGoal>, StoreError> {
-        let row = sqlx::query(
-            "SELECT target_month, minimum_savings_rate_bp, created_at, updated_at \
-             FROM next_month_goal WHERE id = 1",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        row.as_ref().map(next_month_goal_from_row).transpose()
-    }
-
-    pub async fn upsert_next_month_goal(
-        &self,
-        goal: &NextMonthGoal,
-        timestamp: &str,
-    ) -> Result<StoredNextMonthGoal, StoreError> {
-        sqlx::query(
-            "INSERT INTO next_month_goal \
-               (id, target_month, minimum_savings_rate_bp, created_at, updated_at) \
-             VALUES (1, ?, ?, ?, ?) \
-             ON CONFLICT(id) DO UPDATE SET \
-               target_month = excluded.target_month, \
-               minimum_savings_rate_bp = excluded.minimum_savings_rate_bp, \
-               updated_at = excluded.updated_at",
-        )
-        .bind(goal.target_month().database_anchor())
-        .bind(i64::from(goal.minimum_savings_rate().basis_points()))
-        .bind(timestamp)
-        .bind(timestamp)
-        .execute(&self.pool)
-        .await?;
-        self.get_next_month_goal()
             .await?
             .ok_or(StoreError::Database(sqlx::Error::RowNotFound))
     }
@@ -685,23 +650,6 @@ fn settings_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredSettings, St
     let base_currency: String = row.try_get("base_currency_code")?;
     Ok(StoredSettings {
         value: Settings::new(CurrencyCode::new(base_currency)?)?,
-        created_at: row.try_get("created_at")?,
-        updated_at: row.try_get("updated_at")?,
-    })
-}
-
-fn next_month_goal_from_row(
-    row: &sqlx::sqlite::SqliteRow,
-) -> Result<StoredNextMonthGoal, StoreError> {
-    let target_month: String = row.try_get("target_month")?;
-    let savings_rate: i64 = row.try_get("minimum_savings_rate_bp")?;
-    let savings_rate = u16::try_from(savings_rate)
-        .map_err(|_| StoreError::Domain(pfcm_domain::DomainError::InvalidSavingsRate))?;
-    Ok(StoredNextMonthGoal {
-        value: NextMonthGoal::new(
-            YearMonth::from_database_anchor(&target_month)?,
-            savings_rate,
-        )?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

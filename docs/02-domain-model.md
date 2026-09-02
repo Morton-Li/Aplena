@@ -8,7 +8,7 @@ ExchangeRate ──> MonthInitialization ──> MonthlyItem
 PlanItem ─┘                                │
                                           └── ActualEntry
 
-NextMonthGoal + PlanItem ──> FinancialCapacity
+PlanItem + ExchangeRate ───> BudgetProjection
 MonthlyItem + ActualEntry ──> Analytics
 ```
 
@@ -88,16 +88,7 @@ MonthlyItem + ActualEntry ──> Analytics
 
 存在任何月度快照后不能切换本位币。
 
-### 4.2 `NextMonthGoal`
-
-| 字段 | 约束 |
-|---|---|
-| `target_month` | 后端计算的下一个自然月，客户端不可指定 |
-| `minimum_savings_rate_bp` | 0–10000 基点 |
-
-它只用于下月承载力投影。跨月后旧目标不转为本月报表口径，系统为新的下一个自然月建立默认目标。
-
-### 4.3 `PlanItem`
+### 4.2 `PlanItem`
 
 | 字段 | 约束 |
 |---|---|
@@ -112,7 +103,7 @@ MonthlyItem + ActualEntry ──> Analytics
 | `recognition_mode` | `AMORTIZED` / `PAYMENT` |
 | `note` | 可空 |
 
-### 4.4 `MonthlyItem`
+### 4.3 `MonthlyItem`
 
 | 字段 | 语义 |
 |---|---|
@@ -128,7 +119,7 @@ MonthlyItem + ActualEntry ──> Analytics
 
 `actual_amount`、条目数、偏差和完成率是查询投影，不是持久化字段。月度类目没有确认或完成状态。
 
-### 4.5 `ActualEntry`
+### 4.4 `ActualEntry`
 
 | 字段 | 约束 |
 |---|---|
@@ -236,6 +227,17 @@ planned = ROUND_HALF_UP(amount × rate, 2)
 - 项目、类别、月度、历史趋势和重要偏差均从同一查询口径派生；
 - 除数为零时比例为 `null`，不得输出 NaN 或无穷大。
 
+下月预算投影读取下一个自然月有效的周期规则及汇率，以月度等价金额计算：
+
+```text
+projected_income = stable_income + variable_income
+projected_expenses = essential_expenses + fixed_commitments + discretionary_budget
+projected_savings = projected_income - projected_expenses
+projected_savings_rate = projected_savings / projected_income
+```
+
+`projected_savings` 使用带符号金额并保留负缺口；收入为零时储蓄率为 `null`。投影不持久化，也不读取独立储蓄目标。
+
 ## 10. 不变量
 
 1. 月度快照币种等于创建时本位币；
@@ -258,6 +260,6 @@ planned = ROUND_HALF_UP(amount × rate, 2)
 - `ensure_actual_only_monthly_item`；
 - `create_manual_monthly_item`、`delete_manual_monthly_item`；
 - `list/create/update/delete_actual_entry`；
-- 月度、历史与承载能力查询。
+- 月度、历史与下月预算投影查询。
 
 所有金额跨 IPC 使用字符串，错误返回稳定错误码、可选字段名和本地化消息键。

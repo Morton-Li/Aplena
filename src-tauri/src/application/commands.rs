@@ -1,25 +1,25 @@
 use std::str::FromStr;
 
 use pfcm_domain::{
-    Amount, CalendarDate, CapacityInput, Category, CurrencyCode, ExchangeRate, PlanItem,
-    RecognitionMode, SavingsRate, YearMonth, calculate_financial_capacity, is_effective_in,
+    Amount, CalendarDate, Category, CurrencyCode, ExchangeRate, PlanItem, ProjectionInput,
+    RecognitionMode, YearMonth, calculate_budget_projection as project_budget, is_effective_in,
     monthly_equivalent, recognized_amount, scheduled_date_for_month,
 };
+use rust_decimal::{Decimal, RoundingStrategy};
 use uuid::Uuid;
 
 use tauri::State;
 
 use super::{
     dto::{
-        ActualEntryDto, ActualEntryInputDto, CapacityDto, CapacityRequestDto,
+        ActualEntryDto, ActualEntryInputDto, BudgetProjectionDto, BudgetProjectionRequestDto,
         DeleteManualMonthlyItemInputDto, DeletePlanItemDto, DomainContractDto,
         EnsureActualOnlyInputDto, EnumOptionDto, ExchangeRateDto, ExchangeRateInputDto,
-        ExchangeRateUpsertDto, FinancialCapacityDto, HistoryAnalyticsDto, InitializeMonthDto,
-        InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
-        MonthInitializationStatusDto, MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto,
-        NextMonthGoalDto, NextMonthGoalInputDto, PlanItemDto, PlanItemInputDto, PlanPreviewDto,
-        PlanPreviewRequestDto, ReferenceRateImportDto, SettingsDto, SettingsInputDto,
-        StartupStatusDto, StopPlanItemRequestDto,
+        ExchangeRateUpsertDto, HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto,
+        ManualMonthlyItemInputDto, MonthAnalyticsDto, MonthInitializationStatusDto,
+        MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto,
+        PlanPreviewDto, PlanPreviewRequestDto, ReferenceRateImportDto, SettingsDto,
+        SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
     },
     error::AppError,
     service::FinanceService,
@@ -52,21 +52,6 @@ pub async fn save_settings(
     input: SettingsInputDto,
 ) -> Result<SettingsDto, AppError> {
     service.save_settings(input).await
-}
-
-#[tauri::command]
-pub async fn get_next_month_goal(
-    service: State<'_, FinanceService>,
-) -> Result<NextMonthGoalDto, AppError> {
-    service.get_next_month_goal().await
-}
-
-#[tauri::command]
-pub async fn save_next_month_goal(
-    service: State<'_, FinanceService>,
-    input: NextMonthGoalInputDto,
-) -> Result<NextMonthGoalDto, AppError> {
-    service.save_next_month_goal(input).await
 }
 
 #[tauri::command]
@@ -258,10 +243,10 @@ pub async fn get_history_analytics(
 }
 
 #[tauri::command]
-pub async fn get_financial_capacity(
+pub async fn get_budget_projection(
     service: State<'_, FinanceService>,
-) -> Result<FinancialCapacityDto, AppError> {
-    service.financial_capacity().await
+) -> Result<BudgetProjectionDto, AppError> {
+    service.budget_projection().await
 }
 
 #[tauri::command]
@@ -307,12 +292,12 @@ pub fn preview_plan_item(request: PlanPreviewRequestDto) -> Result<PlanPreviewDt
 }
 
 #[tauri::command]
-pub fn calculate_capacity(request: CapacityRequestDto) -> Result<CapacityDto, AppError> {
+pub fn calculate_budget_projection(
+    request: BudgetProjectionRequestDto,
+) -> Result<BudgetProjectionDto, AppError> {
     let target_month = parse_month(&request.target_month, "targetMonth")?;
     let base_currency = CurrencyCode::new(&request.base_currency)
         .map_err(|error| AppError::from_domain(error, Some("baseCurrency")))?;
-    let savings_rate = SavingsRate::from_basis_points(request.target_savings_rate_basis_points)
-        .map_err(|error| AppError::from_domain(error, Some("targetSavingsRateBasisPoints")))?;
 
     let parsed = request
         .items
@@ -326,30 +311,45 @@ pub fn calculate_capacity(request: CapacityRequestDto) -> Result<CapacityDto, Ap
         .collect::<Result<Vec<_>, AppError>>()?;
     let inputs = parsed
         .iter()
-        .map(|(plan_item, exchange_rate)| CapacityInput {
+        .map(|(plan_item, exchange_rate)| ProjectionInput {
             plan_item,
             exchange_rate,
         })
         .collect::<Vec<_>>();
-    let result = calculate_financial_capacity(target_month, savings_rate, base_currency, &inputs)
+    let result = project_budget(target_month, base_currency, &inputs)
         .map_err(|error| AppError::from_domain(error, None))?;
 
-    Ok(CapacityDto {
+    Ok(BudgetProjectionDto {
+        target_month: target_month.to_string(),
         base_currency: result.base_currency().to_string(),
         stable_income: result.stable_income().decimal_string(),
         variable_income: result.variable_income().decimal_string(),
         essential_expenses: result.essential_expenses().decimal_string(),
         fixed_commitments: result.fixed_commitments().decimal_string(),
         discretionary_budget: result.discretionary_budget().decimal_string(),
-        preserved_capacity: result.preserved_capacity().decimal_string(),
-        maximum_capacity: result.maximum_capacity().decimal_string(),
-        fixed_commitment_ratio: result
+        projected_income: result.projected_income().decimal_string(),
+        projected_expenses: result.projected_expenses().decimal_string(),
+        projected_savings: result.projected_savings().decimal_string(),
+        projected_savings_rate_percent: result
+            .projected_savings_rate()
+            .map(|ratio| percent_string(ratio.as_decimal())),
+        fixed_commitment_ratio_percent: result
             .fixed_commitment_ratio()
-            .map(|ratio| ratio.decimal_string()),
+            .map(|ratio| percent_string(ratio.as_decimal())),
         stable_income_coverage_ratio: result
             .stable_income_coverage_ratio()
-            .map(|ratio| ratio.decimal_string()),
+            .map(|ratio| decimal_string(ratio.as_decimal(), 2)),
     })
+}
+
+fn percent_string(value: Decimal) -> String {
+    decimal_string(value * Decimal::ONE_HUNDRED, 2)
+}
+
+fn decimal_string(mut value: Decimal, scale: u32) -> String {
+    value = value.round_dp_with_strategy(scale, RoundingStrategy::MidpointAwayFromZero);
+    value.rescale(scale);
+    value.to_string()
 }
 
 fn option(code: &str, label: &str) -> EnumOptionDto {
@@ -442,7 +442,7 @@ fn parse_recognition_mode(value: &str) -> Result<RecognitionMode, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::dto::{CapacityItemInputDto, CapacityRequestDto};
+    use crate::application::dto::{BudgetProjectionRequestDto, ProjectionItemInputDto};
 
     fn plan_input(
         name: &str,
@@ -500,17 +500,16 @@ mod tests {
     }
 
     #[test]
-    fn capacity_command_uses_monthly_equivalent_for_payment_mode() {
-        let request = CapacityRequestDto {
+    fn budget_projection_command_uses_monthly_equivalent_for_payment_mode() {
+        let request = BudgetProjectionRequestDto {
             target_month: "2026-02".to_owned(),
             base_currency: "CNY".to_owned(),
-            target_savings_rate_basis_points: 2000,
             items: vec![
-                CapacityItemInputDto {
+                ProjectionItemInputDto {
                     plan_item: plan_input("工资", "FIXED_INCOME", "30000", 1, "PAYMENT"),
                     exchange_rate: cny_rate(),
                 },
-                CapacityItemInputDto {
+                ProjectionItemInputDto {
                     plan_item: plan_input(
                         "年度承诺",
                         "FIXED_COMMITMENT_EXPENSE",
@@ -523,11 +522,14 @@ mod tests {
             ],
         };
 
-        let result = calculate_capacity(request).unwrap();
+        let result = calculate_budget_projection(request).unwrap();
         assert_eq!(result.stable_income, "30000.00");
         assert_eq!(result.fixed_commitments, "3000.00");
-        assert_eq!(result.maximum_capacity, "21000.00");
-        assert_eq!(result.fixed_commitment_ratio.as_deref(), Some("0.10000000"));
+        assert_eq!(result.projected_savings, "27000.00");
+        assert_eq!(
+            result.fixed_commitment_ratio_percent.as_deref(),
+            Some("10.00")
+        );
     }
 
     #[test]
