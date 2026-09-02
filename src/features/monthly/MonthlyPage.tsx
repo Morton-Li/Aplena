@@ -345,12 +345,12 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
     footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending} type="button" onClick={saveEntry}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
   >
     <div className="entry-detail-grid">
-      <label>日期<input autoFocus data-dialog-initial-focus type="date" min={`${month}-01`} max={`${month}-${new Date(Number(month.slice(0,4)), Number(month.slice(5,7)), 0).getDate()}`} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
+      <label>日期<input type="date" min={`${month}-01`} max={`${month}-${new Date(Number(month.slice(0,4)), Number(month.slice(5,7)), 0).getDate()}`} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
       <label>类型<Select ariaLabel="类型" value={effect} onChange={(value) => setEffect(value as "INCREASE" | "DECREASE")} options={[{ value: "INCREASE", label: increaseLabel }, { value: "DECREASE", label: decreaseLabel }]} /></label>
     </div>
     <div className="entry-money-grid">
       <label>币种<Select ariaLabel="实际条目币种" disabled={Boolean(existing)} value={currency} onChange={setCurrency} options={currencyOptions} /></label>
-      <label>原币金额<input aria-label="原币金额" aria-invalid={(saveAttempted && amountIsInvalid) || undefined} inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} />{saveAttempted && amountIsInvalid && <em role="alert">请输入大于 0、最多两位小数的金额。</em>}</label>
+      <label>原币金额<input autoFocus data-dialog-initial-focus aria-label="原币金额" aria-invalid={(saveAttempted && amountIsInvalid) || undefined} inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} />{saveAttempted && amountIsInvalid && <em role="alert">请输入大于 0、最多两位小数的金额。</em>}</label>
     </div>
     <div className="entry-rate-snapshot" aria-live="polite">
       <span>本次换算基准</span>

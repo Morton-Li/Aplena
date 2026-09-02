@@ -745,7 +745,9 @@ describe("planning workflows", () => {
     expect(screen.getByRole("dialog", { name: "添加支出或退款" })).toBeInTheDocument();
     const expectedDate = defaultActualEntryDate("2026-08");
     expect(screen.getByLabelText("日期")).toHaveValue(expectedDate);
-    await user.type(screen.getByLabelText("原币金额"), "427.25");
+    const amountInput = screen.getByLabelText("原币金额");
+    expect(amountInput).toHaveFocus();
+    await user.type(amountInput, "427.25");
     await user.click(screen.getByLabelText("类型"));
     await user.click(screen.getByRole("option", { name: "退款" }));
     await user.click(screen.getByRole("button", { name: "保存条目" }));
@@ -1150,7 +1152,7 @@ describe("dashboard and budget projection analytics", () => {
     expect(screen.queryByText("¥ 13,000.00")).not.toBeInTheDocument();
   });
 
-  it("plots missing comparison, category, and savings trend values as zero", async () => {
+  it("plots missing bars as zero while completed trend months use zero and the current month stays disconnected", async () => {
     installHarness({
       analytics: monthAnalytics({
         income: {
@@ -1163,11 +1165,60 @@ describe("dashboard and budget projection analytics", () => {
       }),
       history: [
         monthAnalytics({
+          month: "2026-06",
+        }),
+        monthAnalytics({
           month: "2026-07",
+          income: {
+            planned: "30000.00",
+            actual_to_date: null,
+            variance: null,
+            completion_percent: null,
+            variance_effect: "UNKNOWN",
+          },
+          expense: {
+            planned: "10000.00",
+            actual_to_date: null,
+            variance: null,
+            completion_percent: null,
+            variance_effect: "UNKNOWN",
+          },
+          net_balance: {
+            planned: "20000.00",
+            actual_to_date: null,
+            variance: null,
+            completion_percent: null,
+            variance_effect: "UNKNOWN",
+          },
           planned_savings_rate_percent: null,
           actual_savings_rate_percent: null,
         }),
-        monthAnalytics(),
+        monthAnalytics({
+          month: "2026-08",
+          income: {
+            planned: "30000.00",
+            actual_to_date: null,
+            variance: null,
+            completion_percent: null,
+            variance_effect: "UNKNOWN",
+          },
+          expense: {
+            planned: "10000.00",
+            actual_to_date: null,
+            variance: null,
+            completion_percent: null,
+            variance_effect: "UNKNOWN",
+          },
+          net_balance: {
+            planned: "20000.00",
+            actual_to_date: null,
+            variance: null,
+            completion_percent: null,
+            variance_effect: "UNKNOWN",
+          },
+          planned_savings_rate_percent: null,
+          actual_savings_rate_percent: null,
+        }),
       ],
     });
     render(<App />);
@@ -1186,14 +1237,23 @@ describe("dashboard and budget projection analytics", () => {
       series: Array<{ name: string; data: number[] }>;
     };
     expect(categoryOption.series.find((series) => series.name === "实际")?.data).toEqual([6427, 2000, 0]);
+    const trendChart = screen.getByRole("img", {
+      name: "近八个月实际收入、支出与净结余趋势图",
+    });
+    const trendOption = JSON.parse(trendChart.dataset.chartOption ?? "{}") as {
+      series: Array<{ name: string; data: Array<number | null> }>;
+    };
+    expect(trendOption.series.find((series) => series.name === "收入")?.data).toEqual([28700, 0, null]);
+    expect(trendOption.series.find((series) => series.name === "支出")?.data).toEqual([8427, 0, null]);
+    expect(trendOption.series.find((series) => series.name === "净结余")?.data).toEqual([20273, 0, null]);
     const savingsChart = screen.getByRole("img", {
       name: "近八个月计划储蓄率与实际储蓄率趋势图",
     });
     const savingsOption = JSON.parse(savingsChart.dataset.chartOption ?? "{}") as {
-      series: Array<{ name: string; data: number[] }>;
+      series: Array<{ name: string; data: Array<number | null> }>;
     };
-    expect(savingsOption.series.find((series) => series.name === "计划储蓄率")?.data).toEqual([0, 69]);
-    expect(savingsOption.series.find((series) => series.name === "实际储蓄率")?.data).toEqual([0, 70.64]);
+    expect(savingsOption.series.find((series) => series.name === "计划储蓄率")?.data).toEqual([69, 0, null]);
+    expect(savingsOption.series.find((series) => series.name === "实际储蓄率")?.data).toEqual([70.64, 0, null]);
     expect(screen.getByText("灰蓝代表计划，蓝色代表当前实际；没有实际数据的指标按 0 绘制。")).toBeInTheDocument();
   });
 

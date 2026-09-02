@@ -216,10 +216,13 @@ function DashboardCharts({
 }) {
   const recentHistory = useMemo(() => history.slice(-8), [history]);
   const trendOption = useMemo(
-    () => financialTrendOption(recentHistory, analytics.currency),
-    [analytics.currency, recentHistory],
+    () => financialTrendOption(recentHistory, analytics.month, analytics.currency),
+    [analytics.currency, analytics.month, recentHistory],
   );
-  const savingsOption = useMemo(() => savingsTrendOption(recentHistory), [recentHistory]);
+  const savingsOption = useMemo(
+    () => savingsTrendOption(recentHistory, analytics.month),
+    [analytics.month, recentHistory],
+  );
   const comparisonOption = useMemo(() => planActualOption(analytics, hasPlanBaseline), [analytics, hasPlanBaseline]);
   const expenses = useMemo(
     () =>
@@ -239,7 +242,7 @@ function DashboardCharts({
     <section className="dashboard-chart-section" aria-label="财务图表">
       <div className="dashboard-chart-grid dashboard-chart-grid-primary">
         <ReportCard eyebrow="历史趋势" title="收入、支出与净结余">
-          {hasActualHistory(recentHistory) ? (
+          {hasActualHistory(recentHistory, analytics.month) ? (
             <ChartDataFlip
               front={<AnalyticsChart option={trendOption} label="近八个月实际收入、支出与净结余趋势图" height={244} />}
               back={<TrendDataTable months={recentHistory} currency={analytics.currency} />}
@@ -267,7 +270,7 @@ function DashboardCharts({
           )}
         </ReportCard>
         <ReportCard eyebrow="储蓄表现" title="计划与实际储蓄率趋势">
-          {hasSavingsHistory(recentHistory) ? (
+          {hasSavingsHistory(recentHistory, analytics.month) ? (
             <ChartDataFlip
               front={<AnalyticsChart option={savingsOption} label="近八个月计划储蓄率与实际储蓄率趋势图" height={244} />}
               back={<SavingsTrendDataTable months={recentHistory} />}
@@ -390,27 +393,26 @@ function DashboardLoading() {
   return <><header className="page-header compact-header"><div><p className="eyebrow">财务总览</p><h1>正在汇总本月报表</h1></div></header><section className="dashboard-loading" aria-label="正在加载财务总览"><div className="workspace-skeleton workspace-skeleton-wide" /><div className="workspace-skeleton-grid"><div className="workspace-skeleton" /><div className="workspace-skeleton" /><div className="workspace-skeleton" /></div></section></>;
 }
 
-function financialTrendOption(months: MonthAnalytics[], currency: string) {
+function financialTrendOption(months: MonthAnalytics[], currentMonth: string, currency: string) {
   const visible = months.slice(-8);
   return {
-    tooltip: { trigger: "axis", valueFormatter: (value: number | string) => formatMoney(String(value), currency) },
+    tooltip: { trigger: "axis", valueFormatter: (value: number | string | null | undefined) => chartMoney(value, currency) },
     legend: { top: 0, left: 0, data: ["收入", "支出", "净结余"], textStyle: chartText },
     grid: { left: 72, right: 18, top: 48, bottom: 36 },
     xAxis: { type: "category", boundaryGap: false, data: visible.map((month) => month.month.slice(2)), axisLabel: chartText, axisLine },
     yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => compactMoney(value, currency) }, splitLine },
     series: [
-      { name: "收入", type: "line", data: visible.map((month) => decimalValue(month.income.actual_to_date)), symbolSize: 6, itemStyle: { color: "#2563eb" }, lineStyle: { width: 2, color: "#2563eb" }, connectNulls: false },
-      { name: "支出", type: "line", data: visible.map((month) => decimalValue(month.expense.actual_to_date)), symbolSize: 6, itemStyle: { color: "#64748b" }, lineStyle: { width: 2, color: "#64748b" }, connectNulls: false },
-      { name: "净结余", type: "line", data: visible.map((month) => decimalValue(month.net_balance.actual_to_date)), symbolSize: 6, itemStyle: { color: "#4f46e5" }, lineStyle: { width: 2, color: "#4f46e5" }, connectNulls: false },
+      { name: "收入", type: "line", data: visible.map((month) => completedMonthChartValue(month.month, currentMonth, month.income.actual_to_date)), symbolSize: 6, itemStyle: { color: "#2563eb" }, lineStyle: { width: 2, color: "#2563eb" }, connectNulls: false },
+      { name: "支出", type: "line", data: visible.map((month) => completedMonthChartValue(month.month, currentMonth, month.expense.actual_to_date)), symbolSize: 6, itemStyle: { color: "#64748b" }, lineStyle: { width: 2, color: "#64748b" }, connectNulls: false },
+      { name: "净结余", type: "line", data: visible.map((month) => completedMonthChartValue(month.month, currentMonth, month.net_balance.actual_to_date)), symbolSize: 6, itemStyle: { color: "#4f46e5" }, lineStyle: { width: 2, color: "#4f46e5" }, connectNulls: false },
     ],
   };
 }
 
-function savingsTrendOption(months: MonthAnalytics[]) {
+function savingsTrendOption(months: MonthAnalytics[], currentMonth: string) {
   const visible = months.slice(-8);
-  const chartValue = (value: string | null) => decimalValue(value) ?? 0;
   return {
-    tooltip: { trigger: "axis", valueFormatter: (value: number | string) => `${value ?? 0}%` },
+    tooltip: { trigger: "axis", valueFormatter: (value: number | string | null | undefined) => chartPercent(value) },
     legend: { top: 0, left: 0, data: ["计划储蓄率", "实际储蓄率"], textStyle: chartText },
     grid: { left: 52, right: 18, top: 48, bottom: 36 },
     xAxis: { type: "category", boundaryGap: false, data: visible.map((month) => month.month.slice(2)), axisLabel: chartText, axisLine },
@@ -419,7 +421,11 @@ function savingsTrendOption(months: MonthAnalytics[]) {
       {
         name: "计划储蓄率",
         type: "line",
-        data: visible.map((month) => month.planned_item_count > 0 ? chartValue(month.planned_savings_rate_percent) : 0),
+        data: visible.map((month) => completedMonthChartValue(
+          month.month,
+          currentMonth,
+          month.planned_item_count > 0 ? month.planned_savings_rate_percent : null,
+        )),
         symbolSize: 6,
         itemStyle: { color: "#94a3b8" },
         lineStyle: { width: 2, color: "#94a3b8", type: "dashed" },
@@ -428,7 +434,7 @@ function savingsTrendOption(months: MonthAnalytics[]) {
       {
         name: "实际储蓄率",
         type: "line",
-        data: visible.map((month) => chartValue(month.actual_savings_rate_percent)),
+        data: visible.map((month) => completedMonthChartValue(month.month, currentMonth, month.actual_savings_rate_percent)),
         symbolSize: 6,
         itemStyle: { color: "#2563eb" },
         lineStyle: { width: 2, color: "#2563eb" },
@@ -479,12 +485,24 @@ function expenseStructureOption(categories: CategoryBreakdown[], currency: strin
   };
 }
 
-function hasActualHistory(months: MonthAnalytics[]) {
-  return months.some((month) => month.income.actual_to_date !== null || month.expense.actual_to_date !== null || month.net_balance.actual_to_date !== null);
+function completedMonthChartValue(month: string, currentMonth: string, value: string | null) {
+  return decimalValue(value) ?? (month < currentMonth ? 0 : null);
 }
 
-function hasSavingsHistory(months: MonthAnalytics[]) {
-  return months.some((month) => month.actual_savings_rate_percent !== null);
+function chartMoney(value: number | string | null | undefined, currency: string) {
+  return value === null || value === undefined || value === "-" ? "—" : formatMoney(String(value), currency);
+}
+
+function chartPercent(value: number | string | null | undefined) {
+  return value === null || value === undefined || value === "-" ? "—" : `${value}%`;
+}
+
+function hasActualHistory(months: MonthAnalytics[], currentMonth: string) {
+  return months.some((month) => month.month < currentMonth || month.income.actual_to_date !== null || month.expense.actual_to_date !== null || month.net_balance.actual_to_date !== null);
+}
+
+function hasSavingsHistory(months: MonthAnalytics[], currentMonth: string) {
+  return months.some((month) => month.month < currentMonth || month.planned_savings_rate_percent !== null || month.actual_savings_rate_percent !== null);
 }
 
 function comparisonDetail(comparison: AmountComparison, currency: string, actualQualifier: string) {
