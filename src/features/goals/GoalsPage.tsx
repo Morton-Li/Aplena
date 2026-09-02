@@ -1,19 +1,14 @@
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
 
 import {
-  getFinancialCapacity,
-  getNextMonthGoal,
+  getBudgetProjection,
   listPlanItems,
   queryKeys,
-  saveNextMonthGoal,
-  type FinancialCapacity,
-  type NextMonthGoal,
+  type BudgetProjection,
 } from "../../shared/api/finance";
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
+import { ChartDataFlip } from "../../shared/components/ChartDataFlip";
 import { PieAnalyticsChart } from "../../shared/components/PieAnalyticsChart";
 import { describeError } from "../../shared/formatting/errors";
 import {
@@ -26,26 +21,21 @@ import {
 import { categoryLabel } from "../../shared/formatting/labels";
 import { RecurringRulesPanel } from "./RecurringRulesPanel";
 
-const goalSchema = z.object({
-  savingsRatePercent: z.number().min(0, "目标不能低于 0%").max(100, "目标不能高于 100%"),
-});
-
-type GoalValues = z.infer<typeof goalSchema>;
-
 export function GoalsPage() {
-  const goalQuery = useQuery({ queryKey: queryKeys.nextMonthGoal, queryFn: () => getNextMonthGoal() });
-  const capacityQuery = useQuery({ queryKey: queryKeys.capacity, queryFn: () => getFinancialCapacity() });
+  const projectionQuery = useQuery({
+    queryKey: queryKeys.budgetProjection,
+    queryFn: () => getBudgetProjection(),
+  });
   const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
 
-  if (goalQuery.isPending || capacityQuery.isPending || plansQuery.isPending) {
+  if (projectionQuery.isPending || plansQuery.isPending) {
     return <GoalLoading />;
   }
-  if (goalQuery.isError || capacityQuery.isError || plansQuery.isError) {
-    return <section className="state-card state-card-error"><span role="alert">{describeError(goalQuery.error ?? capacityQuery.error ?? plansQuery.error)}</span></section>;
+  if (projectionQuery.isError || plansQuery.isError) {
+    return <section className="state-card state-card-error"><span role="alert">{describeError(projectionQuery.error ?? plansQuery.error)}</span></section>;
   }
 
-  const goal = goalQuery.data;
-  const capacity = capacityQuery.data;
+  const projection = projectionQuery.data;
   const hasRules = plansQuery.data.length > 0;
 
   return (
@@ -54,18 +44,17 @@ export function GoalsPage() {
         <div>
           <p className="eyebrow">下月规划</p>
           <h1>配置预算</h1>
-          <p>为 {monthLabel(goal.target_month)} 设定储蓄目标并评估承载能力。</p>
+          <p>根据周期规则汇总 {monthLabel(projection.target_month)} 的预计收支与储蓄结果。</p>
         </div>
-        <div className="goal-month-badge"><span>目标期间</span><strong>{goal.target_month}</strong><small>由系统自动推进</small></div>
+        <div className="goal-month-badge"><span>预算期间</span><strong>{projection.target_month}</strong><small>由系统自动推进</small></div>
       </header>
 
       <div className="goal-overview-grid">
-        <GoalSettings goal={goal} />
-        <CapacitySummary capacity={capacity} hasRules={hasRules} />
+        <BudgetProjectionSummary projection={projection} hasRules={hasRules} />
+        <ExpenseCategorySummary projection={projection} hasRules={hasRules} />
       </div>
 
-      <BudgetCategorySummary capacity={capacity} hasRules={hasRules} />
-      <RecurringRulesPanel targetMonth={goal.target_month} />
+      <RecurringRulesPanel targetMonth={projection.target_month} />
     </>
   );
 }
@@ -73,68 +62,150 @@ export function GoalsPage() {
 interface BudgetCategorySlice {
   code: string;
   label: string;
+  chartLabel: string;
   amount: string;
   value: number;
   color: string;
 }
 
-function BudgetCategorySummary({ capacity, hasRules }: { capacity: FinancialCapacity; hasRules: boolean }) {
-  const slices = useMemo(() => budgetCategorySlices(capacity), [capacity]);
+function BudgetProjectionSummary({
+  projection,
+  hasRules,
+}: {
+  projection: BudgetProjection;
+  hasRules: boolean;
+}) {
+  const option = useMemo(() => budgetProjectionOption(projection), [projection]);
+  const savings = decimalValue(projection.projected_savings) ?? 0;
+
+  return (
+    <section className="report-card goal-projection-card">
+      <header>
+        <div><p className="section-label">Budget Outlook</p><h2>下月预算概览</h2></div>
+        <span className="report-context">{monthLabel(projection.target_month)} · {projection.base_currency}</span>
+      </header>
+      {hasRules ? (
+        <ChartDataFlip
+          height={344}
+          dataLabel={`${projection.target_month}预算测算明细`}
+          front={(
+            <>
+              <div className="goal-projection-metrics">
+                <ProjectionMetric label="预计收入" value={formatMoney(projection.projected_income, projection.base_currency)} detail="固定与浮动收入" />
+                <ProjectionMetric label="预计支出" value={formatMoney(projection.projected_expenses, projection.base_currency)} detail="三类支出合计" />
+                <ProjectionMetric label={savings < 0 ? "预计缺口" : "预计储蓄"} value={formatMoney(projection.projected_savings, projection.base_currency)} detail="收入减去支出" tone={savings < 0 ? "negative" : "positive"} />
+                <ProjectionMetric label="预计储蓄率" value={formatPercent(projection.projected_savings_rate_percent)} detail={projection.projected_savings_rate_percent === null ? "预计收入为零" : "预计储蓄 ÷ 预计收入"} tone={savings < 0 ? "negative" : "positive"} />
+              </div>
+              <AnalyticsChart option={option} label={`${projection.target_month}预计收入、支出与储蓄柱状图`} height={202} />
+            </>
+          )}
+          back={<BudgetProjectionDataTable projection={projection} />}
+        />
+      ) : (
+        <div className="chart-empty goal-chart-empty"><p>添加周期规则后，这里会直接汇总下月预计收入、支出与储蓄。</p></div>
+      )}
+    </section>
+  );
+}
+
+function ProjectionMetric({
+  label,
+  value,
+  detail,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone?: "neutral" | "positive" | "negative";
+}) {
+  return <div className={`projection-metric projection-metric-${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
+}
+
+function BudgetProjectionDataTable({ projection }: { projection: BudgetProjection }) {
+  const rows = [
+    ["稳定收入", formatMoney(projection.stable_income, projection.base_currency)],
+    ["浮动收入", formatMoney(projection.variable_income, projection.base_currency)],
+    ["预计收入", formatMoney(projection.projected_income, projection.base_currency)],
+    ["必要支出", formatMoney(projection.essential_expenses, projection.base_currency)],
+    ["固定承诺支出", formatMoney(projection.fixed_commitments, projection.base_currency)],
+    ["自主性预算", formatMoney(projection.discretionary_budget, projection.base_currency)],
+    ["预计支出", formatMoney(projection.projected_expenses, projection.base_currency)],
+    ["预计储蓄", formatMoney(projection.projected_savings, projection.base_currency)],
+    ["预计储蓄率", formatPercent(projection.projected_savings_rate_percent)],
+    ["固定承诺占稳定收入", formatPercent(projection.fixed_commitment_ratio_percent)],
+    ["稳定收入覆盖倍数", projection.stable_income_coverage_ratio === null ? "—" : `${projection.stable_income_coverage_ratio} 倍`],
+  ];
+  return (
+    <table className="data-table">
+      <caption className="sr-only">{projection.target_month}预算测算明细</caption>
+      <tbody>{rows.map(([label, value]) => <tr key={label}><th>{label}</th><td>{value}</td></tr>)}</tbody>
+    </table>
+  );
+}
+
+function ExpenseCategorySummary({
+  projection,
+  hasRules,
+}: {
+  projection: BudgetProjection;
+  hasRules: boolean;
+}) {
+  const slices = useMemo(() => expenseCategorySlices(projection), [projection]);
   const option = useMemo(
-    () => budgetCategoryOption(slices, capacity.base_currency),
-    [capacity.base_currency, slices],
+    () => expenseCategoryOption(slices, projection.base_currency),
+    [projection.base_currency, slices],
   );
 
   return (
     <section className="report-card goal-category-card">
       <header>
-        <div><p className="section-label">Budget Mix</p><h2>预算类型占比</h2></div>
-        <span className="report-context">{monthLabel(capacity.target_month)} · {capacity.base_currency}</span>
+        <div><p className="section-label">Expense Mix</p><h2>支出类型占比</h2></div>
+        <span className="report-context">月度等价金额</span>
       </header>
       {slices.length > 0 ? (
-        <>
-          <PieAnalyticsChart option={option} label={`${capacity.target_month}预算类型金额占比饼图`} height={300} />
-          <p className="chart-note">按目标月份的月度等价金额和本位币汇总；图中仅展示金额大于 0 的预算类型。</p>
-          <BudgetCategoryDataTable slices={slices} currency={capacity.base_currency} />
-        </>
+        <ChartDataFlip
+          height={344}
+          dataLabel={`${projection.target_month}支出类型占比明细`}
+          front={(
+            <>
+              <PieAnalyticsChart option={option} label={`${projection.target_month}支出类型金额占比饼图`} height={292} />
+              <p className="chart-note">仅比较必要支出、固定承诺支出与自主性预算，不混合收入。</p>
+            </>
+          )}
+          back={<ExpenseCategoryDataTable slices={slices} currency={projection.base_currency} />}
+        />
       ) : (
         <div className="chart-empty goal-category-empty">
-          <p>{hasRules ? "现有周期规则在目标月份没有可计入的预算金额。" : "添加周期规则后，这里会按预算类型展示金额占比。"}</p>
+          <p>{hasRules ? "现有周期规则在下月没有可计入的支出金额。" : "添加支出周期规则后，这里会展示类型占比。"}</p>
         </div>
       )}
     </section>
   );
 }
 
-function BudgetCategoryDataTable({ slices, currency }: { slices: BudgetCategorySlice[]; currency: string }) {
+function ExpenseCategoryDataTable({ slices, currency }: { slices: BudgetCategorySlice[]; currency: string }) {
   const total = slices.reduce((sum, slice) => sum + slice.value, 0);
   return (
-    <details className="chart-data-details">
-      <summary>查看类型明细</summary>
-      <div className="table-scroll">
-        <table className="data-table">
-          <caption className="sr-only">预算类型占比明细</caption>
-          <thead><tr><th>预算类型</th><th>月度等价金额</th><th>占比</th></tr></thead>
-          <tbody>{slices.map((slice) => (
-            <tr key={slice.code}>
-              <th>{slice.label}</th>
-              <td>{formatMoney(slice.amount, currency)}</td>
-              <td>{formatPercent(((slice.value / total) * 100).toFixed(2))}</td>
-            </tr>
-          ))}</tbody>
-        </table>
-      </div>
-    </details>
+    <table className="data-table">
+      <caption className="sr-only">支出类型占比明细</caption>
+      <thead><tr><th>支出类型</th><th>月度等价金额</th><th>占比</th></tr></thead>
+      <tbody>{slices.map((slice) => (
+        <tr key={slice.code}>
+          <th>{slice.label}</th>
+          <td>{formatMoney(slice.amount, currency)}</td>
+          <td>{formatPercent(((slice.value / total) * 100).toFixed(2))}</td>
+        </tr>
+      ))}</tbody>
+    </table>
   );
 }
 
-function budgetCategorySlices(capacity: FinancialCapacity): BudgetCategorySlice[] {
+function expenseCategorySlices(projection: BudgetProjection): BudgetCategorySlice[] {
   const categories = [
-    { code: "FIXED_INCOME", amount: capacity.stable_income, color: "#2563eb" },
-    { code: "VARIABLE_INCOME", amount: capacity.variable_income, color: "#60a5fa" },
-    { code: "ESSENTIAL_EXPENSE", amount: capacity.essential_expenses, color: "#64748b" },
-    { code: "FIXED_COMMITMENT_EXPENSE", amount: capacity.fixed_commitments, color: "#4f46e5" },
-    { code: "DISCRETIONARY_BUDGET", amount: capacity.discretionary_budget, color: "#a78bfa" },
+    { code: "ESSENTIAL_EXPENSE", chartLabel: "必要支出", amount: projection.essential_expenses, color: "#64748b" },
+    { code: "FIXED_COMMITMENT_EXPENSE", chartLabel: "固定承诺", amount: projection.fixed_commitments, color: "#4f46e5" },
+    { code: "DISCRETIONARY_BUDGET", chartLabel: "自主预算", amount: projection.discretionary_budget, color: "#a78bfa" },
   ];
 
   return categories.flatMap((category) => {
@@ -143,11 +214,11 @@ function budgetCategorySlices(capacity: FinancialCapacity): BudgetCategorySlice[
   });
 }
 
-function budgetCategoryOption(slices: BudgetCategorySlice[], currency: string) {
+function expenseCategoryOption(slices: BudgetCategorySlice[], currency: string) {
   return {
     tooltip: {
       trigger: "item",
-      valueFormatter: (value: number | string) => formatMoney(String(value), currency),
+      valueFormatter: (value: number | string) => formatMoney(String(value ?? 0), currency),
     },
     legend: {
       type: "scroll",
@@ -156,16 +227,22 @@ function budgetCategoryOption(slices: BudgetCategorySlice[], currency: string) {
       textStyle: { color: "#64748b", fontSize: 11 },
     },
     series: [{
-      name: "预算类型",
+      name: "支出类型",
       type: "pie",
       radius: ["42%", "70%"],
       center: ["50%", "45%"],
       avoidLabelOverlap: true,
       itemStyle: { borderColor: "#ffffff", borderWidth: 2, borderRadius: 4 },
-      label: { color: "#475569", fontSize: 11, formatter: "{b}\n{d}%" },
-      labelLine: { length: 12, length2: 8 },
+      label: {
+        position: "inside",
+        color: "#ffffff",
+        fontSize: 11,
+        fontWeight: 700,
+        formatter: "{d}%",
+      },
+      labelLine: { show: false },
       data: slices.map((slice) => ({
-        name: slice.label,
+        name: slice.chartLabel,
         value: slice.value,
         itemStyle: { color: slice.color },
       })),
@@ -173,98 +250,25 @@ function budgetCategoryOption(slices: BudgetCategorySlice[], currency: string) {
   };
 }
 
-function GoalSettings({ goal }: { goal: NextMonthGoal }) {
-  const queryClient = useQueryClient();
-  const form = useForm<GoalValues>({
-    resolver: zodResolver(goalSchema),
-    defaultValues: { savingsRatePercent: goal.minimum_savings_rate_basis_points / 100 },
-  });
-  const mutation = useMutation({
-    mutationFn: (values: GoalValues) => saveNextMonthGoal(Math.round(values.savingsRatePercent * 100)),
-    onSuccess: async (updated) => {
-      queryClient.setQueryData(queryKeys.nextMonthGoal, updated);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.capacity });
-    },
-  });
-
-  return (
-    <form className="settings-card goal-settings-card" onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
-      <div><p className="section-label">Target Policy</p><h2>储蓄目标</h2></div>
-      <p className="card-copy">目标只参与 {goal.target_month} 的前瞻测算，不会成为当前月或历史月的报表口径。</p>
-      <label>下月目标储蓄率
-        <span className="input-with-suffix">
-          <input aria-label="下月目标储蓄率" type="number" min="0" max="100" step="0.01" {...form.register("savingsRatePercent", { valueAsNumber: true })} />
-          <span>%</span>
-        </span>
-        {form.formState.errors.savingsRatePercent && <em>{form.formState.errors.savingsRatePercent.message}</em>}
-      </label>
-      <div className="goal-policy-note"><span>当前值</span><strong>{formatPercent(String(goal.minimum_savings_rate_basis_points / 100))}</strong><small>适用于 {monthLabel(goal.target_month)}</small></div>
-      {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
-      {mutation.isSuccess && <div className="inline-success" role="status">下月目标已保存，本月与历史数据未作修改。</div>}
-      <button className="button button-primary" disabled={mutation.isPending} type="submit">{mutation.isPending ? "保存中…" : "保存下月目标"}</button>
-    </form>
-  );
-}
-
-function CapacitySummary({ capacity, hasRules }: { capacity: FinancialCapacity; hasRules: boolean }) {
-  const option = useMemo(() => capacityWaterfallOption(capacity), [capacity]);
-  return (
-    <section className="report-card goal-capacity-card">
-      <header><div><p className="section-label">Forward Capacity</p><h2>下月财务承载力</h2></div><span className="report-context">目标储蓄率 {formatPercent(capacity.minimum_savings_rate_percent)}</span></header>
-      <div className="goal-capacity-metrics">
-        <div><span>保留自主预算后</span><strong>{hasRules ? formatMoney(capacity.preserved_capacity, capacity.base_currency) : "—"}</strong><small>可继续承担的月度负担</small></div>
-        <div><span>极限承载能力</span><strong>{hasRules ? formatMoney(capacity.maximum_capacity, capacity.base_currency) : "—"}</strong><small>不保留自主预算</small></div>
-        <div><span>最低储蓄金额</span><strong>{hasRules ? formatMoney(capacity.minimum_savings_amount, capacity.base_currency) : "—"}</strong><small>按稳定收入测算</small></div>
-      </div>
-      {hasRules ? (
-        <>
-          <AnalyticsChart option={option} label={`${capacity.target_month}稳定收入分配与剩余承载力瀑布图`} height={300} />
-          <CapacityDataTable capacity={capacity} />
-        </>
-      ) : (
-        <div className="chart-empty goal-chart-empty"><p>添加周期规则后，这里会按下月收入、支出与储蓄目标计算承载力。</p></div>
-      )}
-    </section>
-  );
-}
-
-function CapacityDataTable({ capacity }: { capacity: FinancialCapacity }) {
-  const rows = [
-    ["稳定收入", capacity.stable_income],
-    ["浮动收入", capacity.variable_income],
-    ["必要支出", capacity.essential_expenses],
-    ["固定承诺", capacity.fixed_commitments],
-    ["最低储蓄", capacity.minimum_savings_amount],
-    ["自主预算", capacity.discretionary_budget],
-    ["剩余承载能力", capacity.preserved_capacity],
-  ];
-  return <details className="chart-data-details"><summary>查看测算明细</summary><div className="table-scroll"><table className="data-table"><tbody>{rows.map(([label, value]) => <tr key={label}><th>{label}</th><td>{formatMoney(value, capacity.base_currency)}</td></tr>)}</tbody></table></div></details>;
-}
-
-function capacityWaterfallOption(capacity: FinancialCapacity) {
-  const values = [decimalValue(capacity.stable_income) ?? 0, -(decimalValue(capacity.essential_expenses) ?? 0), -(decimalValue(capacity.fixed_commitments) ?? 0), -(decimalValue(capacity.minimum_savings_amount) ?? 0), -(decimalValue(capacity.discretionary_budget) ?? 0)];
-  const base: number[] = [];
-  const visible: number[] = [];
-  let running = 0;
-  values.forEach((value, index) => {
-    if (index === 0) { base.push(0); visible.push(value); running = value; return; }
-    const next = Math.max(0, running + value);
-    base.push(next);
-    visible.push(running - next);
-    running = next;
-  });
-  base.push(0);
-  visible.push(decimalValue(capacity.preserved_capacity) ?? running);
+function budgetProjectionOption(projection: BudgetProjection) {
+  const values = [projection.projected_income, projection.projected_expenses, projection.projected_savings]
+    .map((value) => decimalValue(value) ?? 0);
   const chartText = { color: "#64748b", fontSize: 11 };
   return {
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: number | string) => formatMoney(String(value), capacity.base_currency) },
-    grid: { left: 72, right: 16, top: 28, bottom: 52 },
-    xAxis: { type: "category", data: ["稳定收入", "必要支出", "固定承诺", "最低储蓄", "自主预算", "剩余能力"], axisLabel: { ...chartText, interval: 0, rotate: 18 }, axisLine: { lineStyle: { color: "#d8dee8" } } },
-    yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => compactMoney(value, capacity.base_currency) }, splitLine: { lineStyle: { color: "#e8edf3" } } },
-    series: [
-      { name: "辅助", type: "bar", stack: "capacity", silent: true, data: base, itemStyle: { color: "transparent" }, emphasis: { itemStyle: { color: "transparent" } } },
-      { name: "金额", type: "bar", stack: "capacity", barMaxWidth: 34, data: visible, itemStyle: { color: (params: { dataIndex: number }) => params.dataIndex === 0 ? "#2563eb" : params.dataIndex === 5 ? "#4f46e5" : "#94a3b8", borderRadius: [3, 3, 0, 0] } },
-    ],
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: number | string) => formatMoney(String(value ?? 0), projection.base_currency) },
+    grid: { left: 72, right: 16, top: 22, bottom: 34 },
+    xAxis: { type: "category", data: ["预计收入", "预计支出", "预计储蓄"], axisLabel: chartText, axisLine: { lineStyle: { color: "#d8dee8" } } },
+    yAxis: { type: "value", axisLabel: { ...chartText, formatter: (value: number) => compactMoney(value, projection.base_currency) }, splitLine: { lineStyle: { color: "#e8edf3" } } },
+    series: [{
+      name: "金额",
+      type: "bar",
+      barMaxWidth: 42,
+      data: values,
+      itemStyle: {
+        color: (params: { dataIndex: number; value: number }) => params.dataIndex === 0 ? "#2563eb" : params.dataIndex === 1 ? "#94a3b8" : params.value < 0 ? "#dc2626" : "#4f46e5",
+        borderRadius: [3, 3, 0, 0],
+      },
+    }],
   };
 }
 

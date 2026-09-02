@@ -13,8 +13,8 @@ use super::{
     dto::{
         ActualEntryInputDto, DeleteManualMonthlyItemInputDto, EnsureActualOnlyInputDto,
         ExchangeRateUpsertDto, InitializeMonthInputDto, ManualMonthlyItemInputDto,
-        NextMonthGoalInputDto, PlanItemInputDto, RateOverrideDto, ReferenceRateImportDto,
-        ReferenceRateObservationDto, SettingsInputDto,
+        PlanItemInputDto, RateOverrideDto, ReferenceRateImportDto, ReferenceRateObservationDto,
+        SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -178,6 +178,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
         vec![
             (1, "initial release".to_owned(), 1),
             (2, "remove monthly item status".to_owned(), 1),
+            (3, "remove next month goal".to_owned(), 1),
         ]
     );
 
@@ -191,17 +192,12 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             let name: String = row.try_get("name").ok()?;
             matches!(
                 name.as_str(),
-                "settings"
-                    | "next_month_goal"
-                    | "exchange_rates"
-                    | "plan_items"
-                    | "monthly_items"
-                    | "actual_entries"
+                "settings" | "exchange_rates" | "plan_items" | "monthly_items" | "actual_entries"
             )
             .then(|| (name, row.try_get::<i64, _>("strict").unwrap()))
         })
         .collect::<Vec<_>>();
-    assert_eq!(business_tables.len(), 6);
+    assert_eq!(business_tables.len(), 5);
     assert!(business_tables.iter().all(|(_, strict)| *strict == 1));
 
     let names: Vec<String> =
@@ -269,7 +265,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
 }
 
 #[tokio::test]
-async fn current_schema_matches_the_frozen_pre_release_schema_after_status_removal() {
+async fn current_schema_matches_the_frozen_pre_release_schema_after_public_migrations() {
     let baseline = open_memory_database().await.unwrap();
     let options = SqliteConnectOptions::from_str("sqlite::memory:")
         .unwrap()
@@ -287,6 +283,12 @@ async fn current_schema_matches_the_frozen_pre_release_schema_after_status_remov
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../migrations/0002_remove_monthly_item_status.sql"
+    ))
+    .execute(&pre_release)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0003_remove_next_month_goal.sql"
     ))
     .execute(&pre_release)
     .await
@@ -442,12 +444,6 @@ async fn startup_creates_default_cny_settings_idempotently() {
 
     let settings = service.get_settings().await.unwrap().unwrap();
     assert_eq!(settings.base_currency, "CNY");
-    let goal = service.get_next_month_goal().await.unwrap();
-    assert_eq!(
-        goal.target_month,
-        current_month().next_month().unwrap().to_string()
-    );
-    assert_eq!(goal.minimum_savings_rate_basis_points, 2_000);
     assert!(service.startup_status().await.error.is_none());
 
     let store = service.test_store().await;
@@ -462,10 +458,17 @@ async fn startup_creates_default_cny_settings_idempotently() {
             .unwrap();
     assert_eq!(settings_count, 1);
     assert_eq!(base_rate, 100_000_000);
+    let goal_table_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'next_month_goal'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(goal_table_count, 0);
 }
 
 #[tokio::test]
-async fn goal_and_rule_changes_stay_forward_looking_and_do_not_mutate_current_snapshots() {
+async fn rule_changes_stay_forward_looking_and_do_not_mutate_current_snapshots() {
     let service = test_service().await;
     let current = current_month();
     let created = service
@@ -497,14 +500,18 @@ async fn goal_and_rule_changes_stay_forward_looking_and_do_not_mutate_current_sn
         .list_monthly_items(current.to_string())
         .await
         .unwrap();
-    let goal = service
-        .save_next_month_goal(NextMonthGoalInputDto {
-            minimum_savings_rate_basis_points: 3_500,
-        })
-        .await
-        .unwrap();
-    assert_eq!(goal.target_month, current.next_month().unwrap().to_string());
-    assert_eq!(goal.minimum_savings_rate_basis_points, 3_500);
+    let mut updated = plan(
+        "下月工资",
+        "FIXED_INCOME",
+        "32000",
+        "CNY",
+        1,
+        "AMORTIZED",
+        current,
+        None,
+    );
+    updated.id = Some(created.id.clone());
+    service.update_plan_item(updated).await.unwrap();
     let after = service
         .list_monthly_items(current.to_string())
         .await
@@ -1398,7 +1405,7 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
 }
 
 #[tokio::test]
-async fn persisted_capacity_uses_payment_items_monthly_equivalent_even_between_payment_months() {
+async fn persisted_projection_uses_payment_items_monthly_equivalent_even_between_payment_months() {
     let service = test_service().await;
     let start = YearMonth::new(2026, 1).unwrap();
     let end = YearMonth::new(2026, 12).unwrap();
@@ -1429,12 +1436,18 @@ async fn persisted_capacity_uses_payment_items_monthly_equivalent_even_between_p
         .await
         .unwrap();
 
-    let capacity = service.financial_capacity().await.unwrap();
-    assert_eq!(capacity.stable_income, "30000.00");
-    assert_eq!(capacity.fixed_commitments, "3000.00");
-    assert_eq!(capacity.preserved_capacity, "21000.00");
+    let projection = service.budget_projection().await.unwrap();
+    assert_eq!(projection.stable_income, "30000.00");
+    assert_eq!(projection.fixed_commitments, "3000.00");
+    assert_eq!(projection.projected_income, "30000.00");
+    assert_eq!(projection.projected_expenses, "3000.00");
+    assert_eq!(projection.projected_savings, "27000.00");
     assert_eq!(
-        capacity.fixed_commitment_ratio_percent.as_deref(),
+        projection.projected_savings_rate_percent.as_deref(),
+        Some("90.00")
+    );
+    assert_eq!(
+        projection.fixed_commitment_ratio_percent.as_deref(),
         Some("10.00")
     );
 }

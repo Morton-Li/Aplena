@@ -87,7 +87,7 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.plans }),
       queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.capacity }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.budgetProjection }),
     ]);
   };
 
@@ -341,7 +341,7 @@ function PlanEditor({
               <input type="radio" value="PAYMENT" {...form.register("recognitionMode")} />
               <span><strong>按支付月份确认</strong><small>只在以开始日期为锚点的支付月计入完整金额。</small></span>
             </label>
-            <p>无论哪种模式，财务承载能力都按月均负担计算。</p>
+            <p>无论哪种模式，下月预算概览都按月均等价金额计算。</p>
           </fieldset>
           <label>备注<textarea rows={3} {...form.register("note")} /></label>
 

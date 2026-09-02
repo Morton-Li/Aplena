@@ -12,13 +12,6 @@ export interface SettingsInput {
   baseCurrency: string;
 }
 
-export interface NextMonthGoal {
-  target_month: string;
-  minimum_savings_rate_basis_points: number;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface ExchangeRate {
   currency: string;
   base_currency: string;
@@ -228,18 +221,18 @@ export interface HistoryAnalytics {
   months: MonthAnalytics[];
 }
 
-export interface FinancialCapacity {
+export interface BudgetProjection {
   target_month: string;
   base_currency: string;
-  minimum_savings_rate_percent: string;
   stable_income: string;
   variable_income: string;
   essential_expenses: string;
   fixed_commitments: string;
   discretionary_budget: string;
-  minimum_savings_amount: string;
-  preserved_capacity: string;
-  maximum_capacity: string;
+  projected_income: string;
+  projected_expenses: string;
+  projected_savings: string;
+  projected_savings_rate_percent: string | null;
   fixed_commitment_ratio_percent: string | null;
   stable_income_coverage_ratio: string | null;
 }
@@ -247,7 +240,6 @@ export interface FinancialCapacity {
 export const queryKeys = {
   domain: ["domain-contract"] as const,
   settings: ["settings"] as const,
-  nextMonthGoal: ["next-month-goal"] as const,
   startup: ["startup-status"] as const,
   rates: ["exchange-rates"] as const,
   plans: ["plan-items"] as const,
@@ -256,7 +248,7 @@ export const queryKeys = {
   actualEntries: (monthlyItemId: string) => ["actual-entries", monthlyItemId] as const,
   monthAnalytics: (month: string) => ["month-analytics", month] as const,
   historyAnalytics: ["history-analytics"] as const,
-  capacity: ["financial-capacity"] as const,
+  budgetProjection: ["budget-projection"] as const,
   monthPreview: (month: string, overrides: RateOverrideInput[] = []) =>
     ["month-preview", month, overrides] as const,
 };
@@ -274,19 +266,6 @@ export function saveSettings(
   invokeCommand: Invoke = invoke,
 ): Promise<Settings> {
   return invokeCommand<Settings>("save_settings", { input });
-}
-
-export function getNextMonthGoal(invokeCommand: Invoke = invoke): Promise<NextMonthGoal> {
-  return invokeCommand<NextMonthGoal>("get_next_month_goal");
-}
-
-export function saveNextMonthGoal(
-  minimumSavingsRateBasisPoints: number,
-  invokeCommand: Invoke = invoke,
-): Promise<NextMonthGoal> {
-  return invokeCommand<NextMonthGoal>("save_next_month_goal", {
-    input: { minimumSavingsRateBasisPoints },
-  });
 }
 
 export function getStartupStatus(invokeCommand: Invoke = invoke): Promise<StartupStatus> {
@@ -488,8 +467,8 @@ export function getHistoryAnalytics(invokeCommand: Invoke = invoke): Promise<His
   return invokeCommand<HistoryAnalytics>("get_history_analytics");
 }
 
-export function getFinancialCapacity(
+export function getBudgetProjection(
   invokeCommand: Invoke = invoke,
-): Promise<FinancialCapacity> {
-  return invokeCommand<FinancialCapacity>("get_financial_capacity");
+): Promise<BudgetProjection> {
+  return invokeCommand<BudgetProjection>("get_budget_projection");
 }

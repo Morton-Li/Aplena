@@ -60,9 +60,6 @@ impl AppError {
                 "EXCHANGE_RATE_OUT_OF_RANGE",
                 "error.exchange_rate_out_of_range",
             ),
-            DomainError::InvalidSavingsRate => {
-                ("INVALID_SAVINGS_RATE", "error.invalid_savings_rate")
-            }
             DomainError::InvalidRatio => ("INVALID_RATIO", "error.invalid_ratio"),
             DomainError::EmptyPlanItemName => {
                 ("EMPTY_PLAN_ITEM_NAME", "error.empty_plan_item_name")

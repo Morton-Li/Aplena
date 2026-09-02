@@ -80,7 +80,7 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
         queryClient.invalidateQueries({ queryKey: ["monthly-items"] }),
         queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.rates }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.capacity }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.budgetProjection }),
         queryClient.invalidateQueries({ queryKey: ["month-analytics"] }),
         queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
       ]);
@@ -118,7 +118,7 @@ function RateSettings({ baseCurrency }: { baseCurrency: string }) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.rates }),
       queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.capacity }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.budgetProjection }),
     ]);
   };
   const saveMutation = useMutation({

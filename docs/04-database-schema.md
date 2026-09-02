@@ -1,6 +1,6 @@
 # Aplena 数据库 Schema
 
-当前正式 schema：2
+当前正式 schema：3
 数据库：SQLite STRICT tables + foreign keys + WAL
 
 ## 1. 存储约定
@@ -18,7 +18,7 @@ RATE_SCALE   = 100_000_000
 - UUID 存为 36 字符文本；
 - 没有实际条目时派生实际为 `NULL`，不能擅自解释为零。
 
-六张核心业务表以外，SQLx 自有迁移表不属于业务模型。
+五张核心业务表以外，SQLx 自有迁移表不属于业务模型。
 
 ## 2. `settings`
 
@@ -31,19 +31,6 @@ RATE_SCALE   = 100_000_000
 | `created_at` / `updated_at` | TEXT | 非空 |
 
 触发器保证本位币汇率为 1，并在已有月度项目后禁止切换本位币。
-
-## 2.1 `next_month_goal`
-
-单行前瞻目标：
-
-| 字段 | 类型 | 约束 |
-|---|---|---|
-| `id` | INTEGER | 固定 1 |
-| `target_month` | TEXT | 合法月初，由后端固定为下一个自然月 |
-| `minimum_savings_rate_bp` | INTEGER | 0–10000 |
-| `created_at` / `updated_at` | TEXT | 非空 |
-
-该表不与 `monthly_items` 建外键，也不参与月度和历史分析；它只为下月承载力提供输入。
 
 ## 3. `exchange_rates`
 
@@ -172,10 +159,11 @@ END AS derived_actual_amount_scaled
 
 - `0001_initial_release.sql`：首个公开版的完整六表结构、7 个业务索引和 12 个触发器；
 - `0002_remove_monthly_item_status.sql`：移除 `actual_confirmed_at` 及 3 个条目变更重开触发器，保留 9 个业务触发器；
-- 新安装的 `_sqlx_migrations` 顺序记录 schema 1 与 schema 2；
+- `0003_remove_next_month_goal.sql`：删除 `next_month_goal` 表及其中旧目标数据，当前业务结构为五张表；
+- 新安装的 `_sqlx_migrations` 顺序记录 schema 1、schema 2 与 schema 3；
 - 基线不包含旧金额转换、临时表、过渡列或数据搬运语句；
 - 正式发布后的变更只允许追加迁移，不再改写 schema 1。
 
-预发布六段迁移的最终结构已冻结为测试夹具。自动测试先把 schema 2 变更应用到冻结夹具，再比较 `sqlite_schema`、列、类型、默认值、非空与主键、外键、索引列、触发器和 STRICT 属性；同时验证高版本预发布库会在不修改内容的前提下被拒绝。现有本地预发布数据必须遵循[独立换轨方案](08-pre-release-database-transition.md)，不能直接修改 `_sqlx_migrations`。
+预发布六段迁移的最终结构已冻结为测试夹具。自动测试先把 schema 2 与 schema 3 变更应用到冻结夹具，再比较 `sqlite_schema`、列、类型、默认值、非空与主键、外键、索引列、触发器和 STRICT 属性；同时验证高版本预发布库会在不修改内容的前提下被拒绝。现有本地预发布数据必须遵循[独立换轨方案](08-pre-release-database-transition.md)，不能直接修改 `_sqlx_migrations`。
 
 发现未来 schema 时拒绝启动，不做降级写入。任何正式迁移失败都会阻止应用进入业务流程。

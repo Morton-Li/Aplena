@@ -1,19 +1,11 @@
 use pfcm_domain::{
-    ActualEntry, Amount, CalendarDate, CurrencyCode, ExchangeRate, MonthlyItem, NextMonthGoal,
-    PlanItem, Settings,
+    ActualEntry, Amount, CalendarDate, CurrencyCode, ExchangeRate, MonthlyItem, PlanItem, Settings,
 };
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredSettings {
     pub value: Settings,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoredNextMonthGoal {
-    pub value: NextMonthGoal,
     pub created_at: String,
     pub updated_at: String,
 }
