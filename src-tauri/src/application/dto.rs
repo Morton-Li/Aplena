@@ -4,11 +4,13 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct SettingsInputDto {
     pub base_currency: String,
+    pub auto_update_exchange_rates: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SettingsDto {
     pub base_currency: String,
+    pub auto_update_exchange_rates: bool,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -79,6 +79,7 @@ const contract = {
 
 const settings: Settings = {
   base_currency: "CNY",
+  auto_update_exchange_rates: false,
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-01T00:00:00Z",
 };
@@ -357,6 +358,7 @@ function installHarness(options: HarnessOptions = {}) {
         if (!storedSettings) {
           storedSettings = {
             base_currency: "CNY",
+            auto_update_exchange_rates: false,
             created_at: "2026-08-01T00:00:00Z",
             updated_at: "2026-08-01T00:00:00Z",
           };
@@ -364,9 +366,10 @@ function installHarness(options: HarnessOptions = {}) {
         return storedSettings as T;
       }
       case "save_settings": {
-        const input = args?.input as { baseCurrency: string };
+        const input = args?.input as { baseCurrency: string; autoUpdateExchangeRates: boolean };
         storedSettings = {
           base_currency: input.baseCurrency,
+          auto_update_exchange_rates: input.autoUpdateExchangeRates,
           created_at: "2026-08-01T00:00:00Z",
           updated_at: "2026-08-01T00:00:00Z",
         };
@@ -585,12 +588,57 @@ describe("planning workflows", () => {
     expect(await screen.findByRole("heading", { name: "本位币" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "当前汇率" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "更新官方汇率" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "启动时自动更新汇率" })).not.toBeChecked();
     expect(screen.getByText(/欧洲央行每日参考汇率通常在工作日更新/)).toBeInTheDocument();
     expect(screen.queryByText(/尚无月度快照时可以直接切换/)).not.toBeInTheDocument();
     expect(document.querySelectorAll(".base-currency-setting")).toHaveLength(1);
     expect(document.querySelectorAll(".settings-card")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
     expect(screen.queryByLabelText("下月目标储蓄率")).not.toBeInTheDocument();
+  });
+
+  it("persists the automatic exchange-rate update preference", async () => {
+    installHarness();
+    const user = userEvent.setup();
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    const toggle = await screen.findByRole("switch", { name: "启动时自动更新汇率" });
+    await user.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(invokeMock).toHaveBeenCalledWith("save_settings", {
+      input: { baseCurrency: "CNY", autoUpdateExchangeRates: true },
+    });
+  });
+
+  it("updates official exchange rates once during startup when enabled", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      "KEY,FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE",
+      "EXR.D.CNY.EUR.SP00.A,D,CNY,EUR,SP00,A,2026-08-28,7.8251",
+      "EXR.D.USD.EUR.SP00.A,D,USD,EUR,SP00,A,2026-08-28,1.1643",
+      "EXR.D.HKD.EUR.SP00.A,D,HKD,EUR,SP00,A,2026-08-28,9.1000",
+      "EXR.D.JPY.EUR.SP00.A,D,JPY,EUR,SP00,A,2026-08-28,172.0000",
+      "EXR.D.GBP.EUR.SP00.A,D,GBP,EUR,SP00,A,2026-08-28,0.8600",
+    ].join("\n"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    installHarness({ settings: { ...settings, auto_update_exchange_rates: true } });
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "2026 年 8 月" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("import_reference_rates", expect.anything()));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not block the application when an automatic startup update fails", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+    installHarness({ settings: { ...settings, auto_update_exchange_rates: true } });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("heading", { name: "本地财务服务暂不可用" })).not.toBeInTheDocument();
   });
 
   it("updates saved and rule currencies from the latest ECB observation date", async () => {
@@ -661,6 +709,9 @@ describe("planning workflows", () => {
     expect(ruleRow).toHaveTextContent("按支付月份确认");
     expect(ruleRow).toHaveTextContent("2026-08-31");
     expect(ruleRow).toHaveTextContent("长期有效");
+    expect(within(ruleRow).getByRole("button", { name: "编辑" })).toBeInTheDocument();
+    expect(within(ruleRow).getByRole("button", { name: "删除" })).toBeInTheDocument();
+    expect(within(ruleRow).queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
     const projectionChart = screen.getByRole("img", { name: "2026-09预计收入、支出与储蓄柱状图" });
     const projectionOption = JSON.parse(projectionChart.dataset.chartOption ?? "{}") as {
       series: Array<{ data: number[] }>;

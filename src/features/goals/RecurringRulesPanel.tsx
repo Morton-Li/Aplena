@@ -13,7 +13,6 @@ import {
   listPlanItems,
   previewPlanItem,
   queryKeys,
-  stopPlanItem,
   updatePlanItem,
   type ExchangeRate,
   type PlanItem,
@@ -68,7 +67,6 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("ALL");
   const [editor, setEditor] = useState<PlanItem | "new" | null>(null);
-  const [stopping, setStopping] = useState<PlanItem | null>(null);
   const [deleting, setDeleting] = useState<PlanItem | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -186,7 +184,6 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
                   <td>
                     <div className="recurring-rule-actions">
                       <button className="button button-quiet" type="button" onClick={() => setEditor(item)}>编辑</button>
-                      <button className="button button-quiet" type="button" onClick={() => setStopping(item)}>停止</button>
                       <button className="button button-danger-quiet" type="button" onClick={() => setDeleting(item)}>删除</button>
                     </div>
                   </td>
@@ -208,17 +205,6 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
           onSaved={async (message) => {
             setEditor(null);
             setFeedback(message);
-            await refreshPlans();
-          }}
-        />
-      )}
-      {stopping && (
-        <StopDialog
-          item={stopping}
-          onClose={() => setStopping(null)}
-          onStopped={async () => {
-            setStopping(null);
-            setFeedback("周期规则已停止，历史月度快照未作修改。");
             await refreshPlans();
           }}
         />
@@ -360,19 +346,6 @@ function PlanEditor({
           )}
         </form>
       </Dialog>
-  );
-}
-
-function StopDialog({ item, onClose, onStopped }: { item: PlanItem; onClose: () => void; onStopped: () => Promise<void> }) {
-  const [endDate, setEndDate] = useState(item.end_date ?? item.start_date);
-  const mutation = useMutation({ mutationFn: () => stopPlanItem({ id: item.id, endDate }), onSuccess: onStopped });
-  return (
-    <ConfirmDialog title={`停止规则“${item.name}”`} onClose={onClose}>
-      <p>停止只会设置规则结束日期，不会改动已经生成的月度快照。</p>
-      <label>最后有效日期<input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
-      {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
-      <button className="button button-primary" disabled={mutation.isPending} type="button" onClick={() => mutation.mutate()}>确认停止</button>
-    </ConfirmDialog>
   );
 }
 
