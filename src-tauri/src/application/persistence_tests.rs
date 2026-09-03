@@ -24,6 +24,7 @@ async fn test_service() -> FinanceService {
     service
         .save_settings(SettingsInputDto {
             base_currency: "CNY".to_owned(),
+            auto_update_exchange_rates: false,
         })
         .await
         .unwrap();
@@ -179,6 +180,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             (1, "initial release".to_owned(), 1),
             (2, "remove monthly item status".to_owned(), 1),
             (3, "remove next month goal".to_owned(), 1),
+            (4, "add automatic rate refresh".to_owned(), 1),
         ]
     );
 
@@ -293,11 +295,61 @@ async fn current_schema_matches_the_frozen_pre_release_schema_after_public_migra
     .execute(&pre_release)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0004_add_automatic_rate_refresh.sql"
+    ))
+    .execute(&pre_release)
+    .await
+    .unwrap();
 
     assert_eq!(
         schema_snapshot(baseline.pool()).await,
         schema_snapshot(&pre_release).await
     );
+}
+
+#[tokio::test]
+async fn automatic_rate_refresh_migration_preserves_existing_settings() {
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")
+        .unwrap()
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!("../../migrations/0001_initial_release.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
+         VALUES ('CNY', 100000000, 'BASE_CURRENCY', '2026-09-01', '2026-09-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO settings (id, base_currency_code, created_at, updated_at) \
+         VALUES (1, 'CNY', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0004_add_automatic_rate_refresh.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let stored: (String, i64) = sqlx::query_as(
+        "SELECT base_currency_code, auto_update_exchange_rates FROM settings WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, ("CNY".to_owned(), 0));
 }
 
 #[tokio::test]
@@ -444,6 +496,7 @@ async fn startup_creates_default_cny_settings_idempotently() {
 
     let settings = service.get_settings().await.unwrap().unwrap();
     assert_eq!(settings.base_currency, "CNY");
+    assert!(!settings.auto_update_exchange_rates);
     assert!(service.startup_status().await.error.is_none());
 
     let store = service.test_store().await;
@@ -465,6 +518,28 @@ async fn startup_creates_default_cny_settings_idempotently() {
     .await
     .unwrap();
     assert_eq!(goal_table_count, 0);
+}
+
+#[tokio::test]
+async fn automatic_rate_refresh_preference_is_persisted() {
+    let service = FinanceService::new(open_memory_database().await.unwrap()).unwrap();
+    let saved = service
+        .save_settings(SettingsInputDto {
+            base_currency: "CNY".to_owned(),
+            auto_update_exchange_rates: true,
+        })
+        .await
+        .unwrap();
+
+    assert!(saved.auto_update_exchange_rates);
+    assert!(
+        service
+            .get_settings()
+            .await
+            .unwrap()
+            .unwrap()
+            .auto_update_exchange_rates
+    );
 }
 
 #[tokio::test]
@@ -1386,6 +1461,7 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
     let error = service
         .save_settings(SettingsInputDto {
             base_currency: "USD".to_owned(),
+            auto_update_exchange_rates: false,
         })
         .await
         .unwrap_err();

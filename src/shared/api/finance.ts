@@ -4,12 +4,14 @@ import type { AppError, DomainContract, Invoke } from "./domain";
 
 export interface Settings {
   base_currency: string;
+  auto_update_exchange_rates: boolean;
   created_at: string;
   updated_at: string;
 }
 
 export interface SettingsInput {
   baseCurrency: string;
+  autoUpdateExchangeRates: boolean;
 }
 
 export interface ExchangeRate {

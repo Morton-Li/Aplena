@@ -7,19 +7,17 @@ import { z } from "zod";
 import {
   deleteExchangeRate,
   getSettings,
-  importReferenceRates,
   listExchangeRates,
-  listPlanItems,
   queryKeys,
   saveSettings,
   upsertExchangeRate,
   type Settings,
 } from "../../shared/api/finance";
 import {
-  fetchEcbReferenceRates,
   isReferenceRateStale,
   SUPPORTED_CURRENCIES,
 } from "../../shared/api/referenceRates";
+import { syncOfficialReferenceRates } from "../../shared/api/referenceRateSync";
 import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
 import { currencyName } from "../../shared/formatting/finance";
@@ -45,7 +43,7 @@ export function SettingsPage() {
         <div>
           <p className="eyebrow">本地配置</p>
           <h1>系统设置</h1>
-          <p>管理本位币与当前汇率；下月目标请前往“配置预算”页设置。</p>
+          <p>管理本位币、当前汇率与启动更新偏好。</p>
         </div>
       </header>
       {(settingsQuery.isPending || ratesQuery.isPending) && <section className="state-card">正在读取设置…</section>}
@@ -54,7 +52,7 @@ export function SettingsPage() {
       )}
       {settingsQuery.data && ratesQuery.data && <div className="settings-grid">
         <GeneralSettings settings={settingsQuery.data} currencies={Array.from(new Set([...SUPPORTED_CURRENCIES, ...ratesQuery.data.map((rate) => rate.currency)]))} />
-        <RateSettings baseCurrency={settingsQuery.data.base_currency} />
+        <RateSettings settings={settingsQuery.data} />
       </div>}
     </>
   );
@@ -72,6 +70,7 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
     mutationFn: (values: SettingsValues) =>
       saveSettings({
         baseCurrency: values.baseCurrency,
+        autoUpdateExchangeRates: settings.auto_update_exchange_rates,
       }),
     onSuccess: async (updated) => {
       queryClient.setQueryData(queryKeys.settings, updated);
@@ -105,10 +104,9 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
   );
 }
 
-function RateSettings({ baseCurrency }: { baseCurrency: string }) {
+function RateSettings({ settings }: { settings: Settings }) {
   const queryClient = useQueryClient();
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
-  const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
   const [editing, setEditing] = useState<string | null>(null);
   const form = useForm<RateValues>({
     resolver: zodResolver(rateSchema),
@@ -131,26 +129,19 @@ function RateSettings({ baseCurrency }: { baseCurrency: string }) {
   });
   const deleteMutation = useMutation({ mutationFn: (currency: string) => deleteExchangeRate(currency), onSuccess: refresh });
   const syncMutation = useMutation({
-    mutationFn: async () => {
-      const observations = await fetchEcbReferenceRates();
-      const coveredCurrencies = new Set(observations.map((observation) => observation.currency));
-      const currencies = Array.from(new Set([
-        ...SUPPORTED_CURRENCIES,
-        ...(ratesQuery.data ?? []).map((rate) => rate.currency),
-        ...(plansQuery.data ?? []).map((plan) => plan.currency),
-      ])).filter((currency) => currency !== baseCurrency && coveredCurrencies.has(currency));
-      const rates = await importReferenceRates({ observations, currencies });
-      const updated = rates.filter((rate) => currencies.includes(rate.currency) && rate.source === "ECB_REFERENCE");
-      if (updated.length === 0) throw new Error("官方参考汇率没有返回可更新的支持币种。");
-      return {
-        rates,
-        updatedCount: updated.length,
-        observedOn: updated.map((rate) => rate.observed_on ?? "").sort().at(-1) ?? "",
-      };
-    },
+    mutationFn: () => syncOfficialReferenceRates(settings.base_currency),
     onSuccess: async ({ rates }) => {
       queryClient.setQueryData(queryKeys.rates, rates);
       await refresh();
+    },
+  });
+  const autoUpdateMutation = useMutation({
+    mutationFn: (enabled: boolean) => saveSettings({
+      baseCurrency: settings.base_currency,
+      autoUpdateExchangeRates: enabled,
+    }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(queryKeys.settings, updated);
     },
   });
   const startEdit = (currency: string, rate: string) => {
@@ -162,7 +153,21 @@ function RateSettings({ baseCurrency }: { baseCurrency: string }) {
     <section className="settings-card">
       <div className="settings-card-heading">
         <div><p className="section-label">Exchange Rates</p><h2>当前汇率</h2></div>
-        <button className="button button-secondary" disabled={syncMutation.isPending} type="button" onClick={() => syncMutation.mutate()}>{syncMutation.isPending ? "正在更新…" : "更新官方汇率"}</button>
+        <div className="settings-rate-actions">
+          <label className="settings-switch">
+            <span className="settings-switch-copy"><strong>启动时自动更新</strong><small>每次打开 Aplena 时尝试获取最新官方汇率</small></span>
+            <input
+              aria-label="启动时自动更新汇率"
+              checked={settings.auto_update_exchange_rates}
+              disabled={autoUpdateMutation.isPending}
+              onChange={(event) => autoUpdateMutation.mutate(event.target.checked)}
+              role="switch"
+              type="checkbox"
+            />
+            <span aria-hidden="true" className="settings-switch-track"><span /></span>
+          </label>
+          <button className="button button-secondary" disabled={syncMutation.isPending} type="button" onClick={() => syncMutation.mutate()}>{syncMutation.isPending ? "正在更新…" : "更新官方汇率"}</button>
+        </div>
       </div>
       <p className="card-copy">欧洲央行每日参考汇率通常在工作日更新；周末及节假日沿用最近有效参考日期。录入外币费用时会固化当次汇率，后续更新不会回算已经发生的费用。</p>
       <div className="rate-list">
@@ -185,7 +190,7 @@ function RateSettings({ baseCurrency }: { baseCurrency: string }) {
         {editing && <button className="button button-quiet" type="button" onClick={() => { setEditing(null); form.reset(); }}>取消编辑</button>}
       </form>
       <small className="settings-rate-fallback">手动输入仅作为官方接口暂不可用或币种未覆盖时的备用方式。</small>
-      {(saveMutation.isError || deleteMutation.isError || syncMutation.isError) && <div className="inline-error" role="alert">{describeError(saveMutation.error ?? deleteMutation.error ?? syncMutation.error)}</div>}
+      {(saveMutation.isError || deleteMutation.isError || syncMutation.isError || autoUpdateMutation.isError) && <div className="inline-error" role="alert">{describeError(saveMutation.error ?? deleteMutation.error ?? syncMutation.error ?? autoUpdateMutation.error)}</div>}
     </section>
   );
 }

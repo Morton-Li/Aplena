@@ -60,10 +60,11 @@ impl Store {
         .execute(&mut *transaction)
         .await?;
         sqlx::query(
-            "INSERT INTO settings (id, base_currency_code, created_at, updated_at) \
-             VALUES (1, ?, ?, ?)",
+            "INSERT INTO settings (id, base_currency_code, auto_update_exchange_rates, created_at, updated_at) \
+             VALUES (1, ?, ?, ?, ?)",
         )
         .bind(settings.base_currency().as_str())
+        .bind(settings.auto_update_exchange_rates())
         .bind(timestamp)
         .bind(timestamp)
         .execute(&mut *transaction)
@@ -90,12 +91,14 @@ impl Store {
         .bind(timestamp)
         .execute(&mut *transaction)
         .await?;
-        let result =
-            sqlx::query("UPDATE settings SET base_currency_code = ?, updated_at = ? WHERE id = 1")
-                .bind(settings.base_currency().as_str())
-                .bind(timestamp)
-                .execute(&mut *transaction)
-                .await?;
+        let result = sqlx::query(
+            "UPDATE settings SET base_currency_code = ?, auto_update_exchange_rates = ?, updated_at = ? WHERE id = 1",
+        )
+        .bind(settings.base_currency().as_str())
+        .bind(settings.auto_update_exchange_rates())
+        .bind(timestamp)
+        .execute(&mut *transaction)
+        .await?;
         require_changed(result.rows_affected())?;
         transaction.commit().await?;
         self.get_settings()
@@ -534,7 +537,7 @@ impl Store {
         connection: &mut SqliteConnection,
     ) -> Result<Option<StoredSettings>, StoreError> {
         let row = sqlx::query(
-            "SELECT base_currency_code, created_at, updated_at FROM settings WHERE id = 1",
+            "SELECT base_currency_code, auto_update_exchange_rates, created_at, updated_at FROM settings WHERE id = 1",
         )
         .fetch_optional(&mut *connection)
         .await?;
@@ -649,7 +652,10 @@ impl Store {
 fn settings_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredSettings, StoreError> {
     let base_currency: String = row.try_get("base_currency_code")?;
     Ok(StoredSettings {
-        value: Settings::new(CurrencyCode::new(base_currency)?)?,
+        value: Settings::with_auto_update_exchange_rates(
+            CurrencyCode::new(base_currency)?,
+            row.try_get("auto_update_exchange_rates")?,
+        )?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
