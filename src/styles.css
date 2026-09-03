@@ -3221,10 +3221,24 @@ textarea:focus,
   overflow: hidden;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  transition: visibility 0s linear 180ms;
+}
+
+.chart-data-flip-front {
+  visibility: visible;
 }
 
 .chart-data-flip-back {
   transform: rotateY(180deg);
+  visibility: hidden;
+}
+
+.chart-data-flip-active .chart-data-flip-front {
+  visibility: hidden;
+}
+
+.chart-data-flip-active .chart-data-flip-back {
+  visibility: visible;
 }
 
 .chart-data-flip-scroll {
@@ -3252,16 +3266,99 @@ textarea:focus,
   cursor: pointer;
 }
 
-.chart-data-flip-toggle::after {
-  margin-left: 6px;
+.chart-data-flip-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
   color: #94a3b8;
-  content: "↻";
-  font-size: 12px;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
 }
 
 .chart-data-flip-toggle:hover,
 .chart-data-flip-toggle:focus-visible {
   color: #1d4ed8;
+}
+
+.settings-rate-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.settings-switch {
+  position: relative;
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.settings-switch-copy strong,
+.settings-switch-copy small {
+  display: block;
+  text-align: right;
+}
+
+.settings-switch-copy strong {
+  color: #334155;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.settings-switch-copy small {
+  margin-top: 2px;
+  color: #849088;
+  font-size: 9px;
+}
+
+.settings-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.settings-switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex: 0 0 auto;
+  background: #cbd5e1;
+  border-radius: 999px;
+  transition: background 160ms ease;
+}
+
+.settings-switch-track > span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  background: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 25%);
+  transition: transform 160ms ease;
+}
+
+.settings-switch input:checked + .settings-switch-track {
+  background: var(--accent);
+}
+
+.settings-switch input:checked + .settings-switch-track > span {
+  transform: translateX(16px);
+}
+
+.settings-switch input:focus-visible + .settings-switch-track {
+  outline: 2px solid rgb(37 99 235 / 28%);
+  outline-offset: 3px;
+}
+
+.settings-switch input:disabled + .settings-switch-track {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .chart-data-flip-toggle:focus-visible {
@@ -5150,6 +5247,20 @@ textarea:focus,
     flex-direction: column;
   }
 
+  .settings-rate-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-switch {
+    justify-content: space-between;
+  }
+
+  .settings-switch-copy strong,
+  .settings-switch-copy small {
+    text-align: left;
+  }
+
   .entry-money-grid {
     grid-template-columns: 1fr;
   }
@@ -5242,15 +5353,11 @@ textarea:focus,
   }
 
   .chart-data-flip-face {
-    visibility: hidden;
+    transition: none;
   }
 
-  .chart-data-flip-front,
-  .chart-data-flip-active .chart-data-flip-back {
-    visibility: visible;
-  }
-
-  .chart-data-flip-active .chart-data-flip-front {
-    visibility: hidden;
+  .settings-switch-track,
+  .settings-switch-track > span {
+    transition: none;
   }
 }

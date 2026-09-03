@@ -1033,9 +1033,10 @@ impl FinanceService {
 }
 
 fn parse_settings(input: SettingsInputDto) -> Result<Settings, AppError> {
-    Settings::new(
+    Settings::with_auto_update_exchange_rates(
         CurrencyCode::new(&input.base_currency)
             .map_err(|error| AppError::from_domain(error, Some("baseCurrency")))?,
+        input.auto_update_exchange_rates,
     )
     .map_err(|error| AppError::from_domain(error, None))
 }
@@ -1213,6 +1214,7 @@ fn missing_rate_error(currency: &CurrencyCode) -> AppError {
 fn settings_dto(stored: StoredSettings) -> SettingsDto {
     SettingsDto {
         base_currency: stored.value.base_currency().to_string(),
+        auto_update_exchange_rates: stored.value.auto_update_exchange_rates(),
         created_at: stored.created_at,
         updated_at: stored.updated_at,
     }

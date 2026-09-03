@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Component,
   lazy,
@@ -20,6 +20,7 @@ import {
 } from "./shared/api/finance";
 import { describeError } from "./shared/formatting/errors";
 import { currencyName } from "./shared/formatting/finance";
+import { syncOfficialReferenceRates } from "./shared/api/referenceRateSync";
 
 const DashboardPage = lazy(() =>
   import("./features/dashboard/DashboardPage").then((module) => ({ default: module.DashboardPage })),
@@ -122,21 +123,47 @@ function AppBootstrap() {
   }
 
   return (
-    <Routes>
-      <Route element={<AppLayout currentMonth={startupQuery.data.current_month} settings={settingsQuery.data} />}>
-        <Route index element={<Navigate replace to="/dashboard" />} />
-        <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="monthly" element={<MonthlyPage />} />
-        <Route path="history" element={<HistoryPage />} />
-        <Route path="history/:month" element={<HistoryPage />} />
-        <Route path="goals" element={<GoalsPage />} />
-        <Route path="plans" element={<Navigate replace to="/goals" />} />
-        <Route path="analysis" element={<Navigate replace to={`/history/${startupQuery.data.current_month}`} />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate replace to="/dashboard" />} />
-      </Route>
-    </Routes>
+    <>
+      <StartupReferenceRateRefresh settings={settingsQuery.data} />
+      <Routes>
+        <Route element={<AppLayout currentMonth={startupQuery.data.current_month} settings={settingsQuery.data} />}>
+          <Route index element={<Navigate replace to="/dashboard" />} />
+          <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="monthly" element={<MonthlyPage />} />
+          <Route path="history" element={<HistoryPage />} />
+          <Route path="history/:month" element={<HistoryPage />} />
+          <Route path="goals" element={<GoalsPage />} />
+          <Route path="plans" element={<Navigate replace to="/goals" />} />
+          <Route path="analysis" element={<Navigate replace to={`/history/${startupQuery.data.current_month}`} />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate replace to="/dashboard" />} />
+        </Route>
+      </Routes>
+    </>
   );
+}
+
+function StartupReferenceRateRefresh({ settings }: { settings: Settings }) {
+  const [enabledAtStartup] = useState(settings.auto_update_exchange_rates);
+  const [baseCurrencyAtStartup] = useState(settings.base_currency);
+  const queryClient = useQueryClient();
+  const attempted = useRef(false);
+
+  useEffect(() => {
+    if (!enabledAtStartup || attempted.current) return;
+    attempted.current = true;
+    void syncOfficialReferenceRates(baseCurrencyAtStartup)
+      .then(async ({ rates }) => {
+        queryClient.setQueryData(queryKeys.rates, rates);
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.budgetProjection }),
+        ]);
+      })
+      .catch(() => undefined);
+  }, [baseCurrencyAtStartup, enabledAtStartup, queryClient]);
+
+  return null;
 }
 
 function AppLayout({ currentMonth, settings }: { currentMonth: string; settings: Settings }) {
