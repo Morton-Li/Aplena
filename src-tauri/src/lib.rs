@@ -1,4 +1,5 @@
 mod application;
+mod application_updates;
 mod infrastructure;
 
 use application::{
@@ -11,6 +12,12 @@ use application::{
     list_monthly_items, list_plan_items, preview_month, preview_plan_item, save_settings,
     stop_plan_item, update_actual_entry, update_monthly_note, update_plan_item,
     upsert_exchange_rate,
+};
+use application_updates::{
+    SoftwareUpdateService, cancel_software_update, check_software_update,
+    cleanup_stale_update_backups, download_and_install_software_update,
+    get_software_update_preferences, get_software_update_status, restart_after_software_update,
+    set_software_update_auto_check, updater_public_key,
 };
 use infrastructure::open_database;
 use std::path::{Path, PathBuf};
@@ -55,15 +62,23 @@ fn app_data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>>
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .pubkey(updater_public_key())
+                .build(),
+        )
         .setup(|app| {
             let app_data_dir = app_data_dir(app)?;
             std::fs::create_dir_all(&app_data_dir)?;
             let store = tauri::async_runtime::block_on(open_database(
                 &app_data_dir.join("aplena.sqlite3"),
             ))?;
+            let update_service = SoftwareUpdateService::new(store.clone());
             let service = FinanceService::new(store)?;
             tauri::async_runtime::block_on(service.initialize_on_startup());
             app.manage(service);
+            app.manage(update_service);
+            tauri::async_runtime::spawn_blocking(cleanup_stale_update_backups);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -98,7 +113,14 @@ pub fn run() {
             initialize_month,
             get_month_analytics,
             get_history_analytics,
-            get_budget_projection
+            get_budget_projection,
+            get_software_update_preferences,
+            set_software_update_auto_check,
+            get_software_update_status,
+            check_software_update,
+            download_and_install_software_update,
+            cancel_software_update,
+            restart_after_software_update
         ])
         // Keep the compiled application context colocated with the startup pipeline so release
         // builds always embed the matching hashed frontend assets.

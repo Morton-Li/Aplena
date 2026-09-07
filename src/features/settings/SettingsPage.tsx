@@ -21,6 +21,7 @@ import { syncOfficialReferenceRates } from "../../shared/api/referenceRateSync";
 import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
 import { currencyName } from "../../shared/formatting/finance";
+import { SoftwareUpdateCard } from "../software-updates/SoftwareUpdateCard";
 
 const settingsSchema = z.object({
   baseCurrency: z.string().length(3),
@@ -54,6 +55,7 @@ export function SettingsPage() {
         <GeneralSettings settings={settingsQuery.data} currencies={Array.from(new Set([...SUPPORTED_CURRENCIES, ...ratesQuery.data.map((rate) => rate.currency)]))} />
         <RateSettings settings={settingsQuery.data} />
       </div>}
+      <SoftwareUpdateCard />
     </>
   );
 }

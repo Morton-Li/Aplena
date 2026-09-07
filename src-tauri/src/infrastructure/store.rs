@@ -11,6 +11,7 @@ use uuid::Uuid;
 use super::{
     ActualEntryExchangeSnapshot, DeletePlanResult, StoreError, StoredActualEntry,
     StoredExchangeRate, StoredMonthlyItem, StoredPlanItem, StoredSettings,
+    StoredSoftwareUpdatePreferences,
 };
 
 #[derive(Debug, Clone)]
@@ -40,6 +41,54 @@ impl Store {
     pub async fn get_settings(&self) -> Result<Option<StoredSettings>, StoreError> {
         let mut connection = self.acquire().await?;
         Self::get_settings_on(&mut connection).await
+    }
+
+    pub async fn get_software_update_preferences(
+        &self,
+    ) -> Result<StoredSoftwareUpdatePreferences, StoreError> {
+        let row = sqlx::query(
+            "SELECT auto_check_updates, last_checked_at, last_check_status, created_at, updated_at \
+             FROM software_update_preferences WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
+        software_update_preferences_from_row(&row)
+    }
+
+    pub async fn set_software_update_auto_check(
+        &self,
+        enabled: bool,
+        timestamp: &str,
+    ) -> Result<StoredSoftwareUpdatePreferences, StoreError> {
+        let result = sqlx::query(
+            "UPDATE software_update_preferences \
+             SET auto_check_updates = ?, updated_at = ? WHERE id = 1",
+        )
+        .bind(enabled)
+        .bind(timestamp)
+        .execute(&self.pool)
+        .await?;
+        require_changed(result.rows_affected())?;
+        self.get_software_update_preferences().await
+    }
+
+    pub async fn record_software_update_check(
+        &self,
+        status: &str,
+        timestamp: &str,
+    ) -> Result<StoredSoftwareUpdatePreferences, StoreError> {
+        let result = sqlx::query(
+            "UPDATE software_update_preferences \
+             SET last_checked_at = ?, last_check_status = ?, updated_at = ? WHERE id = 1",
+        )
+        .bind(timestamp)
+        .bind(status)
+        .bind(timestamp)
+        .execute(&self.pool)
+        .await?;
+        require_changed(result.rows_affected())?;
+        self.get_software_update_preferences().await
     }
 
     pub async fn create_settings(
@@ -656,6 +705,18 @@ fn settings_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredSettings, St
             CurrencyCode::new(base_currency)?,
             row.try_get("auto_update_exchange_rates")?,
         )?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn software_update_preferences_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> Result<StoredSoftwareUpdatePreferences, StoreError> {
+    Ok(StoredSoftwareUpdatePreferences {
+        auto_check_updates: row.try_get("auto_check_updates")?,
+        last_checked_at: row.try_get("last_checked_at")?,
+        last_check_status: row.try_get("last_check_status")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

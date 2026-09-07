@@ -4,6 +4,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -21,6 +22,11 @@ import {
 import { describeError } from "./shared/formatting/errors";
 import { currencyName } from "./shared/formatting/finance";
 import { syncOfficialReferenceRates } from "./shared/api/referenceRateSync";
+import {
+  SoftwareUpdateBanner,
+  SoftwareUpdateProvider,
+  SoftwareUpdateRestartDialog,
+} from "./features/software-updates/SoftwareUpdateProvider";
 
 const DashboardPage = lazy(() =>
   import("./features/dashboard/DashboardPage").then((module) => ({ default: module.DashboardPage })),
@@ -125,20 +131,22 @@ function AppBootstrap() {
   return (
     <>
       <StartupReferenceRateRefresh settings={settingsQuery.data} />
-      <Routes>
-        <Route element={<AppLayout currentMonth={startupQuery.data.current_month} settings={settingsQuery.data} />}>
-          <Route index element={<Navigate replace to="/dashboard" />} />
-          <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="monthly" element={<MonthlyPage />} />
-          <Route path="history" element={<HistoryPage />} />
-          <Route path="history/:month" element={<HistoryPage />} />
-          <Route path="goals" element={<GoalsPage />} />
-          <Route path="plans" element={<Navigate replace to="/goals" />} />
-          <Route path="analysis" element={<Navigate replace to={`/history/${startupQuery.data.current_month}`} />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="*" element={<Navigate replace to="/dashboard" />} />
-        </Route>
-      </Routes>
+      <SoftwareUpdateProvider>
+        <Routes>
+          <Route element={<AppLayout currentMonth={startupQuery.data.current_month} settings={settingsQuery.data} />}>
+            <Route index element={<Navigate replace to="/dashboard" />} />
+            <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="monthly" element={<MonthlyPage />} />
+            <Route path="history" element={<HistoryPage />} />
+            <Route path="history/:month" element={<HistoryPage />} />
+            <Route path="goals" element={<GoalsPage />} />
+            <Route path="plans" element={<Navigate replace to="/goals" />} />
+            <Route path="analysis" element={<Navigate replace to={`/history/${startupQuery.data.current_month}`} />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate replace to="/dashboard" />} />
+          </Route>
+        </Routes>
+      </SoftwareUpdateProvider>
     </>
   );
 }
@@ -175,17 +183,24 @@ function AppLayout({ currentMonth, settings }: { currentMonth: string; settings:
       <RouteScrollReset scrollContainerRef={mainContentRef} />
       <AppSidebar currentMonth={currentMonth} settings={settings} />
       <main className="main-content" ref={mainContentRef}>
+        <SoftwareUpdateBanner />
         <Suspense fallback={<section className="state-card">正在打开页面…</section>}>
-          <Outlet />
+          <AnimatedOutlet />
         </Suspense>
       </main>
+      <SoftwareUpdateRestartDialog />
     </div>
   );
 }
 
+function AnimatedOutlet() {
+  const location = useLocation();
+  return <div className="route-view" key={location.pathname}><Outlet /></div>;
+}
+
 function RouteScrollReset({ scrollContainerRef }: { scrollContainerRef: RefObject<HTMLElement | null> }) {
   const location = useLocation();
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
     }

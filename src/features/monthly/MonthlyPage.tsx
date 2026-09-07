@@ -132,7 +132,7 @@ export function MonthlyPage() {
       )}
 
       {itemsQuery.data?.length === 0 && previewQuery.data?.candidate_count === 0 && previewQuery.data.missing_currencies.length === 0 && (
-        <EmptyState eyebrow="该月还没有数据" title="先添加一个临时类目" description={`临时类目只属于 ${month}，创建后可在详情中记录收入、支出、退款或冲减。`} action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button>{isCurrentMonth && <Link className="button button-secondary" to="/goals">设置下月目标（可选）</Link>}</div>} />
+        <EmptyState eyebrow="该月还没有数据" title="先添加一个临时类目" description={`临时类目只属于 ${month}，创建后可在详情中记录收入、支出、退款或冲减。`} action={<div className="empty-actions"><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button>{isCurrentMonth && <Link className="button button-secondary" to="/goals">配置下月预算（可选）</Link>}</div>} />
       )}
 
       {initializing && previewQuery.data && ratesQuery.data && (
@@ -202,7 +202,7 @@ function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPrevi
     ? "可调整已有实际条目；补齐计划快照仍需显式确认，且不会覆盖既有快照。"
     : preview.direction === "FUTURE"
       ? "计划快照只有在显式确认后创建，创建后保持冻结。"
-      : "本月计划快照在生成后保持冻结，不随下月目标变化。";
+      : "本月计划快照在生成后保持冻结，不随后续预算规则变化。";
   return (
     <section className={`month-context context-${preview.direction.toLowerCase()}`}>
       <div><span className="section-label">{contextLabel}</span><strong>{contextCopy}</strong></div>
