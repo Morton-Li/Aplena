@@ -4,6 +4,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -176,16 +177,21 @@ function AppLayout({ currentMonth, settings }: { currentMonth: string; settings:
       <AppSidebar currentMonth={currentMonth} settings={settings} />
       <main className="main-content" ref={mainContentRef}>
         <Suspense fallback={<section className="state-card">正在打开页面…</section>}>
-          <Outlet />
+          <AnimatedOutlet />
         </Suspense>
       </main>
     </div>
   );
 }
 
+function AnimatedOutlet() {
+  const location = useLocation();
+  return <div className="route-view" key={location.pathname}><Outlet /></div>;
+}
+
 function RouteScrollReset({ scrollContainerRef }: { scrollContainerRef: RefObject<HTMLElement | null> }) {
   const location = useLocation();
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
     }

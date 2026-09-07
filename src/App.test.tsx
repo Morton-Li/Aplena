@@ -579,6 +579,26 @@ describe("planning workflows", () => {
     expect(invokeMock).toHaveBeenCalledWith("ensure_default_settings");
   });
 
+  it("remounts the animated route view and resets scrolling when sidebar navigation changes pages", async () => {
+    installHarness();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "2026 年 8 月" });
+    const main = document.querySelector("main.main-content");
+    const dashboardView = document.querySelector(".route-view");
+    expect(main).not.toBeNull();
+    expect(dashboardView).not.toBeNull();
+    main!.scrollTop = 240;
+
+    await user.click(screen.getByRole("link", { name: "设置" }));
+    await screen.findByRole("heading", { name: "系统设置" });
+    const settingsView = document.querySelector(".route-view");
+    expect(settingsView).not.toBe(dashboardView);
+    expect(settingsView).toContainElement(screen.getByRole("heading", { name: "系统设置" }));
+    expect(main).toHaveProperty("scrollTop", 0);
+  });
+
   it("keeps settings limited to financial configuration", async () => {
     installHarness();
     window.location.hash = "#/settings";
@@ -828,7 +848,7 @@ describe("planning workflows", () => {
     await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
     await user.click(screen.getByLabelText("实际条目币种"));
     await user.click(screen.getByRole("option", { name: /USD/ }));
-    expect(await screen.findByText(/欧洲央行每日参考汇率 · 2026-08-28 · 保存后固定/)).toBeInTheDocument();
+    expect(await screen.findByText(/欧洲央行每日参考汇率 · 2026-08-28(?: · 数据日期较早)? · 保存后固定/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("原币金额"), { target: { value: "100.00" } });
     await user.click(screen.getByRole("button", { name: "保存条目" }));
 
@@ -1378,6 +1398,9 @@ describe("dashboard and budget projection analytics", () => {
     await user.click(within(savingsCard!).getByText("查看精确数据"));
     const savingsTable = within(savingsCard!).getByRole("table", { name: "储蓄率趋势精确数据" });
     expect(within(savingsTable).getByText("2026-07")).toBeInTheDocument();
+    const flip = savingsCard!.querySelector(".chart-data-flip");
+    expect(flip?.querySelector(".chart-data-flip-front")).toHaveAttribute("aria-hidden", "true");
+    expect(flip?.querySelector(".chart-data-flip-back")).toHaveAttribute("aria-hidden", "false");
 
     await user.click(await screen.findByRole("link", { name: "历史报表" }));
 
