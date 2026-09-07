@@ -13,14 +13,27 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build.workspace = true
 
 [dependencies]
+base64.workspace = true
 chrono.workspace = true
+flate2.workspace = true
+libc.workspace = true
+minisign-verify.workspace = true
+plist.workspace = true
 pfcm-domain = { path = "../crates/pfcm-domain" }
 rust_decimal.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
+tar.workspace = true
 tauri.workspace = true
+tauri-plugin-updater.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+url.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }

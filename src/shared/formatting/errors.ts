@@ -25,6 +25,21 @@ export function describeError(value: unknown): string {
       RECORD_IS_REFERENCED: "该汇率仍被设置、计划或历史快照引用，不能删除。",
       SETUP_REQUIRED: "请先完成首次设置。",
       DATABASE_STORAGE_PERMISSIONS_FAILED: "无法安全设置本地数据库权限；Aplena 已停止打开数据。",
+      UPDATE_OPERATION_IN_PROGRESS: "已有软件更新操作正在进行，请稍候。",
+      UPDATE_PREFERENCES_FAILED: "无法保存软件更新偏好，请重试。",
+      UPDATE_CHECK_FAILED: "无法检查软件更新，请确认网络可用后重试。",
+      UPDATE_CHECK_TIMEOUT: "检查软件更新超时；Aplena 可继续离线使用，请稍后重试。",
+      UPDATE_CHECK_NETWORK_FAILED: "无法连接更新服务；Aplena 可继续离线使用，请稍后重试。",
+      UPDATE_MANIFEST_INVALID: "更新服务返回了无效的版本清单；Aplena 未下载或安装任何内容。",
+      UPDATE_ARCHITECTURE_UNSUPPORTED: "此更新没有适用于当前 Mac 架构的安装包。",
+      UPDATE_CONFIGURATION_INVALID: "软件更新配置无效；Aplena 未下载或安装任何内容。",
+      UPDATE_SIGNATURE_INVALID: "更新包未通过独立更新签名验证；现有应用未被修改。",
+      UPDATE_DOWNLOAD_TIMEOUT: "下载更新超时；现有应用未被修改，请稍后重试。",
+      UPDATE_DOWNLOAD_FAILED: "更新包下载失败；现有应用未被修改，请稍后重试。",
+      UPDATE_DOWNLOAD_CANCELLED: "更新下载已取消；现有应用未被修改。",
+      UPDATE_SIGNING_KEY_NOT_CONFIGURED: "当前构建未配置可信的更新签名公钥，不能安装更新。",
+      UPDATE_INSTALL_FAILED: "更新安装失败；现有应用仍保留在原位置，请重新检查后重试。",
+      UPDATE_NOT_READY_TO_RESTART: "更新尚未完成安装，暂时不能重启到新版本。",
     };
     return descriptions[value.error_code] ?? `本地服务返回错误（${value.error_code}）`;
   }

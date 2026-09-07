@@ -33,6 +33,21 @@ zrender is Copyright (c) 2017, Baidu Inc. Its BSD 3-Clause license is reproduced
 
 ## Rust runtime
 
-The Rust application is built with Tauri 2.11.5, SQLx 0.9.0, rust_decimal 1.42.1, Tokio 1.53.1, Chrono 0.4.45 and their transitive dependencies. The locked dependency graph is predominantly available under MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0 or compatible dual-license terms; a small number of transitive packages use MPL-2.0 or offer multiple permissive choices.
+The Rust application is built with Tauri 2.11.5, SQLx 0.9.0, rust_decimal 1.42.1, Tokio 1.53.1, Chrono 0.4.45 and their transitive dependencies. Direct runtime components added for software updates include:
+
+| Component | Locked version | License |
+|---|---:|---|
+| Tauri updater plugin | 2.11.0 | Apache-2.0 OR MIT |
+| minisign-verify | 0.2.5 | MIT |
+| flate2 | 1.1.9 | MIT OR Apache-2.0 |
+| tar | 0.4.46 | MIT OR Apache-2.0 |
+| plist | 1.10.0 | MIT |
+| SHA-2 | 0.10.9 | MIT OR Apache-2.0 |
+| base64 | 0.22.1 | MIT OR Apache-2.0 |
+| semver | 1.0.28 | MIT OR Apache-2.0 |
+| url | 2.5.8 | MIT OR Apache-2.0 |
+| libc | 0.2.189 | MIT OR Apache-2.0 |
+
+The locked dependency graph is predominantly available under MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0 or compatible dual-license terms; a small number of transitive packages use MPL-2.0 or offer multiple permissive choices.
 
 Before each release, maintainers must regenerate the frontend production license inventory and inspect `cargo metadata --locked` against the committed lockfiles. A dependency with an unknown, prohibited or newly incompatible license blocks that release until reviewed.

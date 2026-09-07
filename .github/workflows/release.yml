@@ -71,7 +71,7 @@ jobs:
     if: needs.metadata.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     environment: codesign
-    timeout-minutes: 70
+    timeout-minutes: 75
     permissions:
       contents: read
     strategy:
@@ -144,10 +144,27 @@ jobs:
           pnpm typecheck
           pnpm lint
           pnpm test
+          pnpm test:release
           pnpm build
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
           cargo test --workspace --locked
+
+      - name: Verify updater signing inputs and generate release config
+        if: needs.metadata.outputs.release == 'true'
+        shell: bash
+        env:
+          APLENA_UPDATER_PUBLIC_KEY: ${{ vars.APLENA_UPDATER_PUBLIC_KEY || secrets.APLENA_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" || -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD are required for a release tag."
+            exit 1
+          fi
+          node .github/scripts/validate-updater-public-key.mjs \
+            --write-config src-tauri/tauri.release.generated.conf.json
 
       - name: Import self-signed certificate
         shell: bash
@@ -213,56 +230,80 @@ jobs:
 
           echo "APPLE_SIGNING_IDENTITY=$identity_sha1" >> "$GITHUB_ENV"
 
-      - name: Build and package macOS app
-        uses: tauri-apps/tauri-action@v1
+      - name: Build development macOS packages
+        if: needs.metadata.outputs.release != 'true'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
         with:
           args: --target ${{ matrix.target }} --bundles app,dmg
 
-      - name: Verify and name package
+      - name: Build signed release and updater packages
+        if: needs.metadata.outputs.release == 'true'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f
+        env:
+          APLENA_UPDATER_PUBLIC_KEY: ${{ vars.APLENA_UPDATER_PUBLIC_KEY || secrets.APLENA_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          args: >-
+            --target ${{ matrix.target }}
+            --bundles app,dmg
+            --config src-tauri/tauri.release.generated.conf.json
+
+      - name: Verify and name packages
         shell: bash
+        env:
+          APLENA_UPDATER_PUBLIC_KEY: ${{ vars.APLENA_UPDATER_PUBLIC_KEY || secrets.APLENA_UPDATER_PUBLIC_KEY }}
         run: |
           set -euo pipefail
 
+          verify_app_bundle() {
+            local app_path="$1"
+            local certificate_prefix="$2"
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+
+            local signature_info
+            signature_info="$(codesign -dv --verbose=4 "$app_path" 2>&1)"
+            echo "$signature_info"
+            if ! grep -q '^Authority=Morton Li$' <<< "$signature_info"; then
+              echo "::error::$app_path was not signed with the expected Morton Li certificate."
+              exit 1
+            fi
+
+            codesign -d --extract-certificates="$certificate_prefix" "$app_path"
+            local actual_fingerprint
+            actual_fingerprint="$(openssl x509 \
+              -inform DER \
+              -in "${certificate_prefix}0" \
+              -noout \
+              -fingerprint \
+              -sha256 | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+            if [[ "$actual_fingerprint" != "$CODESIGN_CERTIFICATE_SHA256" ]]; then
+              echo "::error::Unexpected signing certificate fingerprint: $actual_fingerprint"
+              exit 1
+            fi
+
+            local executable_name bundle_identifier bundle_version architectures
+            executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")"
+            bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
+            bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
+            architectures="$(lipo -archs "$app_path/Contents/MacOS/$executable_name")"
+            if [[ "$bundle_identifier" != "$APP_BUNDLE_IDENTIFIER" ]]; then
+              echo "::error::Expected bundle identifier $APP_BUNDLE_IDENTIFIER, found: $bundle_identifier"
+              exit 1
+            fi
+            if [[ "$bundle_version" != "${{ needs.metadata.outputs.manifest_version }}" ]]; then
+              echo "::error::Expected bundle version ${{ needs.metadata.outputs.manifest_version }}, found: $bundle_version"
+              exit 1
+            fi
+            if [[ "$architectures" != "${{ matrix.architecture }}" ]]; then
+              echo "::error::Expected ${{ matrix.architecture }} executable, found: $architectures"
+              exit 1
+            fi
+          }
+
           app_path="target/${{ matrix.target }}/release/bundle/macos/Aplena.app"
           test -d "$app_path"
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-
-          signature_info="$(codesign -dv --verbose=4 "$app_path" 2>&1)"
-          echo "$signature_info"
-          if ! grep -q '^Authority=Morton Li$' <<< "$signature_info"; then
-            echo "::error::Aplena.app was not signed with the expected Morton Li certificate."
-            exit 1
-          fi
-
-          certificate_prefix="$RUNNER_TEMP/aplena-embedded-certificate"
-          codesign -d --extract-certificates="$certificate_prefix" "$app_path"
-          actual_fingerprint="$(openssl x509 \
-            -inform DER \
-            -in "${certificate_prefix}0" \
-            -noout \
-            -fingerprint \
-            -sha256 | cut -d= -f2 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
-          if [[ "$actual_fingerprint" != "$CODESIGN_CERTIFICATE_SHA256" ]]; then
-            echo "::error::Unexpected signing certificate fingerprint: $actual_fingerprint"
-            exit 1
-          fi
-
-          executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")"
-          bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist")"
-          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
-          if [[ "$bundle_identifier" != "$APP_BUNDLE_IDENTIFIER" ]]; then
-            echo "::error::Expected bundle identifier $APP_BUNDLE_IDENTIFIER, found: $bundle_identifier"
-            exit 1
-          fi
-          if [[ "$bundle_version" != "${{ needs.metadata.outputs.manifest_version }}" ]]; then
-            echo "::error::Expected bundle version ${{ needs.metadata.outputs.manifest_version }}, found: $bundle_version"
-            exit 1
-          fi
-          architectures="$(lipo -archs "$app_path/Contents/MacOS/$executable_name")"
-          if [[ "$architectures" != "${{ matrix.architecture }}" ]]; then
-            echo "::error::Expected ${{ matrix.architecture }} executable, found: $architectures"
-            exit 1
-          fi
+          verify_app_bundle "$app_path" "$RUNNER_TEMP/aplena-embedded-certificate"
 
           shopt -s nullglob
           dmg_paths=(target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
@@ -275,44 +316,254 @@ jobs:
           mkdir -p release
           cp "${dmg_paths[0]}" "release/Aplena-${APLENA_BUILD_VERSION}-macos-${{ matrix.artifact_arch }}.dmg"
 
-      - name: Upload verified package
+          if [[ "${{ needs.metadata.outputs.release }}" == "true" ]]; then
+            updater_paths=(target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz)
+            if [[ "${#updater_paths[@]}" -ne 1 ]]; then
+              echo "::error::Expected exactly one updater archive, found ${#updater_paths[@]}."
+              exit 1
+            fi
+            updater_path="${updater_paths[0]}"
+            signature_path="${updater_path}.sig"
+            if [[ ! -s "$signature_path" ]]; then
+              echo "::error::The updater signature is missing or empty."
+              exit 1
+            fi
+            cargo run --quiet --locked -p aplena --example verify_updater_signature -- \
+              "$updater_path" "$signature_path"
+            if tar -tzf "$updater_path" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+              echo "::error::Updater archive contains an unsafe path."
+              exit 1
+            fi
+
+            extract_dir="$RUNNER_TEMP/aplena-updater-${{ matrix.artifact_arch }}"
+            mkdir -p "$extract_dir"
+            tar -xzf "$updater_path" -C "$extract_dir"
+            extracted_apps=("$extract_dir"/*.app)
+            if [[ "${#extracted_apps[@]}" -ne 1 ]]; then
+              echo "::error::Expected exactly one application bundle in the updater archive."
+              exit 1
+            fi
+            verify_app_bundle "${extracted_apps[0]}" "$RUNNER_TEMP/aplena-updater-certificate"
+
+            updater_name="Aplena-${APLENA_BUILD_VERSION}-macos-${{ matrix.artifact_arch }}.app.tar.gz"
+            cp "$updater_path" "release/$updater_name"
+            cp "$signature_path" "release/$updater_name.sig"
+          fi
+
+      - name: Upload verified packages
         uses: actions/upload-artifact@v4
         with:
           name: Aplena-${{ needs.metadata.outputs.display_version }}-macos-${{ matrix.artifact_arch }}
-          path: release/*.dmg
+          path: release/*
           if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
 
-      - name: Remove temporary signing keychain
+      - name: Remove temporary signing material
         if: always()
         shell: bash
         run: |
           if [[ -n "${APLENA_KEYCHAIN_PATH:-}" ]]; then
             security delete-keychain "$APLENA_KEYCHAIN_PATH" || true
           fi
-          rm -f "$RUNNER_TEMP/aplena-signing.p12" "$RUNNER_TEMP"/aplena-embedded-certificate*
+          rm -f "$RUNNER_TEMP/aplena-signing.p12" "$RUNNER_TEMP"/aplena-embedded-certificate* "$RUNNER_TEMP"/aplena-updater-certificate*
+          rm -rf "$RUNNER_TEMP/aplena-updater-${{ matrix.artifact_arch }}"
 
   publish:
-    name: Publish GitHub Release
+    name: Verify draft and publish GitHub Release
     needs:
       - metadata
       - package
     if: needs.metadata.outputs.release == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ needs.metadata.outputs.display_version }}
+      RELEASE_VERSION: ${{ needs.metadata.outputs.manifest_version }}
+      GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Download verified packages
         uses: actions/download-artifact@v4
         with:
           path: release
           merge-multiple: true
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
+      - name: Verify local binary asset set
+        run: >-
+          node .github/scripts/verify-release-assets.mjs
+          --mode local
+          --release-dir release
+          --version "$RELEASE_VERSION"
+          --tag "$RELEASE_TAG"
+          --repository "$GITHUB_REPOSITORY"
+          --include-manifest false
+
+      - name: Refuse to overwrite a published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing_json="$RUNNER_TEMP/existing-release.json"
+          existing_error="$RUNNER_TEMP/existing-release.error"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$existing_json" 2> "$existing_error"; then
+            node -e '
+              const fs = require("node:fs");
+              const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              if (release.draft !== true || release.prerelease !== false) {
+                throw new Error("An existing non-draft or prerelease release must not be overwritten");
+              }
+            ' "$existing_json"
+          elif ! grep -q 'HTTP 404' "$existing_error"; then
+            cat "$existing_error"
+            exit 1
+          fi
+
+      - name: Create or update draft with binary assets
+        id: draft
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           name: ${{ needs.metadata.outputs.display_version }}
           tag_name: ${{ needs.metadata.outputs.display_version }}
-          files: release/*.dmg
-          fail_on_unmatched_files: true
+          draft: true
+          prerelease: false
           generate_release_notes: true
+          files: |
+            release/*.dmg
+            release/*.app.tar.gz
+            release/*.app.tar.gz.sig
+          fail_on_unmatched_files: true
+          preserve_order: true
+
+      - name: Generate deterministic latest.json from draft notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          draft_json="$RUNNER_TEMP/draft-release.json"
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          gh api "repos/$GITHUB_REPOSITORY/releases/${{ steps.draft.outputs.id }}" > "$draft_json"
+          node -e '
+            const fs = require("node:fs");
+            const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            fs.writeFileSync(process.argv[2], release.body ?? "");
+          ' "$draft_json" "$notes_file"
+          publication_date="$(git show -s --format=%cI "$GITHUB_SHA")"
+          node .github/scripts/generate-updater-manifest.mjs \
+            --release-dir release \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --notes-file "$notes_file" \
+            --pub-date "$publication_date" \
+            --output release/latest.json
+          node .github/scripts/verify-release-assets.mjs \
+            --mode local \
+            --release-dir release \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --include-manifest true
+
+      - name: Add latest.json to the draft
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        with:
+          tag_name: ${{ needs.metadata.outputs.display_version }}
+          draft: true
+          prerelease: false
+          files: release/latest.json
+          fail_on_unmatched_files: true
+
+      - name: Verify remote draft asset set and digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          draft_json="$RUNNER_TEMP/draft-release-complete.json"
+          download_dir="$RUNNER_TEMP/downloaded-release"
+          assets_tsv="$RUNNER_TEMP/release-assets.tsv"
+          mkdir -p "$download_dir"
+          gh api "repos/$GITHUB_REPOSITORY/releases/${{ steps.draft.outputs.id }}" > "$draft_json"
+          node .github/scripts/verify-release-assets.mjs \
+            --mode metadata \
+            --release-json "$draft_json" \
+            --local-dir release \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --expect-draft true
+          node -e '
+            const fs = require("node:fs");
+            const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            fs.writeFileSync(
+              process.argv[2],
+              release.assets.map((asset) => `${asset.id}\t${asset.name}`).join("\n") + "\n",
+            );
+          ' "$draft_json" "$assets_tsv"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            gh api \
+              -H "Accept: application/octet-stream" \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$download_dir/$asset_name"
+          done < "$assets_tsv"
+          node .github/scripts/verify-release-assets.mjs \
+            --mode remote \
+            --release-json "$draft_json" \
+            --local-dir release \
+            --download-dir "$download_dir" \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --expect-draft true
+
+      - name: Publish the verified draft
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        with:
+          tag_name: ${{ needs.metadata.outputs.display_version }}
+          draft: false
+          prerelease: false
+          make_latest: true
+
+      - name: Verify the published latest endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_json="$RUNNER_TEMP/published-release.json"
+          latest_release_json="$RUNNER_TEMP/latest-release.json"
+          downloaded_manifest="$RUNNER_TEMP/latest.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/${{ steps.draft.outputs.id }}" > "$release_json"
+          node .github/scripts/verify-release-assets.mjs \
+            --mode metadata \
+            --release-json "$release_json" \
+            --local-dir release \
+            --version "$RELEASE_VERSION" \
+            --tag "$RELEASE_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --expect-draft false
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" > "$latest_release_json"
+          node -e '
+            const fs = require("node:fs");
+            const release = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const latest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+            if (release.id !== latest.id || latest.tag_name !== process.env.RELEASE_TAG) {
+              throw new Error("The verified release is not the repository latest stable release");
+            }
+          ' "$release_json" "$latest_release_json"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 2 \
+            "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.json" \
+            --output "$downloaded_manifest"
+          cmp release/latest.json "$downloaded_manifest"

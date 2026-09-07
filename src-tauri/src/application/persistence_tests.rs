@@ -181,6 +181,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             (2, "remove monthly item status".to_owned(), 1),
             (3, "remove next month goal".to_owned(), 1),
             (4, "add automatic rate refresh".to_owned(), 1),
+            (5, "add software update preferences".to_owned(), 1),
         ]
     );
 
@@ -201,6 +202,14 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
         .collect::<Vec<_>>();
     assert_eq!(business_tables.len(), 5);
     assert!(business_tables.iter().all(|(_, strict)| *strict == 1));
+    let update_preferences_strict: i64 = sqlx::query_scalar(
+        "SELECT strict FROM pragma_table_list WHERE schema = 'main' \
+         AND name = 'software_update_preferences'",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(update_preferences_strict, 1);
 
     let names: Vec<String> =
         sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
@@ -301,6 +310,12 @@ async fn current_schema_matches_the_frozen_pre_release_schema_after_public_migra
     .execute(&pre_release)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0005_add_software_update_preferences.sql"
+    ))
+    .execute(&pre_release)
+    .await
+    .unwrap();
 
     assert_eq!(
         schema_snapshot(baseline.pool()).await,
@@ -350,6 +365,66 @@ async fn automatic_rate_refresh_migration_preserves_existing_settings() {
     .await
     .unwrap();
     assert_eq!(stored, ("CNY".to_owned(), 0));
+}
+
+#[tokio::test]
+async fn software_update_preferences_migration_preserves_financial_settings_and_defaults_enabled() {
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")
+        .unwrap()
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    for migration in [
+        include_str!("../../migrations/0001_initial_release.sql"),
+        include_str!("../../migrations/0002_remove_monthly_item_status.sql"),
+        include_str!("../../migrations/0003_remove_next_month_goal.sql"),
+        include_str!("../../migrations/0004_add_automatic_rate_refresh.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
+         VALUES ('CNY', 100000000, 'BASE_CURRENCY', '2026-09-01', '2026-09-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO settings (id, base_currency_code, auto_update_exchange_rates, created_at, updated_at) \
+         VALUES (1, 'CNY', 1, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0005_add_software_update_preferences.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let settings: (String, i64, String) = sqlx::query_as(
+        "SELECT base_currency_code, auto_update_exchange_rates, updated_at FROM settings WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        settings,
+        ("CNY".to_owned(), 1, "2026-09-01T00:00:00Z".to_owned())
+    );
+    let preferences: (i64, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT auto_check_updates, last_checked_at, last_check_status \
+         FROM software_update_preferences WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(preferences, (1, None, None));
 }
 
 #[tokio::test]
@@ -540,6 +615,70 @@ async fn automatic_rate_refresh_preference_is_persisted() {
             .unwrap()
             .auto_update_exchange_rates
     );
+}
+
+#[tokio::test]
+async fn software_update_preferences_are_persisted_without_overwriting_financial_settings() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("software-update-preferences.sqlite3");
+    let store = open_database(&path).await.unwrap();
+    let defaults = store.get_software_update_preferences().await.unwrap();
+    assert!(defaults.auto_check_updates);
+    assert!(defaults.last_checked_at.is_none());
+    assert!(defaults.last_check_status.is_none());
+
+    let disabled = store
+        .set_software_update_auto_check(false, "2026-09-07T01:00:00Z")
+        .await
+        .unwrap();
+    assert!(!disabled.auto_check_updates);
+    assert_eq!(disabled.updated_at, "2026-09-07T01:00:00Z");
+    let checked = store
+        .record_software_update_check("UP_TO_DATE", "2026-09-07T01:02:00Z")
+        .await
+        .unwrap();
+    assert!(!checked.auto_check_updates);
+    assert_eq!(
+        checked.last_checked_at.as_deref(),
+        Some("2026-09-07T01:02:00Z")
+    );
+    assert_eq!(checked.last_check_status.as_deref(), Some("UP_TO_DATE"));
+
+    store
+        .create_settings(
+            &Settings::with_auto_update_exchange_rates(CurrencyCode::new("CNY").unwrap(), true)
+                .unwrap(),
+            "2026-09-07T01:03:00Z",
+        )
+        .await
+        .unwrap();
+    store.close().await;
+
+    let reopened = open_database(&path).await.unwrap();
+    let preferences = reopened.get_software_update_preferences().await.unwrap();
+    assert!(!preferences.auto_check_updates);
+    assert_eq!(
+        preferences.last_checked_at.as_deref(),
+        Some("2026-09-07T01:02:00Z")
+    );
+    assert_eq!(preferences.last_check_status.as_deref(), Some("UP_TO_DATE"));
+    let settings = reopened.get_settings().await.unwrap().unwrap();
+    assert_eq!(settings.value.base_currency().as_str(), "CNY");
+    assert!(settings.value.auto_update_exchange_rates());
+}
+
+#[tokio::test]
+async fn software_update_check_status_rejects_unknown_values_without_changing_last_check() {
+    let store = open_memory_database().await.unwrap();
+    let error = store
+        .record_software_update_check("UNSAFE_STATUS", "2026-09-07T01:00:00Z")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Database(_)));
+
+    let preferences = store.get_software_update_preferences().await.unwrap();
+    assert!(preferences.last_checked_at.is_none());
+    assert!(preferences.last_check_status.is_none());
 }
 
 #[tokio::test]

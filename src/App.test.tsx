@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App, ApplicationErrorBoundary } from "./App";
@@ -16,11 +17,22 @@ import type {
   PlanItem,
   Settings,
 } from "./shared/api/finance";
+import type {
+  SoftwareUpdatePreferences,
+  SoftwareUpdateStatus,
+} from "./shared/api/softwareUpdates";
 
-const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+const { invokeMock, listenMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  listenMock: vi.fn(),
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: listenMock,
 }));
 
 vi.mock("./shared/components/AnalyticsChart", () => ({
@@ -329,11 +341,17 @@ interface HarnessOptions {
   monthly?: Record<string, MonthlyItem[]>;
   startupCreated?: number;
   missingCurrency?: string;
-  rejectCommand?: { command: string; error: unknown };
+  rejectCommand?: {
+    command: string;
+    error: unknown;
+    trigger?: "STARTUP" | "MANUAL";
+  };
   analytics?: MonthAnalytics;
   history?: MonthAnalytics[];
   projection?: BudgetProjection;
   actualEntries?: Record<string, ActualEntry[]>;
+  updatePreferences?: SoftwareUpdatePreferences;
+  updateStatus?: SoftwareUpdateStatus;
 }
 
 function installHarness(options: HarnessOptions = {}) {
@@ -345,8 +363,23 @@ function installHarness(options: HarnessOptions = {}) {
     Object.entries(options.actualEntries ?? {}).map(([itemId, entries]) => [itemId, [...entries]]),
   );
   const initialized = new Set<string>();
+  let updatePreferences = options.updatePreferences ?? { auto_check_updates: false };
+  let updateStatus: SoftwareUpdateStatus = options.updateStatus ?? {
+    current_version: "1.1.3",
+    phase: "IDLE",
+    release: null,
+    downloaded_bytes: 0,
+    total_bytes: null,
+    last_check: null,
+    last_error: null,
+    update_signing_ready: true,
+  };
   const invoke: Invoke = async <T,>(command: string, args?: Record<string, unknown>) => {
-    if (options.rejectCommand?.command === command) {
+    if (
+      options.rejectCommand?.command === command &&
+      (options.rejectCommand.trigger === undefined ||
+        (args?.trigger as "STARTUP" | "MANUAL" | undefined) === options.rejectCommand.trigger)
+    ) {
       throw options.rejectCommand.error;
     }
     switch (command) {
@@ -387,6 +420,37 @@ function installHarness(options: HarnessOptions = {}) {
           },
           error: null,
         } as T;
+      case "get_software_update_preferences":
+        return updatePreferences as T;
+      case "set_software_update_auto_check":
+        updatePreferences = {
+          auto_check_updates: (args?.input as { enabled: boolean }).enabled,
+        };
+        return updatePreferences as T;
+      case "get_software_update_status":
+        return updateStatus as T;
+      case "check_software_update": {
+        const trigger = args?.trigger as "STARTUP" | "MANUAL";
+        updateStatus = {
+          ...updateStatus,
+          phase: "IDLE",
+          last_check: {
+            completed_at: "2026-09-07T02:00:00Z",
+            trigger,
+            outcome: "UP_TO_DATE",
+          },
+          last_error: null,
+        };
+        return updateStatus as T;
+      }
+      case "download_and_install_software_update":
+        updateStatus = { ...updateStatus, phase: "READY_TO_RESTART" };
+        return updateStatus as T;
+      case "cancel_software_update":
+        updateStatus = { ...updateStatus, phase: "AVAILABLE", downloaded_bytes: 0 };
+        return updateStatus as T;
+      case "restart_after_software_update":
+        return undefined as T;
       case "list_exchange_rates":
         return storedRates as T;
       case "import_reference_rates": {
@@ -555,6 +619,8 @@ describe("planning workflows", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     invokeMock.mockReset();
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => undefined);
     window.location.hash = "";
   });
 
@@ -599,7 +665,7 @@ describe("planning workflows", () => {
     expect(main).toHaveProperty("scrollTop", 0);
   });
 
-  it("keeps settings limited to financial configuration", async () => {
+  it("shows financial configuration and an independent software update panel", async () => {
     installHarness();
     window.location.hash = "#/settings";
     render(<App />);
@@ -607,12 +673,13 @@ describe("planning workflows", () => {
     expect(await screen.findByRole("heading", { name: "系统设置" })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "本位币" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "当前汇率" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "软件更新" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "更新官方汇率" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "启动时自动更新汇率" })).not.toBeChecked();
     expect(screen.getByText(/欧洲央行每日参考汇率通常在工作日更新/)).toBeInTheDocument();
     expect(screen.queryByText(/尚无月度快照时可以直接切换/)).not.toBeInTheDocument();
     expect(document.querySelectorAll(".base-currency-setting")).toHaveLength(1);
-    expect(document.querySelectorAll(".settings-card")).toHaveLength(1);
+    expect(document.querySelectorAll(".settings-card")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
     expect(screen.queryByLabelText("下月目标储蓄率")).not.toBeInTheDocument();
   });
@@ -630,6 +697,200 @@ describe("planning workflows", () => {
     expect(invokeMock).toHaveBeenCalledWith("save_settings", {
       input: { baseCurrency: "CNY", autoUpdateExchangeRates: true },
     });
+  });
+
+  it("persists the independent automatic software-update preference", async () => {
+    installHarness();
+    const user = userEvent.setup();
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    const toggle = await screen.findByRole("switch", { name: "启动后自动检查软件更新" });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(invokeMock).toHaveBeenCalledWith("set_software_update_auto_check", {
+      input: { enabled: true },
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("save_settings", expect.anything());
+  });
+
+  it("reports an up-to-date result only for a manual software update check", async () => {
+    installHarness();
+    const user = userEvent.setup();
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "立即检查更新" }));
+
+    expect(await screen.findByText("当前已是最新版本。")).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("check_software_update", { trigger: "MANUAL" });
+    expect(invokeMock).not.toHaveBeenCalledWith("check_software_update", { trigger: "STARTUP" });
+  });
+
+  it("checks software updates once after startup without blocking the application", async () => {
+    installHarness({ updatePreferences: { auto_check_updates: true } });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(invokeMock.mock.calls.filter(([command]) => command === "check_software_update")).toEqual([
+        ["check_software_update", { trigger: "STARTUP" }],
+      ]);
+    });
+    expect(screen.queryByRole("heading", { name: "本地财务服务暂不可用" })).not.toBeInTheDocument();
+  });
+
+  it("checks once and releases every event listener under React StrictMode", async () => {
+    installHarness({ updatePreferences: { auto_check_updates: true } });
+    const stopListeners: ReturnType<typeof vi.fn>[] = [];
+    listenMock.mockImplementation(async () => {
+      const stop = vi.fn();
+      stopListeners.push(stop);
+      return stop;
+    });
+    const view = render(<StrictMode><App /></StrictMode>);
+
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(invokeMock.mock.calls.filter(([command]) => command === "check_software_update"))
+        .toEqual([["check_software_update", { trigger: "STARTUP" }]]);
+      expect(stopListeners.length).toBeGreaterThanOrEqual(2);
+      expect(stopListeners[0]).toHaveBeenCalledTimes(1);
+    });
+
+    view.unmount();
+    expect(stopListeners.every((stop) => stop.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("keeps startup check failures quiet but reports the same manual failure", async () => {
+    installHarness({
+      updatePreferences: { auto_check_updates: true },
+      rejectCommand: {
+        command: "check_software_update",
+        error: {
+          error_code: "UPDATE_CHECK_TIMEOUT",
+          message_key: "error.update_check_timeout",
+        },
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "2026 年 8 月" })).toBeInTheDocument();
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("check_software_update", { trigger: "STARTUP" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "设置" }));
+    await user.click(await screen.findByRole("button", { name: "立即检查更新" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("检查软件更新超时");
+  });
+
+  it("renders transfer events, permits cancellation only while downloading, and cleans up", async () => {
+    installHarness();
+    let updateListener: ((event: { payload: SoftwareUpdateStatus }) => void) | undefined;
+    const stopListening = vi.fn();
+    listenMock.mockImplementation(async (_event: string, listener: typeof updateListener) => {
+      updateListener = listener;
+      return stopListening;
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/settings";
+    const view = render(<App />);
+    await screen.findByRole("heading", { name: "软件更新" });
+
+    const transferring: SoftwareUpdateStatus = {
+      current_version: "1.1.3",
+      phase: "DOWNLOADING",
+      release: {
+        version: "1.2.0",
+        notes: "Updater transfer fixture.",
+        published_at: "2026-09-07T00:00:00Z",
+        download_size_bytes: 100,
+      },
+      downloaded_bytes: 25,
+      total_bytes: 100,
+      last_check: null,
+      last_error: null,
+      update_signing_ready: true,
+    };
+    updateListener?.({ payload: transferring });
+    expect(await screen.findByText("25% · 25 B / 100 B")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "取消下载" }));
+    expect(invokeMock).toHaveBeenCalledWith("cancel_software_update");
+
+    updateListener?.({ payload: { ...transferring, phase: "VERIFYING", downloaded_bytes: 100 } });
+    expect(await screen.findByText("正在验证更新签名")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "取消下载" })).not.toBeInTheDocument();
+
+    view.unmount();
+    expect(stopListening).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks installation when the build has no updater signing key", async () => {
+    installHarness({
+      updateStatus: {
+        current_version: "1.1.3",
+        phase: "AVAILABLE",
+        release: {
+          version: "1.2.0",
+          notes: null,
+          published_at: null,
+          download_size_bytes: null,
+        },
+        downloaded_bytes: 0,
+        total_bytes: null,
+        last_check: null,
+        last_error: null,
+        update_signing_ready: false,
+      },
+    });
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "下载并安装" })).toBeDisabled();
+    expect(screen.getByText(/当前构建未嵌入生产 updater 公钥/)).toBeInTheDocument();
+  });
+
+  it("asks before installing and focuses the safe restart-later action", async () => {
+    installHarness({
+      updateStatus: {
+        current_version: "1.1.3",
+        phase: "AVAILABLE",
+        release: {
+          version: "1.2.0",
+          notes: "Improves update safety.",
+          published_at: "2026-09-07T00:00:00Z",
+          download_size_bytes: 8_388_608,
+        },
+        downloaded_bytes: 0,
+        total_bytes: null,
+        last_check: {
+          completed_at: "2026-09-07T00:00:00Z",
+          trigger: "STARTUP",
+          outcome: "UPDATE_AVAILABLE",
+        },
+        last_error: null,
+        update_signing_ready: true,
+      },
+    });
+    const user = userEvent.setup();
+    window.location.hash = "#/settings";
+    render(<App />);
+
+    expect(await screen.findByText("Aplena 1.2.0 已可用。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "下载并安装" }));
+    expect(screen.getByText(/开始前请先保存正在编辑的内容/)).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith("download_and_install_software_update");
+
+    await user.click(screen.getByRole("button", { name: "确认下载并安装" }));
+    const dialog = await screen.findByRole("dialog", { name: "更新已安装" });
+    const later = within(dialog).getByRole("button", { name: "稍后" });
+    await waitFor(() => expect(later).toHaveFocus());
+    await user.click(later);
+    expect(screen.queryByRole("dialog", { name: "更新已安装" })).not.toBeInTheDocument();
+    expect(screen.getByText("Aplena 1.2.0 已安装，重启后生效。")).toBeInTheDocument();
   });
 
   it("updates official exchange rates once during startup when enabled", async () => {

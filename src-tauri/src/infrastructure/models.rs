@@ -11,6 +11,15 @@ pub struct StoredSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredSoftwareUpdatePreferences {
+    pub auto_check_updates: bool,
+    pub last_checked_at: Option<String>,
+    pub last_check_status: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredExchangeRate {
     pub currency: CurrencyCode,
     pub exchange_rate: ExchangeRate,
