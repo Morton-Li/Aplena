@@ -9,6 +9,6 @@ pub use database::open_memory_database;
 pub use error::StoreError;
 pub use models::{
     ActualEntryExchangeSnapshot, DeletePlanResult, StoredActualEntry, StoredExchangeRate,
-    StoredMonthlyItem, StoredPlanItem, StoredSettings,
+    StoredMonthlyItem, StoredPlanItem, StoredSettings, StoredSoftwareUpdatePreferences,
 };
 pub use store::Store;

@@ -1,6 +1,6 @@
 # Aplena 数据库 Schema
 
-当前正式 schema：4
+当前正式 schema：5
 数据库：SQLite STRICT tables + foreign keys + WAL
 
 ## 1. 存储约定
@@ -18,7 +18,7 @@ RATE_SCALE   = 100_000_000
 - UUID 存为 36 字符文本；
 - 没有实际条目时派生实际为 `NULL`，不能擅自解释为零。
 
-五张核心业务表以外，SQLx 自有迁移表不属于业务模型。
+五张财务业务表以外，`software_update_preferences` 只保存软件更新运行偏好；SQLx 自有迁移表不属于业务模型。
 
 ## 2. `settings`
 
@@ -142,7 +142,21 @@ END AS derived_actual_amount_scaled
 
 实际净额可为负，不能套用计划金额的非负约束。
 
-## 8. 写入矩阵
+## 8. `software_update_preferences`
+
+独立单行设置，不混入财务 `settings`：
+
+| 字段 | 类型 | 约束 |
+|---|---|---|
+| `id` | INTEGER | 固定 1 |
+| `auto_check_updates` | INTEGER | 0 / 1，默认 1 |
+| `last_checked_at` | TEXT | 可空 |
+| `last_check_status` | TEXT | 可空；`UP_TO_DATE` / `UPDATE_AVAILABLE` / `FAILED` |
+| `created_at` / `updated_at` | TEXT | 非空 |
+
+上次检查时间与结果必须同时为空或同时存在。下载进度、待安装包和重启状态不持久化，应用重开后重新检查，避免把过期临时文件当作权威状态。
+
+## 9. 写入矩阵
 
 | 操作 | 可修改内容 | 保护 |
 |---|---|---|
@@ -155,17 +169,19 @@ END AS derived_actual_amount_scaled
 | 条目 CRUD | 用户条目字段 | 日期同月、正金额、禁止改挂 |
 | 删除临时类目 | `MANUAL + ACTUAL_ONLY` 类目及其条目 | 事务、预算快照拒绝删除 |
 | 分析 | 无写入 | 实时查询 |
+| 软件更新偏好/检查结果 | 独立单行表 | 不修改财务设置和业务表 |
 
-## 9. 正式迁移基线
+## 10. 正式迁移基线
 
 - `0001_initial_release.sql`：首个公开版的完整六表结构、7 个业务索引和 12 个触发器；
 - `0002_remove_monthly_item_status.sql`：移除 `actual_confirmed_at` 及 3 个条目变更重开触发器，保留 9 个业务触发器；
 - `0003_remove_next_month_goal.sql`：删除 `next_month_goal` 表及其中旧目标数据，当前业务结构为五张表；
 - `0004_add_automatic_rate_refresh.sql`：在设置中保存启动时自动更新汇率偏好；
-- 新安装的 `_sqlx_migrations` 顺序记录 schema 1 至 schema 4；
+- `0005_add_software_update_preferences.sql`：新增独立软件更新偏好和最近检查结果；
+- 新安装的 `_sqlx_migrations` 顺序记录 schema 1 至 schema 5；
 - 基线不包含旧金额转换、临时表、过渡列或数据搬运语句；
 - 正式发布后的变更只允许追加迁移，不再改写 schema 1。
 
-预发布六段迁移的最终结构已冻结为测试夹具。自动测试先把 schema 2 至 schema 4 变更应用到冻结夹具，再比较 `sqlite_schema`、列、类型、默认值、非空与主键、外键、索引列、触发器和 STRICT 属性；同时验证高版本预发布库会在不修改内容的前提下被拒绝。现有本地预发布数据必须遵循[独立换轨方案](08-pre-release-database-transition.md)，不能直接修改 `_sqlx_migrations`。
+预发布六段迁移的最终结构已冻结为测试夹具。自动测试先把 schema 2 至 schema 5 变更应用到冻结夹具，再比较财务结构，并单独验证软件更新偏好的默认值与持久化；同时验证高版本预发布库会在不修改内容的前提下被拒绝。现有本地预发布数据必须遵循[独立换轨方案](08-pre-release-database-transition.md)，不能直接修改 `_sqlx_migrations`。
 
 发现未来 schema 时拒绝启动，不做降级写入。任何正式迁移失败都会阻止应用进入业务流程。

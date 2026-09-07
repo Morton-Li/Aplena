@@ -4,6 +4,7 @@ dist/
 target/
 .cargo-home/
 src-tauri/gen/schemas/
+src-tauri/tauri.release.generated.conf.json
 coverage/
 output/playwright/
 .DS_Store

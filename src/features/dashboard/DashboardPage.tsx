@@ -123,7 +123,7 @@ function EmptyDashboard({ month, currency }: { month: string; currency: string }
         action={
           <div className="empty-actions">
             <Link className="button button-primary" to="/monthly">录入本月实际</Link>
-            <Link className="button button-secondary" to="/goals">设置下月目标（可选）</Link>
+            <Link className="button button-secondary" to="/goals">配置下月预算（可选）</Link>
           </div>
         }
       />

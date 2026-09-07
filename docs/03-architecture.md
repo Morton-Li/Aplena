@@ -21,6 +21,9 @@ crates/pfcm-domain
 src-tauri/src/application
   DTO、用例编排、分析投影、稳定错误协议
 
+src-tauri/src/application_updates
+  更新状态机、GitHub 清单、签名下载与 macOS 原子安装
+
 src-tauri/src/infrastructure
   SQLite、迁移、Store 与数据库文件权限
 
@@ -63,7 +66,7 @@ Rust 后端是金额、日期计入、偏差、比例和预算投影的唯一权
 
 ## 4. 持久化与派生数据
 
-持久化五张核心业务表：
+持久化五张财务业务表：
 
 ```text
 settings
@@ -72,6 +75,8 @@ plan_items
 monthly_items
 actual_entries
 ```
+
+`software_update_preferences` 是独立的单行运行偏好表，不进入财务模型或 FinanceService 操作门。它只保存是否启动检查，以及最近一次完成检查的时间和结果。
 
 以下内容不建表：月度报告、Dashboard、趋势、分类结构、项目排名、偏差榜、实际总额。查询通过 `monthly_items LEFT JOIN actual_entries` 聚合，并在应用层生成统一分析 DTO。
 
@@ -112,7 +117,7 @@ actual_entries
 
 前端 Query Key 至少区分：
 
-- 设置、下月目标、汇率、周期规则；
+- 设置、汇率、周期规则；
 - 月份预览与月度项目；
 - 某月度项目的实际条目；
 - 月度分析、历史分析、仅下月预算投影；
@@ -138,6 +143,17 @@ get_month_analytics / get_history_analytics
 
 DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `field`、`message_key` 和安全参数；数据库路径、SQL、堆栈或原始系统错误不进入 UI。
 
+软件更新命令单独注册为：
+
+```text
+get_software_update_preferences / set_software_update_auto_check
+get_software_update_status / check_software_update
+download_and_install_software_update / cancel_software_update
+restart_after_software_update
+```
+
+更新状态机使用独立互斥量，阶段依次为 `IDLE`、`CHECKING`、`AVAILABLE`、`DOWNLOADING`、`VERIFYING`、`INSTALLING`、`READY_TO_RESTART`。下载进度通过 `software-update://status` 事件发送，不向 WebView 开放 updater 插件权限。
+
 ## 9. SQLite 生命周期
 
 启动流程：
@@ -149,7 +165,7 @@ DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `fiel
 5. 启用 foreign keys、WAL 和同步策略；
 6. 启动当前自然月自动初始化。
 
-首个公开版把尚未发布的六段演进迁移压缩为 `0001_initial_release.sql`。公开兼容性从 schema 1 开始；schema 2 追加移除类目状态字段与重开触发器，schema 3 直接删除旧下月目标表及数据，schema 4 保存启动时自动更新汇率偏好。已发布迁移不可修改，只能追加。高于当前应用支持版本的数据库会在迁移前被拒绝，预发布库换轨必须使用隔离副本和显式数据复制流程。
+首个公开版把尚未发布的六段演进迁移压缩为 `0001_initial_release.sql`。公开兼容性从 schema 1 开始；schema 2 追加移除类目状态字段与重开触发器，schema 3 直接删除旧下月目标表及数据，schema 4 保存启动时自动更新汇率偏好，schema 5 新增独立软件更新偏好。已发布迁移不可修改，只能追加。高于当前应用支持版本的数据库会在迁移前被拒绝，预发布库换轨必须使用隔离副本和显式数据复制流程。
 
 ## 10. 安全边界
 
@@ -158,6 +174,8 @@ DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `fiel
 - 数据库路径不通过 IPC 暴露；
 - SQL 参数绑定，用户文本不拼接查询；
 - 真实应用冒烟必须设置隔离临时数据目录。
+- 更新清单只接受 HTTPS GitHub Releases 端点和高于当前版本的稳定 SemVer；生产 updater 公钥必须在严格标签构建时注入。
+- `tauri-plugin-updater` 只负责下载与 minisign 验证，不调用其 macOS `install`；仓库内安装器在同一卷完成解包、应用身份验证与 `RENAME_SWAP` 原子交换，失败时不执行双重 rename、AppleScript 或提权回退。
 
 首个正式版明确接受未做静态加密的本地 SQLite；当前安全边界依赖 OS 账户、私有文件权限和 FileVault 建议，详见 ADR 0006。SQLCipher 与系统凭据存储保留为未来增强，不再作为首版发布硬门禁。
 
@@ -169,12 +187,16 @@ DTO 不暴露内部缩放整数。错误结构包含 `error_code`、可空 `fiel
 
 ### 11.2 应用与数据库层
 
-验证 schema 1 到 schema 4 的追加迁移、目标表删除、自动汇率更新偏好、旧预发布库无修改拒绝、WAL、事务回滚、并发幂等、快照不可变、条目 CRUD、临时类目事务删除及预算快照保护、仅实际原位提升、已删除计划拒绝、分析口径和本位币锁。
+验证 schema 1 到 schema 5 的追加迁移、目标表删除、两类自动更新偏好相互独立、旧预发布库无修改拒绝、WAL、事务回滚、并发幂等、快照不可变、条目 CRUD、临时类目事务删除及预算快照保护、仅实际原位提升、已删除计划拒绝、分析口径和本位币锁。
 
 ### 11.3 前端
 
 验证默认设置直达应用、临时类目创建与删除、日级录入默认当日、退款/冲减、保存校验提示、只读净额、弹窗与抽屉共存、删除确认层级、历史报告直达月份/项目调整、月份浏览、显式初始化和分析展示。
 
+软件更新额外验证 StrictMode 下启动只检查一次且事件监听完整释放、自动失败静默、手动失败可见、两步安装确认、下载进度/取消边界、未配置生产公钥时禁止安装，以及安全的“稍后重启”默认焦点。
+
 ### 11.4 发布级验证
 
 除类型、Lint、单元测试和构建外，发布候选必须完成 Tauri release `.app` 构建，并以系统临时目录下的隔离 `APLENA_SMOKE_DATA_DIR` 启动真实应用，检查关键页面和数据写读；禁止连接真实用户数据库。
+
+Updater 发行还必须验证双架构 `.app.tar.gz` 及 `.sig`、精确资产集合、确定性 `latest.json`、远端 digest 与逐字节回读。正式自签名身份、Intel 包及 GitHub `/releases/latest` 只能由远程严格标签流水线形成最终证据。
