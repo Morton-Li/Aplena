@@ -27,7 +27,7 @@ import {
 } from "../../shared/api/referenceRates";
 import { getDomainContract } from "../../shared/api/domain";
 import { describeError } from "../../shared/formatting/errors";
-import { currencyName, monthLabel } from "../../shared/formatting/finance";
+import { currencyName, formatExchangeRate, formatMoney, monthLabel } from "../../shared/formatting/finance";
 import { Dialog } from "../../shared/components/Dialog";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { Select } from "../../shared/components/Select";
@@ -39,6 +39,10 @@ import {
   filterAndSortMonthlyItems,
   type MonthlyWorkspaceFilters,
 } from "./monthlyWorkspace";
+import {
+  evaluateAmountExpression,
+  type AmountExpressionError,
+} from "./amountExpression";
 
 type EntryDialogRequest = { item: MonthlyItem; existing?: ActualEntry } | null;
 
@@ -295,9 +299,11 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
     ...rates.map((rate) => rate.currency),
     ...(referenceQuery.data ?? []).map((rate) => rate.currency),
   ])).sort().map((code) => ({ value: code, label: currencyName(code), description: code })), [baseCurrency, rates, referenceQuery.data]);
-  const amountIsInvalid = !/^\d+(\.\d{1,2})?$/.test(amount) || Number(amount) <= 0;
+  const amountEvaluation = evaluateAmountExpression(amount);
+  const amountIsInvalid = !amountEvaluation.ok;
+  const amountUsesOperators = /[+\-*/×÷()（）]/.test(amount);
   const mutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (resolvedAmount: string) => {
       let exchangeRate = ratePreview;
       if (!existing && currency !== baseCurrency) {
         try {
@@ -319,7 +325,7 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
         monthlyItemId: item.id,
         occurredOn,
         effect,
-        amount,
+        amount: resolvedAmount,
         currency,
         exchangeRate: exchangeRate.rate,
         exchangeRateSource: source as "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL",
@@ -335,7 +341,7 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
   const entryLabel = flow === "EXPENSE" ? "支出或退款" : "收入或冲减";
   const saveEntry = () => {
     setSaveAttempted(true);
-    if (!amountIsInvalid) mutation.mutate();
+    if (amountEvaluation.ok) mutation.mutate(amountEvaluation.amount);
   };
   return <Dialog
     className="entry-dialog"
@@ -350,12 +356,21 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
     </div>
     <div className="entry-money-grid">
       <label>币种<Select ariaLabel="实际条目币种" disabled={Boolean(existing)} value={currency} onChange={setCurrency} options={currencyOptions} /></label>
-      <label>原币金额<input autoFocus data-dialog-initial-focus aria-label="原币金额" aria-invalid={(saveAttempted && amountIsInvalid) || undefined} inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} />{saveAttempted && amountIsInvalid && <em role="alert">请输入大于 0、最多两位小数的金额。</em>}</label>
+      <label>
+        原币金额
+        <input autoFocus data-dialog-initial-focus aria-label="原币金额" aria-invalid={(saveAttempted && amountIsInvalid) || undefined} inputMode="text" maxLength={120} placeholder="例如 120+35.50" spellCheck={false} value={amount} onChange={(event) => setAmount(event.target.value)} />
+        {amountUsesOperators && amountEvaluation.ok
+          ? <small>计算结果：{formatMoney(amountEvaluation.amount, currency)}；保存时仅记录结果。</small>
+          : <small>支持 +、−、×、÷ 和括号；保存时仅记录计算结果。</small>}
+        {saveAttempted && !amountEvaluation.ok && <em role="alert">{amountExpressionErrorMessage(amountEvaluation.error)}</em>}
+      </label>
     </div>
-    <div className="entry-rate-snapshot" aria-live="polite">
-      <span>本次换算基准</span>
-      {ratePreview ? <><strong>1 {currency} = {ratePreview.rate} {baseCurrency}</strong><small>{ratePreview.source === "ECB_REFERENCE" ? `欧洲央行每日参考汇率 · ${ratePreview.observedOn}${isReferenceRateStale(ratePreview.observedOn) ? " · 数据日期较早" : ""}` : ratePreview.source === "MANUAL" ? `备用手动汇率 · ${ratePreview.observedOn}` : "本位币 1:1"}{existing ? " · 编辑仍沿用原快照" : " · 保存后固定"}</small></> : <><strong>{referenceQuery.isPending ? "正在获取欧洲央行每日参考汇率…" : "暂无可用汇率"}</strong><small>无法获取时可使用设置页中已经保存的备用汇率。</small></>}
-    </div>
+    {currency !== baseCurrency && (
+      <div className="entry-rate-snapshot" aria-live="polite">
+        <span>本次换算基准</span>
+        {ratePreview ? <><strong>1 {currency} = {formatExchangeRate(ratePreview.rate)} {baseCurrency}</strong><small>{ratePreview.source === "ECB_REFERENCE" ? `欧洲央行每日参考汇率 · ${ratePreview.observedOn}${isReferenceRateStale(ratePreview.observedOn) ? " · 数据日期较早" : ""}` : `备用手动汇率 · ${ratePreview.observedOn}`}{existing ? " · 编辑仍沿用原快照" : " · 保存后固定"}</small></> : <><strong>{referenceQuery.isPending ? "正在获取欧洲央行每日参考汇率…" : "暂无可用汇率"}</strong><small>无法获取时可使用设置页中已经保存的备用汇率。</small></>}
+      </div>
+    )}
     <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
     {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
   </Dialog>;
@@ -371,6 +386,23 @@ function validMonth(value: string | null): value is string {
 
 function flowForCategory(category: string): "INCOME" | "EXPENSE" {
   return ["FIXED_INCOME", "VARIABLE_INCOME"].includes(category) ? "INCOME" : "EXPENSE";
+}
+
+function amountExpressionErrorMessage(error: AmountExpressionError) {
+  switch (error) {
+    case "EMPTY":
+      return "请输入大于 0 的金额。";
+    case "DIVISION_BY_ZERO":
+      return "除数不能为 0。";
+    case "NON_POSITIVE":
+      return "运算结果必须大于 0。";
+    case "RESULT_TOO_SMALL":
+      return "运算结果四舍五入到分后必须大于 0.00。";
+    case "RESULT_OUT_OF_RANGE":
+      return "运算结果超出可保存的金额范围。";
+    case "INVALID_EXPRESSION":
+      return "请输入有效金额或运算式（支持 +、−、×、÷ 和括号）。";
+  }
 }
 
 function InitializationDialog({

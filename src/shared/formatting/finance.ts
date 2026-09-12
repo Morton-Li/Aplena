@@ -36,6 +36,15 @@ export function formatPercentagePoints(value: string | null, fallback = "—") {
   return value === null ? fallback : `${displayDecimal(value)} 个百分点`;
 }
 
+export function formatExchangeRate(value: string) {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (!match) return value;
+
+  const [, integer, fraction = ""] = match;
+  const significantFraction = fraction.replace(/0+$/, "");
+  return `${integer}.${significantFraction.padEnd(2, "0")}`;
+}
+
 export function currencyName(currency: string) {
   return currencyNames[currency] ?? currency;
 }
