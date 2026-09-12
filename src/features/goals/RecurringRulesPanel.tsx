@@ -337,18 +337,20 @@ function PlanEditor({
             <label>开始日期<input type="date" {...form.register("startDate")} /></label>
             <label>结束日期（可选）<input type="date" {...form.register("endDate")} />{form.formState.errors.endDate && <em>{form.formState.errors.endDate.message}</em>}</label>
           </div>
-          <fieldset className="mode-options">
-            <legend>确认模式</legend>
-            <label className={values.recognitionMode === "AMORTIZED" ? "mode-option selected" : "mode-option"}>
-              <input type="radio" value="AMORTIZED" {...form.register("recognitionMode")} />
-              <span><strong>按月均摊</strong><small>每个有效月份计入月均金额。</small></span>
-            </label>
-            <label className={values.recognitionMode === "PAYMENT" ? "mode-option selected" : "mode-option"}>
-              <input type="radio" value="PAYMENT" {...form.register("recognitionMode")} />
-              <span><strong>按支付月份确认</strong><small>只在以开始日期为锚点的支付月计入完整金额。</small></span>
-            </label>
-            <p>无论哪种模式，下月预算概览都按月均等价金额计算。</p>
-          </fieldset>
+          {values.periodMonths !== 1 && (
+            <fieldset className="mode-options">
+              <legend>确认模式</legend>
+              <label className={values.recognitionMode === "AMORTIZED" ? "mode-option selected" : "mode-option"}>
+                <input type="radio" value="AMORTIZED" {...form.register("recognitionMode")} />
+                <span><strong>按月均摊</strong><small>每个有效月份计入月均金额。</small></span>
+              </label>
+              <label className={values.recognitionMode === "PAYMENT" ? "mode-option selected" : "mode-option"}>
+                <input type="radio" value="PAYMENT" {...form.register("recognitionMode")} />
+                <span><strong>按支付月份确认</strong><small>只在以开始日期为锚点的支付月计入完整金额。</small></span>
+              </label>
+              <p>无论哪种模式，下月预算概览都按月均等价金额计算。</p>
+            </fieldset>
+          )}
           <label>备注<textarea rows={3} {...form.register("note")} /></label>
 
           {previewIsCurrent && preview && (

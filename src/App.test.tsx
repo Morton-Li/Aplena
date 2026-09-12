@@ -1036,6 +1036,31 @@ describe("planning workflows", () => {
     );
   });
 
+  it("hides confirmation mode for a one-month period and restores it for longer periods", async () => {
+    installHarness();
+    const user = userEvent.setup();
+    window.location.hash = "#/goals";
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "新建周期规则" }));
+
+    const period = screen.getByLabelText("周期（月）");
+    expect(period).toHaveValue(1);
+    expect(screen.queryByRole("group", { name: "确认模式" })).not.toBeInTheDocument();
+
+    await user.clear(period);
+    await user.type(period, "12");
+    expect(screen.getByRole("group", { name: "确认模式" })).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: /按支付月份确认/ }));
+
+    await user.clear(period);
+    await user.type(period, "1");
+    expect(screen.queryByRole("group", { name: "确认模式" })).not.toBeInTheDocument();
+
+    await user.clear(period);
+    await user.type(period, "12");
+    expect(screen.getByRole("radio", { name: /按支付月份确认/ })).toBeChecked();
+  });
+
   it("previews and saves an edited recurring rule", async () => {
     installHarness({ plans: [examplePlan] });
     const user = userEvent.setup();
@@ -1075,6 +1100,8 @@ describe("planning workflows", () => {
     await user.click(await screen.findByRole("button", { name: "新建周期规则" }));
     await user.type(screen.getByLabelText("项目名称"), "年度保险");
     await user.type(screen.getByLabelText("计划金额"), "1200");
+    await user.clear(screen.getByLabelText("周期（月）"));
+    await user.type(screen.getByLabelText("周期（月）"), "12");
     await user.click(screen.getByRole("radio", { name: /按支付月份确认/ }));
     expect(screen.getByText("只在以开始日期为锚点的支付月计入完整金额。")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "预览并检查" }));
