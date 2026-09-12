@@ -1108,6 +1108,7 @@ describe("planning workflows", () => {
     expect(screen.getByRole("dialog", { name: "添加支出或退款" })).toBeInTheDocument();
     const expectedDate = defaultActualEntryDate("2026-08");
     expect(screen.getByLabelText("日期")).toHaveValue(expectedDate);
+    expect(screen.queryByText("本次换算基准")).not.toBeInTheDocument();
     const amountInput = screen.getByLabelText("原币金额");
     expect(amountInput).toHaveFocus();
     await user.type(amountInput, "427.25");
@@ -1119,6 +1120,27 @@ describe("planning workflows", () => {
     });
     expect(await screen.findByRole("dialog", { name: "电费" })).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("evaluates an actual-entry amount expression and saves only its result", async () => {
+    installHarness({ monthly: { "2026-08": [monthlyItem()] } });
+    const user = userEvent.setup();
+    window.location.hash = "#/monthly";
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "查看 电费 详情" }));
+    await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
+    await user.type(screen.getByLabelText("原币金额"), "120.25+30*2");
+
+    expect(screen.getByText("计算结果：¥ 180.25；保存时仅记录结果。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存条目" }));
+
+    expect(invokeMock).toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({ amount: "180.25" }),
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("create_actual_entry", {
+      input: expect.objectContaining({ amount: "120.25+30*2" }),
+    });
   });
 
   it("refreshes the official reference rate before saving a new foreign-currency entry", async () => {
@@ -1140,6 +1162,7 @@ describe("planning workflows", () => {
     await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
     await user.click(screen.getByLabelText("实际条目币种"));
     await user.click(screen.getByRole("option", { name: /USD/ }));
+    expect(await screen.findByText("1 USD = 6.72086232 CNY")).toBeInTheDocument();
     expect(await screen.findByText(/欧洲央行每日参考汇率 · 2026-08-28(?: · 数据日期较早)? · 保存后固定/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("原币金额"), { target: { value: "100.00" } });
     await user.click(screen.getByRole("button", { name: "保存条目" }));
@@ -1171,6 +1194,7 @@ describe("planning workflows", () => {
     await user.click(await screen.findByRole("button", { name: "添加支出或退款" }));
     await user.click(screen.getByLabelText("实际条目币种"));
     await user.click(screen.getByRole("option", { name: /USD/ }));
+    expect(await screen.findByText("1 USD = 7.10 CNY")).toBeInTheDocument();
     expect(await screen.findByText(/备用手动汇率 · 2026-08-01 · 保存后固定/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("原币金额"), { target: { value: "25.00" } });
     await user.click(screen.getByRole("button", { name: "保存条目" }));
@@ -1825,7 +1849,7 @@ describe("dashboard and budget projection analytics", () => {
     const save = screen.getByRole("button", { name: "保存条目" });
     expect(save).toBeEnabled();
     await user.click(save);
-    expect(screen.getByRole("alert")).toHaveTextContent("请输入大于 0、最多两位小数的金额");
+    expect(screen.getByRole("alert")).toHaveTextContent("请输入大于 0 的金额");
     expect(invokeMock.mock.calls.some(([command]) => command === "create_actual_entry")).toBe(false);
 
     await user.type(screen.getByLabelText("原币金额"), "20.00");
