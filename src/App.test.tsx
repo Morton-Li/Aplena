@@ -1036,6 +1036,37 @@ describe("planning workflows", () => {
     );
   });
 
+  it("previews and saves an edited recurring rule", async () => {
+    installHarness({ plans: [examplePlan] });
+    const user = userEvent.setup();
+    window.location.hash = "#/goals";
+    render(<App />);
+
+    const rulesTable = await screen.findByRole("table", { name: "周期规则" });
+    await user.click(within(rulesTable).getByRole("button", { name: "编辑" }));
+    const amount = screen.getByLabelText("计划金额");
+    await user.clear(amount);
+    await user.type(amount, "2400");
+    expect(screen.queryByRole("button", { name: "确认保存" })).not.toBeInTheDocument();
+    const previewButton = screen.getByRole("button", { name: "预览并检查" });
+    expect(previewButton).toBeEnabled();
+    await user.click(previewButton);
+
+    const save = await screen.findByRole("button", { name: "确认保存" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(await screen.findByText(/周期规则已保存/)).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith(
+      "update_plan_item",
+      expect.objectContaining({
+        input: expect.objectContaining({
+          id: examplePlan.id,
+          plannedAmount: "2400",
+        }),
+      }),
+    );
+  });
+
   it("explains PAYMENT mode and displays a payment-month preview before save", async () => {
     installHarness();
     const user = userEvent.setup();

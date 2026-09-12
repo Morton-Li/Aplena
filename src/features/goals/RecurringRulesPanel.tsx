@@ -282,10 +282,14 @@ function PlanEditor({
     recognitionMode: value.recognitionMode,
     note: value.note || undefined,
   });
-  const previewMutation = useMutation({
-    mutationFn: (value: PlanValues) =>
+  const previewMutation = useMutation<
+    PlanPreview,
+    Error,
+    { value: PlanValues; signature: string }
+  >({
+    mutationFn: ({ value }) =>
       previewPlanItem(contract, settings, rates, targetMonth, toInput(value)),
-    onSuccess: (data) => setPreview({ signature, data }),
+    onSuccess: (data, variables) => setPreview({ signature: variables.signature, data }),
   });
   const saveMutation = useMutation<PlanItem, Error, PlanValues>({
     mutationFn: (value: PlanValues) =>
@@ -297,6 +301,9 @@ function PlanEditor({
     ? "收入"
     : "支出";
   const previewIsCurrent = preview?.signature === signature;
+  const previewCurrentValues = form.handleSubmit((value) => {
+    previewMutation.mutate({ value, signature: JSON.stringify(form.getValues()) });
+  });
 
   return (
       <Dialog
@@ -304,7 +311,20 @@ function PlanEditor({
         title={existing?.name ?? "新的周期性收入或支出"}
         onClose={onClose}
         size="wide"
-        footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-secondary" disabled={previewMutation.isPending} type="button" onClick={form.handleSubmit((value) => previewMutation.mutate(value))}>{previewMutation.isPending ? "计算中…" : "预览并检查"}</button><button className="button button-primary" disabled={!previewIsCurrent || saveMutation.isPending} form="plan-editor-form" type="submit">{saveMutation.isPending ? "保存中…" : "确认保存"}</button></>}
+        footer={(
+          <>
+            <button className="button button-quiet" type="button" onClick={onClose}>取消</button>
+            {previewIsCurrent ? (
+              <button className="button button-primary" disabled={saveMutation.isPending} form="plan-editor-form" type="submit">
+                {saveMutation.isPending ? "保存中…" : "确认保存"}
+              </button>
+            ) : (
+              <button className="button button-primary" disabled={previewMutation.isPending} type="button" onClick={previewCurrentValues}>
+                {previewMutation.isPending ? "计算中…" : "预览并检查"}
+              </button>
+            )}
+          </>
+        )}
       >
         <form className="plan-form" id="plan-editor-form" onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))}>
           <div className="field-grid">
