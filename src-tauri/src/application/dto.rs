@@ -71,6 +71,8 @@ pub struct PlanItemDto {
 pub struct MonthlyItemDto {
     pub id: String,
     pub source_plan_item_id: Option<String>,
+    pub source_special_project_id: Option<String>,
+    pub source_special_allocation_id: Option<String>,
     pub item_name: String,
     pub month: String,
     pub category: String,
@@ -117,6 +119,8 @@ pub struct ActualEntryInputDto {
     pub exchange_rate_source: String,
     pub exchange_rate_observed_on: String,
     pub note: Option<String>,
+    #[serde(default)]
+    pub detail_group: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -133,6 +137,7 @@ pub struct ActualEntryDto {
     pub exchange_rate_observed_on: String,
     pub origin: String,
     pub note: Option<String>,
+    pub detail_group: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -299,6 +304,8 @@ pub struct BudgetProjectionDto {
     pub discretionary_budget: String,
     pub projected_income: String,
     pub projected_expenses: String,
+    pub recurring_expenses: String,
+    pub special_expenses: String,
     pub projected_savings: String,
     pub projected_savings_rate_percent: Option<String>,
     pub fixed_commitment_ratio_percent: Option<String>,

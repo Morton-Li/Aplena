@@ -58,13 +58,15 @@ export interface PlanItem {
 export interface MonthlyItem {
   id: string;
   source_plan_item_id: string | null;
+  source_special_project_id?: string | null;
+  source_special_allocation_id?: string | null;
   item_name: string;
   month: string;
   category: string;
   flow_type: string;
   recognition_mode: string;
   item_source: "PLANNED" | "ACTUAL_ONLY";
-  item_origin: "PLAN_LINKED" | "MANUAL";
+  item_origin: "PLAN_LINKED" | "MANUAL" | "SPECIAL_PROJECT";
   scheduled_date: string | null;
   planned_amount: string;
   actual_amount: string | null;
@@ -98,6 +100,7 @@ export interface ActualEntryInput {
   exchangeRateSource: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL";
   exchangeRateObservedOn: string;
   note?: string;
+  detailGroup?: string;
 }
 
 export interface ActualEntry {
@@ -111,8 +114,9 @@ export interface ActualEntry {
   exchange_rate: string;
   exchange_rate_source: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL" | "MIGRATED_BASE";
   exchange_rate_observed_on: string;
-  origin: "USER" | "MIGRATED_AGGREGATE";
+  origin: "USER" | "MIGRATED_AGGREGATE" | "AUTOMATIC";
   note: string | null;
+  detail_group?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -233,6 +237,8 @@ export interface BudgetProjection {
   discretionary_budget: string;
   projected_income: string;
   projected_expenses: string;
+  recurring_expenses?: string;
+  special_expenses?: string;
   projected_savings: string;
   projected_savings_rate_percent: string | null;
   fixed_commitment_ratio_percent: string | null;

@@ -1,12 +1,26 @@
 mod analytics;
+mod automatic;
 mod commands;
 mod dto;
 mod error;
 mod service;
+mod specials;
+
+#[cfg(test)]
+mod automatic_tests;
+
+#[cfg(test)]
+mod specials_tests;
 
 #[cfg(test)]
 mod persistence_tests;
 
+pub use commands::{
+    archive_special_project, check_automatic_entries, create_special_actual_entry,
+    delete_special_allocation, get_special_project, list_automatic_entry_policies,
+    list_automatic_occurrences, list_special_projects, resolve_automatic_entry_conflict,
+    save_automatic_entry_policy, save_special_allocation, save_special_project,
+};
 pub use commands::{
     calculate_budget_projection, create_actual_entry, create_manual_monthly_item, create_plan_item,
     delete_actual_entry, delete_exchange_rate, delete_manual_monthly_item, delete_plan_item,

@@ -36,6 +36,7 @@ impl FromStr for ActualEntryEffect {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ActualEntryOrigin {
     User,
+    Automatic,
     MigratedAggregate,
 }
 
@@ -43,6 +44,7 @@ impl ActualEntryOrigin {
     pub const fn code(self) -> &'static str {
         match self {
             Self::User => "USER",
+            Self::Automatic => "AUTOMATIC",
             Self::MigratedAggregate => "MIGRATED_AGGREGATE",
         }
     }
@@ -53,6 +55,7 @@ impl FromStr for ActualEntryOrigin {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "USER" => Ok(Self::User),
+            "AUTOMATIC" => Ok(Self::Automatic),
             "MIGRATED_AGGREGATE" => Ok(Self::MigratedAggregate),
             _ => Err(DomainError::InvalidActualEntryOrigin),
         }
@@ -68,6 +71,7 @@ pub struct ActualEntry {
     amount: Amount,
     origin: ActualEntryOrigin,
     note: Option<String>,
+    detail_group: Option<String>,
 }
 
 impl ActualEntry {
@@ -98,6 +102,7 @@ impl ActualEntry {
             note: note
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
+            detail_group: None,
         })
     }
 
@@ -121,6 +126,17 @@ impl ActualEntry {
     }
     pub fn note(&self) -> Option<&str> {
         self.note.as_deref()
+    }
+
+    pub fn with_detail_group(mut self, detail_group: Option<String>) -> Self {
+        self.detail_group = detail_group
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        self
+    }
+
+    pub fn detail_group(&self) -> Option<&str> {
+        self.detail_group.as_deref()
     }
 
     pub fn signed_amount(&self) -> SignedAmount {

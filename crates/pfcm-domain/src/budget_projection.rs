@@ -73,6 +73,49 @@ impl BudgetProjection {
     pub const fn stable_income_coverage_ratio(&self) -> Option<Ratio> {
         self.stable_income_coverage_ratio
     }
+
+    pub fn with_expense_allocations(
+        mut self,
+        allocations: &[(Category, Amount)],
+    ) -> Result<Self, DomainError> {
+        for (category, amount) in allocations {
+            let total = match category {
+                Category::EssentialExpense => &mut self.essential_expenses,
+                Category::FixedCommitmentExpense => &mut self.fixed_commitments,
+                Category::DiscretionaryBudget => &mut self.discretionary_budget,
+                Category::FixedIncome | Category::VariableIncome => {
+                    return Err(DomainError::InvalidCategory);
+                }
+            };
+            *total = total.checked_add(*amount)?;
+        }
+        self.projected_expenses = self
+            .essential_expenses
+            .checked_add(self.fixed_commitments)?
+            .checked_add(self.discretionary_budget)?;
+        self.projected_savings = SignedAmount::from_decimal(
+            self.projected_income
+                .as_decimal()
+                .checked_sub(self.projected_expenses.as_decimal())
+                .ok_or(DomainError::ArithmeticOverflow)?,
+        )?;
+        self.projected_savings_rate = signed_ratio(
+            self.projected_savings.as_decimal(),
+            self.projected_income.as_decimal(),
+        )?;
+        self.fixed_commitment_ratio = ratio(
+            self.fixed_commitments.as_decimal(),
+            self.stable_income.as_decimal(),
+        )?;
+        let committed_costs = self
+            .essential_expenses
+            .as_decimal()
+            .checked_add(self.fixed_commitments.as_decimal())
+            .ok_or(DomainError::ArithmeticOverflow)?;
+        self.stable_income_coverage_ratio =
+            ratio(self.stable_income.as_decimal(), committed_costs)?;
+        Ok(self)
+    }
 }
 
 pub fn calculate_budget_projection(

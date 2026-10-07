@@ -76,7 +76,7 @@ MonthlyItem + ActualEntry ──> Analytics
 ### 3.4 条目效果与来源
 
 - `INCREASE` / `DECREASE`：增加或减少项目实际净额；
-- `USER` / `MIGRATED_AGGREGATE`：用户条目或旧版聚合迁移条目。
+- `USER` / `AUTOMATIC` / `MIGRATED_AGGREGATE`：用户、自动或旧版聚合迁移条目。
 
 ## 4. 实体
 
@@ -86,7 +86,7 @@ MonthlyItem + ActualEntry ──> Analytics
 |---|---|
 | `base_currency` | 已定义币种，汇率为 1 |
 
-存在任何月度快照后不能切换本位币。
+存在任何月度快照或专项预算后不能切换本位币。
 
 ### 4.2 `PlanItem`
 
@@ -108,10 +108,11 @@ MonthlyItem + ActualEntry ──> Analytics
 | 字段 | 语义 |
 |---|---|
 | `source_plan_item_id` | 可空；删除计划时脱离而非级联删除 |
+| `source_special_project_id` / `source_special_allocation_id` | 专项来源；分配可空，均限制删除 |
 | `month` | 月初锚点 |
 | 快照名称/类别/方向/模式 | 创建时冻结 |
 | `item_source` | `PLANNED` / `ACTUAL_ONLY` |
-| `item_origin` | `PLAN_LINKED` / `MANUAL` |
+| `item_origin` | `PLAN_LINKED` / `MANUAL` / `SPECIAL_PROJECT` |
 | `scheduled_date` | 仅正式 PAYMENT 快照有值 |
 | `planned_amount` | 已完成汇率与周期计算的本位币金额 |
 | `currency` | 创建时的本位币 |
@@ -128,7 +129,8 @@ MonthlyItem + ActualEntry ──> Analytics
 | `occurred_on` | 日级日期且与月度项目同月 |
 | `effect` | `INCREASE` / `DECREASE` |
 | `amount` | 严格大于零的两位金额 |
-| `origin` | `USER` / `MIGRATED_AGGREGATE` |
+| `origin` | `USER` / `AUTOMATIC` / `MIGRATED_AGGREGATE` |
+| `detail_group` | 可空明细组，不替代财务类别 |
 | `note` | 可空 |
 
 ```text
@@ -136,6 +138,20 @@ derived_actual = SUM(INCREASE.amount) - SUM(DECREASE.amount)
 ```
 
 派生实际允许为负。迁移条目不可编辑或删除。
+
+### 4.5 自动策略与发生槽
+
+`AutomaticEntryPolicy` 按计划 ID 保存开关和本次开启的起始月份。缺省关闭，关闭再开启也只从下月开始。`AutomaticPolicyVersion` 按规则 UUID 与生效月冻结规则元数据、原币完整支付金额、币种、周期和首次支付日；未来版本可更新，当前版本保持不变。
+
+`AutomaticOccurrence` 按规则 UUID 与月份唯一。状态为 `POSTED`、`CONFLICT`、`SKIPPED`、`DELETED` 或 `FAILED`。已完成、跳过及删除均消费发生槽；失败可重试，冲突只能由明确动作处理。实际与发生槽在同一事务形成，实际编辑不修改槽的支付身份。
+
+### 4.6 `SpecialProject` 与 `SpecialAllocation`
+
+专项保存名称、总预算、本位币、归档标记及备注。总预算不等于月度预算；月分配明确指定月份、三类支出之一和非负金额。分配合计不能超过总预算，实际超支可保存。
+
+同一专项、月份、类别只有一个 `SPECIAL_PROJECT` 月度容器。分配创建正式 `PLANNED` 快照，无分配实际创建 `ACTUAL_ONLY`；后续允许的分配可原位提升，保留 ID 和实际。专项使用 `AMORTIZED` 作为无支付日的存储标记，但金额直接取月分配，不执行周期均摊公式。
+
+专项实际仍为 `ActualEntry`，项目归属从月度父项派生，没有副本。未分配预算为总预算减分配合计；净剩余预算为总预算减实际净支出。归档不删除事实，也不把未分配池自动分摊或滚动。
 
 ## 5. 计入规则
 
@@ -210,7 +226,7 @@ planned = ROUND_HALF_UP(amount × rate, 2)
 
 ### 7.3 编辑与删除
 
-只允许 `USER` 条目；禁止把条目改挂其他月度项目。领域层验证日期与月份，数据库触发器再次防守。
+允许编辑、删除 `USER` 和 `AUTOMATIC` 条目；禁止把条目改挂其他月度项目。领域层验证日期与月份，数据库触发器再次防守。删除自动关联实际会在同一事务保留 `DELETED` 发生槽。
 
 ## 8. 实际存在性
 
@@ -237,6 +253,8 @@ projected_savings_rate = projected_savings / projected_income
 ```
 
 `projected_savings` 使用带符号金额并保留负缺口；收入为零时储蓄率为 `null`。投影不持久化，也不读取独立储蓄目标。
+
+支出类别及合计加入专项在下月的明确分配金额。周期月均支出与专项月分配分别返回，专项总预算与未分配额度不进入投影。自动实际也不进入预算投影。
 
 ## 10. 不变量
 
