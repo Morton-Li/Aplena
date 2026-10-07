@@ -140,6 +140,7 @@ pub enum MonthlyItemSource {
 pub enum MonthlyItemOrigin {
     PlanLinked,
     Manual,
+    SpecialProject,
 }
 
 impl MonthlyItemOrigin {
@@ -147,6 +148,7 @@ impl MonthlyItemOrigin {
         match self {
             Self::PlanLinked => "PLAN_LINKED",
             Self::Manual => "MANUAL",
+            Self::SpecialProject => "SPECIAL_PROJECT",
         }
     }
 }
@@ -158,6 +160,7 @@ impl FromStr for MonthlyItemOrigin {
         match value {
             "PLAN_LINKED" => Ok(Self::PlanLinked),
             "MANUAL" => Ok(Self::Manual),
+            "SPECIAL_PROJECT" => Ok(Self::SpecialProject),
             _ => Err(DomainError::InvalidMonthlyItemOrigin),
         }
     }

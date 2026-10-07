@@ -11,7 +11,6 @@ use pfcm_domain::{
     YearMonth, calculate_budget_projection, create_monthly_snapshot, is_recognized_in,
 };
 use rust_decimal::{Decimal, RoundingStrategy};
-use sqlx::Executor;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -71,33 +70,97 @@ impl FinanceService {
     }
 
     pub async fn initialize_on_startup(&self) {
-        let _operation = self.operation_gate.read().await;
-        let result = async {
-            self.ensure_default_settings_unlocked().await?;
-            self.ensure_month_initialized(
-                current_natural_month().expect("local calendar month must be valid"),
-                InitializationTrigger::AppStartup,
-                Vec::new(),
-            )
-            .await
+        let _operation = self.operation_gate.write().await;
+        let result: Result<(), AppError> = async {
+            let today = current_natural_date()?;
+            self.ensure_current_month_context_at_unlocked(today).await?;
+            self.check_automatic_entries_at_unlocked(today).await?;
+            Ok(())
         }
         .await;
 
-        let mut status = self.startup_status.write().await;
-        match result {
-            Ok(initialization) => {
-                status.initialization = initialization;
-                status.error = None;
-            }
-            Err(error) => {
-                status.initialization = None;
-                status.error = Some(error);
-            }
+        if let Err(error) = result {
+            let mut status = self.startup_status.write().await;
+            status.initialization = None;
+            status.error = Some(error);
         }
     }
 
     pub async fn startup_status(&self) -> StartupStatusDto {
-        self.startup_status.read().await.clone()
+        let mut status = self.startup_status.write().await;
+        if let Ok(current) = current_natural_month() {
+            let current = current.to_string();
+            if status.current_month != current {
+                status.current_month = current;
+                status.initialization = None;
+                status.error = None;
+            }
+        }
+        status.clone()
+    }
+
+    pub(crate) async fn ensure_current_month_context_at_unlocked(
+        &self,
+        today: CalendarDate,
+    ) -> Result<(), AppError> {
+        let month = today.year_month();
+        {
+            let status = self.startup_status.read().await;
+            if status.current_month == month.to_string()
+                && status.initialization.is_some()
+                && status.error.is_none()
+            {
+                return Ok(());
+            }
+        }
+
+        if let Err(error) = self.ensure_default_settings_unlocked().await {
+            let mut status = self.startup_status.write().await;
+            status.current_month = month.to_string();
+            status.initialization = None;
+            status.error = Some(error.clone());
+            return Err(error);
+        }
+        let normal_initialization = self
+            .ensure_month_initialized_at_unlocked(
+                month,
+                month,
+                InitializationTrigger::AppStartup,
+                Vec::new(),
+            )
+            .await
+            .and_then(|initialization| {
+                initialization
+                    .ok_or_else(|| AppError::business("SETUP_REQUIRED", "error.setup_required"))
+            });
+        let special_initialization = self.initialize_special_month_unlocked(month).await;
+        let mut status = self.startup_status.write().await;
+        status.current_month = month.to_string();
+        let special_count = match special_initialization {
+            Ok(count) => count,
+            Err(error) => {
+                status.initialization = None;
+                status.error = Some(error.clone());
+                return Err(error);
+            }
+        };
+        match normal_initialization {
+            Ok(mut initialization) => {
+                initialization.created_count += special_count;
+                status.initialization = Some(initialization);
+                status.error = None;
+                Ok(())
+            }
+            Err(error) => {
+                status.initialization = None;
+                status.error = Some(error.clone());
+                if error.error_code == "MISSING_EXCHANGE_RATE" {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
     pub async fn get_settings(&self) -> Result<Option<SettingsDto>, AppError> {
@@ -111,13 +174,15 @@ impl FinanceService {
     }
 
     pub async fn ensure_default_settings(&self) -> Result<SettingsDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         self.ensure_default_settings_unlocked()
             .await
             .map(settings_dto)
     }
 
-    async fn ensure_default_settings_unlocked(&self) -> Result<StoredSettings, AppError> {
+    pub(crate) async fn ensure_default_settings_unlocked(
+        &self,
+    ) -> Result<StoredSettings, AppError> {
         let store = self.current_store().await;
         if let Some(settings) = store.get_settings().await.map_err(AppError::from)? {
             return Ok(settings);
@@ -135,7 +200,7 @@ impl FinanceService {
     }
 
     pub async fn save_settings(&self, input: SettingsInputDto) -> Result<SettingsDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let settings = parse_settings(input)?;
         let timestamp = timestamp();
         let stored = if self
@@ -186,7 +251,7 @@ impl FinanceService {
         &self,
         input: ExchangeRateUpsertDto,
     ) -> Result<Vec<ExchangeRateDto>, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let settings = self.require_settings().await?;
         let source = CurrencyCode::new(&input.currency)
             .map_err(|error| AppError::from_domain(error, Some("currency")))?;
@@ -210,7 +275,7 @@ impl FinanceService {
         &self,
         input: ReferenceRateImportDto,
     ) -> Result<Vec<ExchangeRateDto>, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let settings = self.require_settings().await?;
         let base = settings.value.base_currency().clone();
         let mut observations = HashMap::new();
@@ -317,7 +382,7 @@ impl FinanceService {
     }
 
     pub async fn delete_exchange_rate(&self, currency: String) -> Result<(), AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let currency = CurrencyCode::new(currency)
             .map_err(|error| AppError::from_domain(error, Some("currency")))?;
         self.current_store()
@@ -338,7 +403,7 @@ impl FinanceService {
     }
 
     pub async fn create_plan_item(&self, input: PlanItemInputDto) -> Result<PlanItemDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         self.require_settings().await?;
         let plan_item = parse_plan_item(input, false)?;
         self.require_currency_rate(plan_item.currency()).await?;
@@ -348,27 +413,32 @@ impl FinanceService {
             .insert_plan_item(&plan_item, &timestamp())
             .await
             .map_err(AppError::from)?;
+        self.refresh_automatic_policy_version_unlocked(plan_item.id())
+            .await?;
         Ok(plan_item_dto(stored))
     }
 
     pub async fn update_plan_item(&self, input: PlanItemInputDto) -> Result<PlanItemDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         self.require_settings().await?;
         let plan_item = parse_plan_item(input, true)?;
         self.require_currency_rate(plan_item.currency()).await?;
-        self.current_store()
+        let stored = self
+            .current_store()
             .await
             .update_plan_item(&plan_item, &timestamp())
             .await
-            .map_err(AppError::from)
-            .map(plan_item_dto)
+            .map_err(AppError::from)?;
+        self.refresh_automatic_policy_version_unlocked(plan_item.id())
+            .await?;
+        Ok(plan_item_dto(stored))
     }
 
     pub async fn stop_plan_item(
         &self,
         input: StopPlanItemRequestDto,
     ) -> Result<PlanItemDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let id = parse_uuid(&input.id, "id")?;
         let stored = self
             .current_store()
@@ -391,16 +461,19 @@ impl FinanceService {
             value.note().map(str::to_owned),
         )
         .map_err(|error| AppError::from_domain(error, Some("endMonth")))?;
-        self.current_store()
+        let stored = self
+            .current_store()
             .await
             .update_plan_item(&stopped, &timestamp())
             .await
-            .map_err(AppError::from)
-            .map(plan_item_dto)
+            .map_err(AppError::from)?;
+        self.refresh_automatic_policy_version_unlocked(stopped.id())
+            .await?;
+        Ok(plan_item_dto(stored))
     }
 
     pub async fn delete_plan_item(&self, id: String) -> Result<DeletePlanItemDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let result = self
             .current_store()
             .await
@@ -425,7 +498,7 @@ impl FinanceService {
         &self,
         input: EnsureActualOnlyInputDto,
     ) -> Result<MonthlyItemDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let plan_id = parse_uuid(&input.plan_item_id, "planItemId")?;
         let month = parse_month(&input.month, "month")?;
         let store = self.current_store().await;
@@ -455,7 +528,7 @@ impl FinanceService {
         &self,
         input: ManualMonthlyItemInputDto,
     ) -> Result<MonthlyItemDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let month = parse_month(&input.month, "month")?;
         let category = Category::from_str(&input.category)
             .map_err(|error| AppError::from_domain(error, Some("category")))?;
@@ -481,7 +554,7 @@ impl FinanceService {
         &self,
         input: DeleteManualMonthlyItemInputDto,
     ) -> Result<(), AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         self.current_store()
             .await
             .delete_manual_monthly_item(parse_uuid(&input.id, "id")?)
@@ -506,7 +579,7 @@ impl FinanceService {
         &self,
         input: ActualEntryInputDto,
     ) -> Result<ActualEntryDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let monthly_item_id = parse_uuid(&input.monthly_item_id, "monthlyItemId")?;
         let monthly = self
             .current_store()
@@ -515,6 +588,7 @@ impl FinanceService {
             .await
             .map_err(AppError::from)?;
         if monthly.value.source_plan_item_id().is_none()
+            && monthly.value.source_special_project_id().is_none()
             && monthly.value.item_origin() != pfcm_domain::MonthlyItemOrigin::Manual
         {
             return Err(AppError::business(
@@ -540,7 +614,7 @@ impl FinanceService {
         &self,
         input: ActualEntryInputDto,
     ) -> Result<ActualEntryDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let id = input
             .id
             .as_deref()
@@ -587,7 +661,7 @@ impl FinanceService {
     }
 
     pub async fn delete_actual_entry(&self, id: String) -> Result<(), AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         self.current_store()
             .await
             .delete_actual_entry(parse_uuid(&id, "id")?)
@@ -599,7 +673,7 @@ impl FinanceService {
         &self,
         input: MonthlyNoteInputDto,
     ) -> Result<MonthlyItemDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         self.current_store()
             .await
             .update_monthly_note(
@@ -714,6 +788,18 @@ impl FinanceService {
             &inputs,
         )
         .map_err(|error| AppError::from_domain(error, None))?;
+        drop(connection);
+        let recurring_expenses = result.projected_expenses();
+        let special_allocations = self.special_month_projection_unlocked(target_month).await?;
+        let special_expenses = special_allocations
+            .iter()
+            .try_fold(Amount::zero(), |total, (_, amount)| {
+                total.checked_add(*amount)
+            })
+            .map_err(|error| AppError::from_domain(error, None))?;
+        let result = result
+            .with_expense_allocations(&special_allocations)
+            .map_err(|error| AppError::from_domain(error, None))?;
         Ok(BudgetProjectionDto {
             target_month: target_month.to_string(),
             base_currency: result.base_currency().to_string(),
@@ -724,6 +810,8 @@ impl FinanceService {
             discretionary_budget: result.discretionary_budget().decimal_string(),
             projected_income: result.projected_income().decimal_string(),
             projected_expenses: result.projected_expenses().decimal_string(),
+            recurring_expenses: recurring_expenses.decimal_string(),
+            special_expenses: special_expenses.decimal_string(),
             projected_savings: result.projected_savings().decimal_string(),
             projected_savings_rate_percent: result
                 .projected_savings_rate()
@@ -779,6 +867,10 @@ impl FinanceService {
             .filter(|item| item.value.item_source() == pfcm_domain::MonthlyItemSource::ActualOnly)
             .filter_map(|item| item.value.source_plan_item_id())
             .collect::<HashSet<_>>();
+        let special_existing_count = existing
+            .iter()
+            .filter(|item| item.value.source_special_project_id().is_some())
+            .count();
         let plans = self
             .current_store()
             .await
@@ -833,11 +925,25 @@ impl FinanceService {
             });
         }
 
+        let store = self.current_store().await;
+        let special_candidate_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM special_allocations a \
+             LEFT JOIN monthly_items m ON m.source_special_project_id = a.project_id \
+               AND m.month = a.month AND m.category = a.category \
+             WHERE a.month = ? AND (m.id IS NULL OR m.item_source = 'ACTUAL_ONLY')",
+        )
+        .bind(month.database_anchor())
+        .fetch_one(store.pool())
+        .await
+        .map_err(|error| AppError::from(crate::infrastructure::StoreError::from(error)))?;
+        candidate_count += u64::try_from(special_candidate_count).unwrap_or_default();
+
         Ok(MonthPreviewDto {
             month: month.to_string(),
             direction: month_direction(month)?.to_owned(),
             requires_confirmation: month != current_natural_month()?,
-            existing_count: u64::try_from(existing_ids.len()).unwrap_or(u64::MAX),
+            existing_count: u64::try_from(existing_ids.len() + special_existing_count)
+                .unwrap_or(u64::MAX),
             candidate_count,
             excluded_count,
             missing_currencies: missing_currencies.into_iter().collect(),
@@ -850,7 +956,7 @@ impl FinanceService {
         &self,
         input: InitializeMonthInputDto,
     ) -> Result<InitializeMonthDto, AppError> {
-        let _operation = self.operation_gate.read().await;
+        let _operation = self.operation_gate.write().await;
         let month = parse_month(&input.month, "month")?;
         if month != current_natural_month()? && !input.confirmed {
             return Err(AppError::business(
@@ -859,12 +965,21 @@ impl FinanceService {
             )
             .with_param("month", month.to_string()));
         }
-        self.ensure_month_initialized(month, InitializationTrigger::Explicit, input.rate_overrides)
+        let mut initialization = self
+            .ensure_month_initialized(month, InitializationTrigger::Explicit, input.rate_overrides)
             .await?
-            .ok_or_else(|| AppError::business("SETUP_REQUIRED", "error.setup_required"))
+            .ok_or_else(|| AppError::business("SETUP_REQUIRED", "error.setup_required"))?;
+        initialization.created_count += self.initialize_special_month_unlocked(month).await?;
+        if month == current_natural_month()? {
+            let mut status = self.startup_status.write().await;
+            status.current_month = month.to_string();
+            status.initialization = Some(initialization.clone());
+            status.error = None;
+        }
+        Ok(initialization)
     }
 
-    async fn require_settings(&self) -> Result<StoredSettings, AppError> {
+    pub(crate) async fn require_settings(&self) -> Result<StoredSettings, AppError> {
         self.current_store()
             .await
             .get_settings()
@@ -873,7 +988,10 @@ impl FinanceService {
             .ok_or_else(|| AppError::business("SETUP_REQUIRED", "error.setup_required"))
     }
 
-    async fn require_currency_rate(&self, currency: &CurrencyCode) -> Result<(), AppError> {
+    pub(crate) async fn require_currency_rate(
+        &self,
+        currency: &CurrencyCode,
+    ) -> Result<(), AppError> {
         let settings = self.require_settings().await?;
         let mut connection = self
             .current_store()
@@ -918,6 +1036,17 @@ impl FinanceService {
         rate_overrides: Vec<RateOverrideDto>,
     ) -> Result<Option<InitializeMonthDto>, AppError> {
         let current = current_natural_month()?;
+        self.ensure_month_initialized_at_unlocked(month, current, trigger, rate_overrides)
+            .await
+    }
+
+    async fn ensure_month_initialized_at_unlocked(
+        &self,
+        month: YearMonth,
+        current: YearMonth,
+        trigger: InitializationTrigger,
+        rate_overrides: Vec<RateOverrideDto>,
+    ) -> Result<Option<InitializeMonthDto>, AppError> {
         if trigger != InitializationTrigger::Explicit && month != current {
             return Err(AppError::business(
                 "AUTOMATIC_INITIALIZATION_CURRENT_MONTH_ONLY",
@@ -925,14 +1054,10 @@ impl FinanceService {
             ));
         }
 
-        let mut connection = self
-            .current_store()
-            .await
-            .acquire()
-            .await
-            .map_err(AppError::from)?;
-        connection
-            .execute("BEGIN IMMEDIATE")
+        let store = self.current_store().await;
+        let mut connection = store
+            .pool()
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| AppError::from(crate::infrastructure::StoreError::from(error)))?;
 
@@ -1012,20 +1137,20 @@ impl FinanceService {
                 created_count,
                 skipped_existing_count,
                 excluded_count,
-                warnings: initialization_warnings(month)?,
+                warnings: initialization_warnings_at(month, current),
             }))
         }
         .await;
 
         match result {
             Ok(value) => {
-                connection.execute("COMMIT").await.map_err(|error| {
+                connection.commit().await.map_err(|error| {
                     AppError::from(crate::infrastructure::StoreError::from(error))
                 })?;
                 Ok(value)
             }
             Err(error) => {
-                let _ = connection.execute("ROLLBACK").await;
+                let _ = connection.rollback().await;
                 Err(error)
             }
         }
@@ -1076,7 +1201,7 @@ fn parse_plan_item(input: PlanItemInputDto, id_required: bool) -> Result<PlanIte
     .map_err(|error| AppError::from_domain(error, None))
 }
 
-fn parse_actual_entry(
+pub(crate) fn parse_actual_entry(
     input: ActualEntryInputDto,
     id: Uuid,
     month: YearMonth,
@@ -1124,7 +1249,8 @@ fn parse_actual_entry(
         ActualEntryOrigin::User,
         input.note,
     )
-    .map_err(|error| AppError::from_domain(error, None))?;
+    .map_err(|error| AppError::from_domain(error, None))?
+    .with_detail_group(input.detail_group);
     Ok((
         entry,
         ActualEntryExchangeSnapshot {
@@ -1152,32 +1278,32 @@ fn parse_rate_overrides(
     Ok(overrides)
 }
 
-fn parse_month(value: &str, field: &str) -> Result<YearMonth, AppError> {
+pub(crate) fn parse_month(value: &str, field: &str) -> Result<YearMonth, AppError> {
     YearMonth::from_str(value).map_err(|error| AppError::from_domain(error, Some(field)))
 }
 
-fn parse_date(value: &str, field: &str) -> Result<CalendarDate, AppError> {
+pub(crate) fn parse_date(value: &str, field: &str) -> Result<CalendarDate, AppError> {
     CalendarDate::from_str(value).map_err(|error| AppError::from_domain(error, Some(field)))
 }
 
-fn parse_uuid(value: &str, field: &str) -> Result<Uuid, AppError> {
+pub(crate) fn parse_uuid(value: &str, field: &str) -> Result<Uuid, AppError> {
     Uuid::parse_str(value)
         .map_err(|_| AppError::validation("INVALID_UUID", field, "error.invalid_uuid"))
 }
 
-fn current_natural_month() -> Result<YearMonth, AppError> {
+pub(crate) fn current_natural_month() -> Result<YearMonth, AppError> {
     let now = Local::now();
     YearMonth::new(now.year(), u8::try_from(now.month()).unwrap_or_default())
         .map_err(|error| AppError::from_domain(error, None))
 }
 
-fn current_natural_date() -> Result<CalendarDate, AppError> {
+pub(crate) fn current_natural_date() -> Result<CalendarDate, AppError> {
     let now = Local::now();
     CalendarDate::new(now.year(), now.month(), now.day())
         .map_err(|error| AppError::from_domain(error, None))
 }
 
-fn next_natural_month() -> Result<YearMonth, AppError> {
+pub(crate) fn next_natural_month() -> Result<YearMonth, AppError> {
     current_natural_month()?
         .next_month()
         .map_err(|error| AppError::from_domain(error, None))
@@ -1195,18 +1321,24 @@ fn month_direction(month: YearMonth) -> Result<&'static str, AppError> {
 }
 
 fn initialization_warnings(month: YearMonth) -> Result<Vec<String>, AppError> {
-    Ok(match month_direction(month)? {
-        "HISTORICAL" => vec!["BACKFILL_RATE_MAY_NOT_REPRESENT_HISTORY".to_owned()],
-        "FUTURE" => vec!["FUTURE_SNAPSHOT_WILL_BE_FROZEN".to_owned()],
-        _ => Vec::new(),
-    })
+    Ok(initialization_warnings_at(month, current_natural_month()?))
 }
 
-fn timestamp() -> String {
+fn initialization_warnings_at(month: YearMonth, current: YearMonth) -> Vec<String> {
+    if month < current {
+        vec!["BACKFILL_RATE_MAY_NOT_REPRESENT_HISTORY".to_owned()]
+    } else if month > current {
+        vec!["FUTURE_SNAPSHOT_WILL_BE_FROZEN".to_owned()]
+    } else {
+        Vec::new()
+    }
+}
+
+pub(crate) fn timestamp() -> String {
     Utc::now().to_rfc3339()
 }
 
-fn missing_rate_error(currency: &CurrencyCode) -> AppError {
+pub(crate) fn missing_rate_error(currency: &CurrencyCode) -> AppError {
     AppError::business("MISSING_EXCHANGE_RATE", "error.missing_exchange_rate")
         .with_param("currency", currency.to_string())
 }
@@ -1253,10 +1385,10 @@ fn plan_item_dto(stored: StoredPlanItem) -> PlanItemDto {
     }
 }
 
-fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
+pub(crate) fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
     let value = stored.value;
     let actual = value.actual_amount();
-    let has_plan_baseline = value.item_origin() != pfcm_domain::MonthlyItemOrigin::Manual;
+    let has_plan_baseline = value.has_plan_baseline();
     let variance_amount = actual.filter(|_| has_plan_baseline).map(|actual| {
         format_decimal(
             actual
@@ -1301,6 +1433,10 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
     MonthlyItemDto {
         id: value.id().to_string(),
         source_plan_item_id: value.source_plan_item_id().map(|id| id.to_string()),
+        source_special_project_id: value.source_special_project_id().map(|id| id.to_string()),
+        source_special_allocation_id: value
+            .source_special_allocation_id()
+            .map(|id| id.to_string()),
         item_name: value.item_name().to_owned(),
         month: value.month().to_string(),
         category: value.category().code().to_owned(),
@@ -1322,7 +1458,7 @@ fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
     }
 }
 
-fn actual_entry_dto(stored: StoredActualEntry) -> ActualEntryDto {
+pub(crate) fn actual_entry_dto(stored: StoredActualEntry) -> ActualEntryDto {
     let value = stored.value;
     let snapshot = stored.exchange_snapshot;
     ActualEntryDto {
@@ -1337,6 +1473,7 @@ fn actual_entry_dto(stored: StoredActualEntry) -> ActualEntryDto {
         exchange_rate_source: snapshot.source,
         exchange_rate_observed_on: snapshot.observed_on.to_string(),
         origin: value.origin().code().to_owned(),
+        detail_group: value.detail_group().map(str::to_owned),
         note: value.note().map(str::to_owned),
         created_at: stored.created_at,
         updated_at: stored.updated_at,

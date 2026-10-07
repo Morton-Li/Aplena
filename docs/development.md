@@ -48,7 +48,7 @@ docs/                 产品、领域、架构、数据库和发行决策
 
 ### 2.2 数据库
 
-首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1；当前应用继续执行 `0002_remove_monthly_item_status.sql`、`0003_remove_next_month_goal.sql`、`0004_add_automatic_rate_refresh.sql` 与 `0005_add_software_update_preferences.sql` 到 schema 5。schema 3 直接删除旧目标表及数据，schema 4 保存启动时自动更新汇率偏好，schema 5 以独立单行表保存软件更新偏好和最近检查结果。已发布迁移不可修改，只能追加。预发布数据库迁移链不属于公开兼容范围，换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
+首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1；当前应用依次执行迁移至 `0006_budget_specials.sql`，支持 schema 6。schema 3 删除旧目标表及数据，schema 4 保存启动时自动更新汇率偏好，schema 5 保存独立软件更新偏好，schema 6 在保留已有月度与实际事实的基础上追加自动入账策略、发生记录、专项及月分配。已发布迁移不可修改，只能追加。预发布数据库迁移链不属于公开兼容范围，换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
 
 本地 SQLite 使用外键、STRICT 表和 WAL，并将数据目录限制为 `0700`、数据库及 WAL/SHM 限制为 `0600`。数据库文件未静态加密，具体决策见 [ADR 0006](adr/0006-database-encryption-release-gate.md)。
 
@@ -72,6 +72,8 @@ pnpm tauri build --bundles app
 ```
 
 真实应用冒烟必须使用系统临时目录下全新创建的 `APLENA_SMOKE_DATA_DIR`，不得连接用户正式数据库或开发期预发布数据库。
+
+自动入账测试使用注入的日级时钟和合成数据库，覆盖到期、月末锚点、版本切换、重复检查、冲突及删除后重开。专项测试覆盖月分配冻结、同一实际源、跨月退款与汇率快照。界面冒烟同样只使用合成账本；运行时的自动入账会写正式实际，不能对真实数据库作冒烟检查。
 
 ### 3.2 GitHub Actions
 

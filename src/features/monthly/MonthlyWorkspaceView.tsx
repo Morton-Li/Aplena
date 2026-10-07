@@ -1,4 +1,5 @@
 import type { KeyboardEvent } from "react";
+import { Link } from "react-router-dom";
 
 import type { MonthlyItem } from "../../shared/api/finance";
 import { formatMoney, formatPercent } from "../../shared/formatting/finance";
@@ -7,9 +8,12 @@ import { Select } from "../../shared/components/Select";
 import {
   defaultMonthlyWorkspaceFilters,
   hasActiveMonthlyFilters,
+  hasMonthlyBudgetBaseline,
   isActualOnly,
+  isSpecialProjectItem,
   isTemporaryItem,
   monthlyItemCounts,
+  specialProjectLink,
   type MonthlyWorkspaceFilters,
 } from "./monthlyWorkspace";
 
@@ -165,7 +169,10 @@ function SummaryMetric({ label, value }: { label: string; value: number }) {
 }
 
 function MonthlyTableRow({ item, selected, onSelect }: { item: MonthlyItem; selected: boolean; onSelect: () => void }) {
+  const specialLink = specialProjectLink(item);
+  const hasBaseline = hasMonthlyBudgetBaseline(item);
   const handleKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
+    if (event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onSelect();
@@ -182,15 +189,16 @@ function MonthlyTableRow({ item, selected, onSelect }: { item: MonthlyItem; sele
     >
       <th scope="row">
         <span className="monthly-item-name">{item.item_name}</span>
-        <small>{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{isTemporaryItem(item) ? " · 临时类目" : isActualOnly(item) ? " · 计划外预算类目" : ""}</small>
+        <small>{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{isSpecialProjectItem(item) ? ` · 专项${isActualOnly(item) ? " · 未分配月预算" : ""}` : isTemporaryItem(item) ? " · 临时类目" : isActualOnly(item) ? " · 计划外预算类目" : ""}</small>
+        {specialLink && <Link className="monthly-special-link" onClick={(event) => event.stopPropagation()} to={specialLink}>打开专项</Link>}
       </th>
-      <td className="numeric-column">{item.item_origin === "MANUAL" ? "—" : formatMoney(item.planned_amount, item.currency)}</td>
+      <td className="numeric-column">{hasBaseline ? formatMoney(item.planned_amount, item.currency) : "—"}</td>
       <td className="numeric-column monthly-actual-value">{formatMoney(item.actual_amount, item.currency)}</td>
       <td className={`numeric-column monthly-optional-column variance-${item.variance_effect.toLowerCase()}`}>
-        <span>{formatMoney(item.variance_amount, item.currency)}</span>
-        <small>{varianceLabels[item.variance_effect]}</small>
+        <span>{hasBaseline ? formatMoney(item.variance_amount, item.currency) : "—"}</span>
+        <small>{hasBaseline ? varianceLabels[item.variance_effect] : "暂无预算基准"}</small>
       </td>
-      <td className="numeric-column monthly-optional-column">{formatPercent(item.completion_rate_percent)}</td>
+      <td className="numeric-column monthly-optional-column">{hasBaseline ? formatPercent(item.completion_rate_percent) : "—"}</td>
       <td className="numeric-column">{item.actual_entry_count}</td>
       <td>
         <button

@@ -156,6 +156,16 @@ impl AppError {
                         "rate",
                         "error.invalid_base_currency_rate",
                     )
+                } else if message.contains("APLENA_SPECIAL_SNAPSHOT_FROZEN") {
+                    Self::business(
+                        "SPECIAL_ALLOCATION_FROZEN",
+                        "error.special_allocation_frozen",
+                    )
+                } else if message.contains("APLENA_SPECIAL_ALLOCATION_MISMATCH") {
+                    Self::business(
+                        "SPECIAL_ALLOCATION_MISMATCH",
+                        "error.special_allocation_mismatch",
+                    )
                 } else if message.contains("FOREIGN KEY constraint failed") {
                     Self::business("RECORD_IS_REFERENCED", "error.record_is_referenced")
                 } else {

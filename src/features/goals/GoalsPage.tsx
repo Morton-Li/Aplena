@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 
 import {
   getBudgetProjection,
@@ -37,6 +38,7 @@ export function GoalsPage() {
 
   const projection = projectionQuery.data;
   const hasRules = plansQuery.data.length > 0;
+  const hasBudget = hasRules || (decimalValue(projection.special_expenses ?? "0") ?? 0) > 0;
 
   return (
     <>
@@ -44,19 +46,35 @@ export function GoalsPage() {
         <div>
           <p className="eyebrow">下月规划</p>
           <h1>配置预算</h1>
-          <p>根据周期规则汇总 {monthLabel(projection.target_month)} 的预计收支与储蓄结果。</p>
+          <p>汇总周期规则与专项在 {monthLabel(projection.target_month)} 的预计收支与储蓄结果。</p>
         </div>
         <div className="goal-month-badge"><span>预算期间</span><strong>{projection.target_month}</strong><small>由系统自动推进</small></div>
       </header>
 
       <div className="goal-overview-grid">
-        <BudgetProjectionSummary projection={projection} hasRules={hasRules} />
-        <ExpenseCategorySummary projection={projection} hasRules={hasRules} />
+        <BudgetProjectionSummary projection={projection} hasRules={hasBudget} />
+        <ExpenseCategorySummary projection={projection} hasRules={hasBudget} />
       </div>
 
+      <BudgetSourcesSummary projection={projection} />
       <RecurringRulesPanel targetMonth={projection.target_month} />
     </>
   );
+}
+
+function BudgetSourcesSummary({ projection }: { projection: BudgetProjection }) {
+  return <section className="report-card goal-budget-sources" aria-label="下月支出预算来源">
+    <header>
+      <div><p className="section-label">Budget Sources</p><h2>下月支出预算来源</h2></div>
+      <Link className="button button-secondary" to="/specials">管理专项</Link>
+    </header>
+    <div className="goal-budget-source-grid">
+      <ProjectionMetric label="周期规则月度预算" value={formatMoney(projection.recurring_expenses ?? projection.projected_expenses, projection.base_currency)} detail="按周期规则的月均等价金额汇总" />
+      <ProjectionMetric label="专项月分配" value={formatMoney(projection.special_expenses ?? "0", projection.base_currency)} detail="直接计入该月分配金额" />
+      <ProjectionMetric label="预计支出合计" value={formatMoney(projection.projected_expenses, projection.base_currency)} detail="周期规则预算加专项月分配" />
+    </div>
+    <p className="chart-note">专项总预算用于项目管理；下月测算只计入 {projection.target_month} 的月分配。</p>
+  </section>;
 }
 
 interface BudgetCategorySlice {
@@ -102,7 +120,7 @@ function BudgetProjectionSummary({
           back={<BudgetProjectionDataTable projection={projection} />}
         />
       ) : (
-        <div className="chart-empty goal-chart-empty"><p>添加周期规则后，这里会直接汇总下月预计收入、支出与储蓄。</p></div>
+        <div className="chart-empty goal-chart-empty"><p>添加周期规则或专项月分配后，这里会汇总下月预计收入、支出与储蓄。</p></div>
       )}
     </section>
   );
@@ -130,6 +148,8 @@ function BudgetProjectionDataTable({ projection }: { projection: BudgetProjectio
     ["必要支出", formatMoney(projection.essential_expenses, projection.base_currency)],
     ["固定承诺支出", formatMoney(projection.fixed_commitments, projection.base_currency)],
     ["自主性预算", formatMoney(projection.discretionary_budget, projection.base_currency)],
+    ["周期规则月度预算", formatMoney(projection.recurring_expenses ?? projection.projected_expenses, projection.base_currency)],
+    ["专项月分配", formatMoney(projection.special_expenses ?? "0", projection.base_currency)],
     ["预计支出", formatMoney(projection.projected_expenses, projection.base_currency)],
     ["预计储蓄", formatMoney(projection.projected_savings, projection.base_currency)],
     ["预计储蓄率", formatPercent(projection.projected_savings_rate_percent)],
@@ -161,7 +181,7 @@ function ExpenseCategorySummary({
     <section className="report-card goal-category-card">
       <header>
         <div><p className="section-label">Expense Mix</p><h2>支出类型占比</h2></div>
-        <span className="report-context">月度等价金额</span>
+        <span className="report-context">下月计入金额</span>
       </header>
       {slices.length > 0 ? (
         <ChartDataFlip
@@ -177,7 +197,7 @@ function ExpenseCategorySummary({
         />
       ) : (
         <div className="chart-empty goal-category-empty">
-          <p>{hasRules ? "现有周期规则在下月没有可计入的支出金额。" : "添加支出周期规则后，这里会展示类型占比。"}</p>
+          <p>{hasRules ? "现有预算在下月没有可计入的支出金额。" : "添加支出周期规则或专项月分配后，这里会展示类型占比。"}</p>
         </div>
       )}
     </section>
@@ -189,7 +209,7 @@ function ExpenseCategoryDataTable({ slices, currency }: { slices: BudgetCategory
   return (
     <table className="data-table">
       <caption className="sr-only">支出类型占比明细</caption>
-      <thead><tr><th>支出类型</th><th>月度等价金额</th><th>占比</th></tr></thead>
+      <thead><tr><th>支出类型</th><th>下月计入金额</th><th>占比</th></tr></thead>
       <tbody>{slices.map((slice) => (
         <tr key={slice.code}>
           <th>{slice.label}</th>

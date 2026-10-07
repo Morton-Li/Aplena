@@ -1,5 +1,7 @@
 use chrono::{Datelike, Local};
-use pfcm_domain::{Amount, Category, CurrencyCode, PlanItem, RecognitionMode, Settings, YearMonth};
+use pfcm_domain::{
+    Amount, CalendarDate, Category, CurrencyCode, PlanItem, RecognitionMode, Settings, YearMonth,
+};
 use sqlx::{
     Row,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -10,6 +12,7 @@ use uuid::Uuid;
 use crate::infrastructure::{StoreError, open_database, open_memory_database};
 
 use super::{
+    automatic::AutomaticPolicyInputDto,
     dto::{
         ActualEntryInputDto, DeleteManualMonthlyItemInputDto, EnsureActualOnlyInputDto,
         ExchangeRateUpsertDto, InitializeMonthInputDto, ManualMonthlyItemInputDto,
@@ -182,6 +185,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             (3, "remove next month goal".to_owned(), 1),
             (4, "add automatic rate refresh".to_owned(), 1),
             (5, "add software update preferences".to_owned(), 1),
+            (6, "budget specials".to_owned(), 1),
         ]
     );
 
@@ -316,6 +320,10 @@ async fn current_schema_matches_the_frozen_pre_release_schema_after_public_migra
     .execute(&pre_release)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!("../../migrations/0006_budget_specials.sql"))
+        .execute(&pre_release)
+        .await
+        .unwrap();
 
     assert_eq!(
         schema_snapshot(baseline.pool()).await,
@@ -428,6 +436,459 @@ async fn software_update_preferences_migration_preserves_financial_settings_and_
 }
 
 #[tokio::test]
+async fn budget_specials_migration_preserves_schema_five_facts_and_defaults_automatic_off() {
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")
+        .unwrap()
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    for migration in [
+        include_str!("../../migrations/0001_initial_release.sql"),
+        include_str!("../../migrations/0002_remove_monthly_item_status.sql"),
+        include_str!("../../migrations/0003_remove_next_month_goal.sql"),
+        include_str!("../../migrations/0004_add_automatic_rate_refresh.sql"),
+        include_str!("../../migrations/0005_add_software_update_preferences.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+    }
+    sqlx::raw_sql(include_str!(
+        "../../tests/fixtures/schema5_budget_specials.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let financial_queries = [
+        "SELECT json_array(id, base_currency_code, created_at, updated_at, auto_update_exchange_rates) FROM settings ORDER BY id",
+        "SELECT json_array(currency_code, rate_scaled, updated_at, source, observed_on) FROM exchange_rates ORDER BY currency_code",
+        "SELECT json_array(id, name, category, planned_amount_scaled, currency_code, period_months, recognition_mode, start_date, end_date, note, created_at, updated_at) FROM plan_items ORDER BY id",
+        "SELECT json_array(id, source_plan_item_id, month, snapshot_name, category, flow_type, recognition_mode, item_source, scheduled_date, planned_amount_scaled, currency_code, note, created_at, updated_at, item_origin) FROM monthly_items ORDER BY id",
+        "SELECT json_array(id, monthly_item_id, occurred_on, effect, amount_scaled, source_amount_scaled, source_currency_code, exchange_rate_scaled, exchange_rate_source, exchange_rate_observed_on, origin, note, created_at, updated_at) FROM actual_entries ORDER BY id",
+    ];
+    let mut before = Vec::new();
+    for query in financial_queries {
+        before.push(
+            sqlx::query_scalar::<_, String>(query)
+                .fetch_all(&pool)
+                .await
+                .unwrap(),
+        );
+    }
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::raw_sql(include_str!("../../migrations/0006_budget_specials.sql"))
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+    for (index, query) in financial_queries.into_iter().enumerate() {
+        let after: Vec<String> = sqlx::query_scalar(query).fetch_all(&pool).await.unwrap();
+        assert_eq!(before[index], after);
+    }
+
+    let unknown_sources: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM monthly_items WHERE source_special_project_id IS NOT NULL \
+         OR source_special_allocation_id IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unknown_sources, 0);
+    let policies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM automatic_entry_policies")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(policies, 0);
+    let new_strict_tables: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_list WHERE schema = 'main' AND strict = 1 \
+         AND name IN ('special_projects', 'special_allocations', 'automatic_entry_policies', \
+           'automatic_policy_versions', 'automatic_occurrences')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(new_strict_tables, 5);
+    assert!(
+        sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let store = crate::infrastructure::Store::new(pool);
+    let january = YearMonth::new(2026, 1).unwrap();
+    let monthly = store.list_monthly_items(january).await.unwrap();
+    assert_eq!(monthly.len(), 2);
+    let entries = store
+        .list_actual_entries(Uuid::parse_str("00000000-0000-0000-0000-000000000201").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.value.detail_group().is_none())
+    );
+    assert_eq!(
+        monthly
+            .iter()
+            .find(|item| item.value.id().to_string() == "00000000-0000-0000-0000-000000000201")
+            .unwrap()
+            .value
+            .actual_amount()
+            .unwrap()
+            .decimal_string(),
+        "82.08"
+    );
+}
+
+#[tokio::test]
+async fn special_only_future_allocations_are_previewed_and_frozen_once_in_projection() {
+    let service = test_service().await;
+    let store = service.test_store().await;
+    let next = current_month().next_month().unwrap();
+    let project_id = Uuid::new_v4().to_string();
+    let allocation_id = Uuid::new_v4().to_string();
+    let mut transaction = store.pool().begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO special_projects (id, name, total_budget_scaled, currency_code, created_at, updated_at) \
+         VALUES (?, '迁居专项', 100000, 'CNY', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&project_id)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO special_allocations (id, project_id, month, category, amount_scaled, created_at, updated_at) \
+         VALUES (?, ?, ?, 'ESSENTIAL_EXPENSE', 12345, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&allocation_id)
+    .bind(&project_id)
+    .bind(next.database_anchor())
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+
+    let preview = service.preview_month(init(next)).await.unwrap();
+    assert_eq!(preview.candidate_count, 1);
+    assert_eq!(preview.existing_count, 0);
+    let initialized = service.initialize_month(init(next)).await.unwrap();
+    assert_eq!(initialized.created_count, 1);
+    let preview = service.preview_month(init(next)).await.unwrap();
+    assert_eq!(preview.candidate_count, 0);
+    assert_eq!(preview.existing_count, 1);
+    assert_eq!(
+        service
+            .initialize_month(init(next))
+            .await
+            .unwrap()
+            .created_count,
+        0
+    );
+    let items = service.list_monthly_items(next.to_string()).await.unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].source_special_project_id.as_deref(),
+        Some(project_id.as_str())
+    );
+    assert_eq!(
+        items[0].source_special_allocation_id.as_deref(),
+        Some(allocation_id.as_str())
+    );
+    assert_eq!(items[0].planned_amount, "123.45");
+    let projection = service.budget_projection().await.unwrap();
+    assert_eq!(projection.recurring_expenses, "0.00");
+    assert_eq!(projection.special_expenses, "123.45");
+    assert_eq!(projection.essential_expenses, "123.45");
+    assert_eq!(projection.projected_expenses, "123.45");
+    assert_eq!(projection.projected_savings, "-123.45");
+}
+
+async fn synthetic_special_allocation(
+    store: &crate::infrastructure::Store,
+    month: YearMonth,
+    amount_scaled: i64,
+) -> String {
+    let project_id = Uuid::new_v4().to_string();
+    let mut transaction = store.pool().begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO special_projects (id, name, total_budget_scaled, currency_code, created_at, updated_at) \
+         VALUES (?, '合成跨月专项', 1000000, 'CNY', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(&project_id)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO special_allocations (id, project_id, month, category, amount_scaled, created_at, updated_at) \
+         VALUES (?, ?, ?, 'ESSENTIAL_EXPENSE', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(&project_id)
+    .bind(month.database_anchor())
+    .bind(amount_scaled)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+    project_id
+}
+
+#[tokio::test]
+async fn injected_running_month_context_materializes_normal_and_special_without_catchup() {
+    let service = test_service().await;
+    let store = service.test_store().await;
+    let september = YearMonth::new(2026, 9).unwrap();
+    let october = YearMonth::new(2026, 10).unwrap();
+    let november = YearMonth::new(2026, 11).unwrap();
+    let mut original = plan(
+        "跨月必要支出",
+        "ESSENTIAL_EXPENSE",
+        "1200",
+        "CNY",
+        1,
+        "AMORTIZED",
+        september,
+        None,
+    );
+    let rule = service.create_plan_item(original.clone()).await.unwrap();
+    let project_id = synthetic_special_allocation(&store, november, 30000).await;
+    {
+        let _operation = service.operation_gate.write().await;
+        service
+            .ensure_current_month_context_at_unlocked(CalendarDate::from_str("2026-10-15").unwrap())
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.count_monthly_items(october).await.unwrap(), 1);
+    assert_eq!(store.count_monthly_items(september).await.unwrap(), 0);
+    assert_eq!(store.count_monthly_items(november).await.unwrap(), 0);
+    original.id = Some(rule.id);
+    original.planned_amount = "1800".to_owned();
+    service.update_plan_item(original).await.unwrap();
+    service
+        .create_plan_item(plan(
+            "本月新规则",
+            "DISCRETIONARY_BUDGET",
+            "500",
+            "CNY",
+            1,
+            "AMORTIZED",
+            october,
+            None,
+        ))
+        .await
+        .unwrap();
+    {
+        let _operation = service.operation_gate.write().await;
+        service
+            .ensure_current_month_context_at_unlocked(CalendarDate::from_str("2026-10-20").unwrap())
+            .await
+            .unwrap();
+    }
+    let october_items = service
+        .list_monthly_items(october.to_string())
+        .await
+        .unwrap();
+    assert_eq!(october_items.len(), 1);
+    assert_eq!(october_items[0].planned_amount, "1200.00");
+    {
+        let _operation = service.operation_gate.write().await;
+        service
+            .ensure_current_month_context_at_unlocked(CalendarDate::from_str("2026-11-03").unwrap())
+            .await
+            .unwrap();
+    }
+    let first = service
+        .list_monthly_items(november.to_string())
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 3);
+    assert!(
+        first
+            .iter()
+            .any(|item| item.planned_amount == "1800.00" && item.item_source == "PLANNED")
+    );
+    assert!(
+        first
+            .iter()
+            .any(
+                |item| item.source_special_project_id.as_deref() == Some(project_id.as_str())
+                    && item.planned_amount == "300.00"
+            )
+    );
+    let status = service.startup_status.read().await.clone();
+    assert_eq!(status.current_month, "2026-11");
+    assert!(status.error.is_none());
+    let initialized = status.initialization.unwrap();
+    assert_eq!(initialized.created_count, 3);
+    assert!(initialized.warnings.is_empty());
+    {
+        let _operation = service.operation_gate.write().await;
+        service
+            .ensure_current_month_context_at_unlocked(CalendarDate::from_str("2026-11-05").unwrap())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        first,
+        service
+            .list_monthly_items(november.to_string())
+            .await
+            .unwrap()
+    );
+    assert_eq!(store.count_monthly_items(september).await.unwrap(), 0);
+    assert_eq!(
+        store
+            .count_monthly_items(YearMonth::new(2026, 12).unwrap())
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn missing_normal_context_rate_keeps_specials_and_auto_failures_visible_then_recovers() {
+    let service = test_service().await;
+    let store = service.test_store().await;
+    let november = YearMonth::new(2026, 11).unwrap();
+    service
+        .upsert_exchange_rate(ExchangeRateUpsertDto {
+            currency: "USD".to_owned(),
+            rate: "7".to_owned(),
+        })
+        .await
+        .unwrap();
+    let rule = service
+        .create_plan_item(plan(
+            "合成美元自动规则",
+            "ESSENTIAL_EXPENSE",
+            "100",
+            "USD",
+            1,
+            "AMORTIZED",
+            YearMonth::new(2026, 1).unwrap(),
+            None,
+        ))
+        .await
+        .unwrap();
+    service
+        .create_plan_item(plan(
+            "合成人民币规则",
+            "DISCRETIONARY_BUDGET",
+            "500",
+            "CNY",
+            1,
+            "AMORTIZED",
+            YearMonth::new(2026, 1).unwrap(),
+            None,
+        ))
+        .await
+        .unwrap();
+    synthetic_special_allocation(&store, november, 30000).await;
+    {
+        let _operation = service.operation_gate.write().await;
+        service
+            .save_automatic_entry_policy_at_unlocked(
+                AutomaticPolicyInputDto {
+                    plan_item_id: rule.id.clone(),
+                    enabled: true,
+                    first_date: Some("2026-11-01".to_owned()),
+                },
+                CalendarDate::from_str("2026-10-15").unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    // Deliberately remove a referenced rate only inside this isolated memory fixture.
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM exchange_rates WHERE currency_code = 'USD'")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    let today = CalendarDate::from_str("2026-11-04").unwrap();
+    let failed = {
+        let _operation = service.operation_gate.write().await;
+        service
+            .ensure_current_month_context_at_unlocked(today)
+            .await
+            .unwrap();
+        service
+            .check_automatic_entries_at_unlocked(today)
+            .await
+            .unwrap()
+    };
+    assert_eq!(failed.failed_count, 1);
+    let occurrence_id = failed.occurrences[0].id.clone();
+    assert_eq!(failed.occurrences[0].state, "FAILED");
+    let before = service
+        .list_monthly_items(november.to_string())
+        .await
+        .unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].item_origin, "SPECIAL_PROJECT");
+    let status = service.startup_status.read().await.clone();
+    assert_eq!(status.current_month, "2026-11");
+    assert_eq!(status.error.unwrap().error_code, "MISSING_EXCHANGE_RATE");
+    store
+        .upsert_exchange_rate(
+            &pfcm_domain::ExchangeRate::from_str(
+                CurrencyCode::new("USD").unwrap(),
+                CurrencyCode::new("CNY").unwrap(),
+                "7",
+            )
+            .unwrap(),
+            "MANUAL",
+            Some(CalendarDate::from_str("2026-11-03").unwrap()),
+            "2026-11-03T00:00:00Z",
+        )
+        .await
+        .unwrap();
+    let restored = {
+        let _operation = service.operation_gate.write().await;
+        service
+            .ensure_current_month_context_at_unlocked(today)
+            .await
+            .unwrap();
+        service
+            .check_automatic_entries_at_unlocked(today)
+            .await
+            .unwrap()
+    };
+    assert_eq!(restored.failed_count, 0);
+    assert_eq!(restored.created_count, 1);
+    assert_eq!(restored.occurrences[0].id, occurrence_id);
+    assert_eq!(restored.occurrences[0].state, "POSTED");
+    let after = service
+        .list_monthly_items(november.to_string())
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 3);
+    assert!(
+        after
+            .iter()
+            .any(|item| item.id == before[0].id && item.planned_amount == "300.00")
+    );
+    assert!(after.iter().any(
+        |item| item.source_plan_item_id.as_deref() == Some(rule.id.as_str())
+            && item.planned_amount == "700.00"
+            && item.actual_amount.as_deref() == Some("700.00")
+    ));
+    assert!(service.startup_status.read().await.error.is_none());
+}
+
+#[tokio::test]
 async fn pre_release_database_is_refused_without_modification() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pre-release.sqlite3");
@@ -447,15 +908,20 @@ async fn pre_release_database_is_refused_without_modification() {
     .await
     .unwrap();
     sqlx::query(
-        "CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, success BOOLEAN NOT NULL)",
+        "CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, description TEXT NOT NULL, \
+         installed_on TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, success BOOLEAN NOT NULL, \
+         checksum BLOB NOT NULL, execution_time BIGINT NOT NULL)",
     )
     .execute(&pre_release)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO _sqlx_migrations (version, success) VALUES (6, TRUE)")
-        .execute(&pre_release)
-        .await
-        .unwrap();
+    for version in 1..=6 {
+        sqlx::query("INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (?, 'pre-release', TRUE, X'00', 0)")
+            .bind(version)
+            .execute(&pre_release)
+            .await
+            .unwrap();
+    }
     sqlx::query("CREATE TABLE preservation_marker (value TEXT NOT NULL)")
         .execute(&pre_release)
         .await
@@ -467,7 +933,14 @@ async fn pre_release_database_is_refused_without_modification() {
     pre_release.close().await;
 
     let result = open_database(&path).await;
-    assert!(matches!(result, Err(StoreError::FutureSchema)));
+    // Public schema 6 and the old six-step pre-release chain now share a maximum
+    // version number. Their migration identities still cannot be mixed.
+    assert!(matches!(
+        result,
+        Err(StoreError::Migration(
+            sqlx::migrate::MigrateError::VersionMismatch(1)
+        ))
+    ));
 
     let verification = sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display()))
         .await
@@ -477,12 +950,65 @@ async fn pre_release_database_is_refused_without_modification() {
         .await
         .unwrap();
     let applied_version: i64 =
-        sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE success = TRUE")
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = TRUE")
             .fetch_one(&verification)
             .await
             .unwrap();
     assert_eq!(marker, "unchanged");
     assert_eq!(applied_version, 6);
+}
+
+#[tokio::test]
+async fn future_schema_database_is_refused_without_modification() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("future.sqlite3");
+    let pool = SqlitePoolOptions::new()
+        .connect_with(
+            SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+                .unwrap()
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE _sqlx_migrations (version BIGINT PRIMARY KEY, success BOOLEAN NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let future_version = sqlx::migrate!("./migrations")
+        .iter()
+        .map(|migration| migration.version)
+        .max()
+        .unwrap()
+        + 1;
+    sqlx::query("INSERT INTO _sqlx_migrations (version, success) VALUES (?, TRUE)")
+        .bind(future_version)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    assert!(matches!(
+        open_database(&path).await,
+        Err(StoreError::FutureSchema)
+    ));
+    let verification = sqlx::SqlitePool::connect(&format!("sqlite://{}", path.display()))
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations")
+            .fetch_one(&verification)
+            .await
+            .unwrap(),
+        future_version
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table'")
+            .fetch_one(&verification)
+            .await
+            .unwrap(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -882,6 +1408,7 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{next}-01"),
             note: Some("迟到退款".to_owned()),
+            detail_group: None,
         })
         .await
         .unwrap();
@@ -938,6 +1465,7 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{next}-02"),
             note: None,
+            detail_group: None,
         })
         .await
         .unwrap_err();
@@ -976,6 +1504,7 @@ async fn manual_monthly_item_accepts_actual_entries_without_a_plan() {
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{current}-02"),
             note: Some("月租".to_owned()),
+            detail_group: None,
         })
         .await
         .unwrap();
@@ -1072,6 +1601,7 @@ async fn official_cross_rates_and_actual_entry_snapshots_stay_fixed_and_atomic()
             exchange_rate_source: usd.source.clone(),
             exchange_rate_observed_on: usd.observed_on.clone().unwrap(),
             note: None,
+            detail_group: None,
         })
         .await
         .unwrap();
@@ -1120,6 +1650,7 @@ async fn official_cross_rates_and_actual_entry_snapshots_stay_fixed_and_atomic()
             exchange_rate_source: "MANUAL".to_owned(),
             exchange_rate_observed_on: "2026-08-29".to_owned(),
             note: Some("编辑金额但保留基准".to_owned()),
+            detail_group: None,
         })
         .await
         .unwrap();
@@ -1515,6 +2046,7 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{current}-15"),
             note: None,
+            detail_group: None,
         })
         .await
         .unwrap();
@@ -1536,6 +2068,7 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{current}-16"),
             note: Some("退款超过本月支出".to_owned()),
+            detail_group: None,
         })
         .await
         .unwrap();
@@ -1558,6 +2091,7 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{wrong_month}-01"),
             note: Some("调整退款".to_owned()),
+            detail_group: None,
         })
         .await
         .unwrap_err();
@@ -1575,6 +2109,7 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{current}-17"),
             note: Some("调整退款".to_owned()),
+            detail_group: None,
         })
         .await
         .unwrap();

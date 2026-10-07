@@ -1,10 +1,16 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import { getDomainContract, type DomainContract } from "../../shared/api/domain";
+import {
+  automaticQueryKeys,
+  listAutomaticEntryPolicies,
+  saveAutomaticEntryPolicy,
+  type AutomaticEntryPolicy,
+} from "../../shared/api/automatic";
 import {
   createPlanItem,
   deletePlanItem,
@@ -44,6 +50,8 @@ const planSchema = z
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "请选择开始日期"),
     endDate: z.string(),
     recognitionMode: z.enum(["AMORTIZED", "PAYMENT"]),
+    automaticEnabled: z.boolean(),
+    automaticFirstDate: z.string(),
     note: z.string(),
   })
   .superRefine((values, context) => {
@@ -53,6 +61,16 @@ const planSchema = z
         path: ["endDate"],
         message: "结束日期不能早于开始日期",
       });
+    }
+    if (values.automaticEnabled && /^0+(?:\.0+)?$/.test(values.plannedAmount)) {
+      context.addIssue({ code: "custom", path: ["plannedAmount"], message: "自动记录实际需要大于 0 的金额。" });
+    }
+    if (values.automaticEnabled && values.recognitionMode === "AMORTIZED") {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(values.automaticFirstDate)) {
+        context.addIssue({ code: "custom", path: ["automaticFirstDate"], message: "请选择首次实际收支日。" });
+      } else if (values.automaticFirstDate < values.startDate || (values.endDate && values.automaticFirstDate > values.endDate)) {
+        context.addIssue({ code: "custom", path: ["automaticFirstDate"], message: "实际收支日必须位于规则有效期间内。" });
+      }
     }
   });
 
@@ -64,6 +82,7 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
   const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
   const plansQuery = useQuery({ queryKey: queryKeys.plans, queryFn: () => listPlanItems() });
+  const policiesQuery = useQuery({ queryKey: automaticQueryKeys.policies, queryFn: () => listAutomaticEntryPolicies() });
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("ALL");
   const [editor, setEditor] = useState<PlanItem | "new" | null>(null);
@@ -86,6 +105,7 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.plans }),
       queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
       queryClient.invalidateQueries({ queryKey: queryKeys.budgetProjection }),
+      queryClient.invalidateQueries({ queryKey: automaticQueryKeys.policies }),
     ]);
   };
 
@@ -133,6 +153,7 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
 
       {(plansQuery.isPending || contractQuery.isPending) && <StatePanel>正在读取周期规则…</StatePanel>}
       {(plansQuery.isError || contractQuery.isError) && <StatePanel error={plansQuery.error ?? contractQuery.error} />}
+      {policiesQuery.isError && <div className="inline-error" role="alert">自动入账设置读取失败：{describeError(policiesQuery.error)} <button className="text-button" type="button" onClick={() => void policiesQuery.refetch()}>重新读取</button></div>}
       {plansQuery.isSuccess && filtered.length === 0 && (
         plansQuery.data.length === 0
           ? <EmptyState eyebrow="按需启用" title="暂未配置周期规则" description="这不会影响本月实际录入和历史报表。只有需要自动生成后续月份计划基准时才需要配置。" action={<button className="button button-secondary" type="button" onClick={() => setEditor("new")}>创建周期规则</button>} />
@@ -172,6 +193,9 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
                   <td className="recurring-rule-schedule">
                     <strong>{item.period_months} 个月</strong>
                     <small>{recognitionLabel(item.recognition_mode)}</small>
+                    <small className="automatic-policy-state">{policiesQuery.isSuccess
+                      ? policiesQuery.data.find((policy) => policy.plan_item_id === item.id)?.enabled ? "自动记录实际：已启用" : "自动记录实际：关闭"
+                      : "自动入账状态待读取"}</small>
                   </td>
                   <td className="recurring-rule-period">
                     <time dateTime={item.start_date}>{item.start_date}</time>
@@ -183,7 +207,7 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
                   </td>
                   <td>
                     <div className="recurring-rule-actions">
-                      <button className="button button-quiet" type="button" onClick={() => setEditor(item)}>编辑</button>
+                      <button className="button button-quiet" disabled={!policiesQuery.isSuccess} type="button" onClick={() => setEditor(item)}>编辑</button>
                       <button className="button button-danger-quiet" type="button" onClick={() => setDeleting(item)}>删除</button>
                     </div>
                   </td>
@@ -199,6 +223,7 @@ export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
           contract={contractQuery.data}
           targetMonth={targetMonth}
           existing={editor === "new" ? null : editor}
+          policy={editor === "new" ? undefined : policiesQuery.data?.find((policy) => policy.plan_item_id === editor.id)}
           rates={ratesQuery.data}
           settings={settingsQuery.data}
           onClose={() => setEditor(null)}
@@ -229,6 +254,7 @@ function PlanEditor({
   contract,
   targetMonth,
   existing,
+  policy,
   rates,
   settings,
   onClose,
@@ -237,11 +263,13 @@ function PlanEditor({
   contract: DomainContract;
   targetMonth: string;
   existing: PlanItem | null;
+  policy?: AutomaticEntryPolicy;
   rates: ExchangeRate[];
   settings: Settings;
   onClose: () => void;
   onSaved: (message: string) => Promise<void>;
 }) {
+  const queryClient = useQueryClient();
   const defaults: PlanValues = existing
     ? {
         name: existing.name,
@@ -252,6 +280,8 @@ function PlanEditor({
         startDate: existing.start_date,
         endDate: existing.end_date ?? "",
         recognitionMode: existing.recognition_mode as "AMORTIZED" | "PAYMENT",
+        automaticEnabled: policy?.enabled ?? false,
+        automaticFirstDate: policy?.first_date ?? (existing.period_months === 1 ? laterDate(targetMonth + "-01", existing.start_date) : ""),
         note: existing.note ?? "",
       }
     : {
@@ -263,15 +293,32 @@ function PlanEditor({
         startDate: targetMonth + "-01",
         endDate: "",
         recognitionMode: "AMORTIZED",
+        automaticEnabled: false,
+        automaticFirstDate: targetMonth + "-01",
         note: "",
       };
   const form = useForm<PlanValues>({ resolver: zodResolver(planSchema), defaultValues: defaults });
   const values = useWatch({ control: form.control });
   const signature = JSON.stringify(values);
   const [preview, setPreview] = useState<{ signature: string; data: PlanPreview } | null>(null);
+  const savedRule = useRef<PlanItem | null>(existing);
+  const saveGuard = useRef(false);
+  const previewGuard = useRef(false);
+  const previousSchedule = useRef({ mode: defaults.recognitionMode, period: defaults.periodMonths });
+  const [policySaveError, setPolicySaveError] = useState<unknown>(null);
+
+  useEffect(() => {
+    const previous = previousSchedule.current;
+    if (previous.mode !== values.recognitionMode || previous.period !== values.periodMonths) {
+      if (values.recognitionMode === "AMORTIZED") {
+        form.setValue("automaticFirstDate", values.periodMonths === 1 ? laterDate(targetMonth + "-01", values.startDate ?? "") : "");
+      }
+      previousSchedule.current = { mode: values.recognitionMode ?? defaults.recognitionMode, period: values.periodMonths ?? defaults.periodMonths };
+    }
+  }, [defaults.periodMonths, defaults.recognitionMode, form, targetMonth, values.periodMonths, values.recognitionMode, values.startDate]);
 
   const toInput = (value: PlanValues): PlanItemInput => ({
-    id: existing?.id,
+    id: savedRule.current?.id,
     name: value.name,
     category: value.category,
     plannedAmount: value.plannedAmount,
@@ -290,30 +337,64 @@ function PlanEditor({
     mutationFn: ({ value }) =>
       previewPlanItem(contract, settings, rates, targetMonth, toInput(value)),
     onSuccess: (data, variables) => setPreview({ signature: variables.signature, data }),
+    onSettled: () => { previewGuard.current = false; },
   });
   const saveMutation = useMutation<PlanItem, Error, PlanValues>({
-    mutationFn: (value: PlanValues) =>
-      existing ? updatePlanItem(toInput(value)) : createPlanItem(toInput(value)),
-    onSuccess: async () => onSaved("周期规则已保存，仅用于下月预估；本月与历史快照未作修改。"),
+    mutationFn: async (value: PlanValues) => {
+      setPolicySaveError(null);
+      const item = savedRule.current ? await updatePlanItem(toInput(value)) : await createPlanItem(toInput(value));
+      savedRule.current = item;
+      if (value.automaticEnabled || policy) {
+        try {
+          await saveAutomaticEntryPolicy({
+            planItemId: item.id,
+            enabled: value.automaticEnabled,
+            firstDate: value.automaticEnabled ? value.recognitionMode === "PAYMENT" ? value.startDate : value.automaticFirstDate : undefined,
+          });
+        } catch (caught) {
+          setPolicySaveError(caught);
+          await queryClient.invalidateQueries({ queryKey: queryKeys.plans });
+          await queryClient.invalidateQueries({ queryKey: automaticQueryKeys.policies });
+          throw new Error("周期规则已保存，但自动入账设置未保存。请重试保存，已有规则不会重复创建。", { cause: caught });
+        }
+      }
+      return item;
+    },
+    onSuccess: async (_, value) => onSaved(value.automaticEnabled
+      ? `周期规则与自动入账设置已保存，从 ${targetMonth} 起按实际收支日记录完整金额；既有实际保持不变。`
+      : "周期规则已保存，自动入账关闭；本月与历史快照未作修改。"),
+    onSettled: () => { saveGuard.current = false; },
   });
   const category = contract.categories.find((item) => item.code === values.category);
   const derivedFlow = ["FIXED_INCOME", "VARIABLE_INCOME"].includes(values.category ?? "")
     ? "收入"
     : "支出";
   const previewIsCurrent = preview?.signature === signature;
-  const previewCurrentValues = form.handleSubmit((value) => {
-    previewMutation.mutate({ value, signature: JSON.stringify(form.getValues()) });
-  });
+  const previewCurrentValues = () => {
+    void form.handleSubmit((value) => {
+      if (previewGuard.current || saveGuard.current) return;
+      previewGuard.current = true;
+      previewMutation.mutate({ value, signature: JSON.stringify(form.getValues()) });
+    })();
+  };
+  const saveCurrentValues = (event: FormEvent<HTMLFormElement>) => {
+    void form.handleSubmit((value) => {
+      if (saveGuard.current || previewGuard.current || !previewIsCurrent) return;
+      saveGuard.current = true;
+      saveMutation.mutate(value);
+    })(event);
+  };
+  const close = () => { if (!saveGuard.current) onClose(); };
 
   return (
       <Dialog
         eyebrow={existing ? "编辑周期规则" : "新建周期规则"}
         title={existing?.name ?? "新的周期性收入或支出"}
-        onClose={onClose}
+        onClose={close}
         size="wide"
         footer={(
           <>
-            <button className="button button-quiet" type="button" onClick={onClose}>取消</button>
+            <button className="button button-quiet" disabled={saveMutation.isPending} type="button" onClick={close}>取消</button>
             {previewIsCurrent ? (
               <button className="button button-primary" disabled={saveMutation.isPending} form="plan-editor-form" type="submit">
                 {saveMutation.isPending ? "保存中…" : "确认保存"}
@@ -326,7 +407,7 @@ function PlanEditor({
           </>
         )}
       >
-        <form className="plan-form" id="plan-editor-form" onSubmit={form.handleSubmit((value) => saveMutation.mutate(value))}>
+        <form className="plan-form" id="plan-editor-form" onSubmit={saveCurrentValues}>
           <div className="field-grid">
             <label className="field-span-2">项目名称<input autoFocus data-dialog-initial-focus {...form.register("name")} />{form.formState.errors.name && <em>{form.formState.errors.name.message}</em>}</label>
             <label>类别<Controller control={form.control} name="category" render={({ field, fieldState }) => <Select ariaLabel="类别" invalid={fieldState.invalid} value={field.value} onChange={field.onChange} onBlur={field.onBlur} ref={field.ref} options={contract.categories.map((option) => ({ value: option.code, label: option.label }))} />} /></label>
@@ -339,7 +420,7 @@ function PlanEditor({
           </div>
           {values.periodMonths !== 1 && (
             <fieldset className="mode-options">
-              <legend>确认模式</legend>
+              <legend>月度计划计入方式</legend>
               <label className={values.recognitionMode === "AMORTIZED" ? "mode-option selected" : "mode-option"}>
                 <input type="radio" value="AMORTIZED" {...form.register("recognitionMode")} />
                 <span><strong>按月均摊</strong><small>每个有效月份计入月均金额。</small></span>
@@ -351,6 +432,20 @@ function PlanEditor({
               <p>无论哪种模式，下月预算概览都按月均等价金额计算。</p>
             </fieldset>
           )}
+          <section className="automatic-rule-setting">
+            <label className="settings-switch">
+              <span className="settings-switch-copy"><strong>新月份自动记录实际条目</strong><small>默认关闭；启用后从 {targetMonth} 起，到收支日时直接计入实际收入或支出。</small></span>
+              <input aria-label="新月份自动记录实际条目" type="checkbox" {...form.register("automaticEnabled")} />
+              <span aria-hidden="true" className="settings-switch-track"><span /></span>
+            </label>
+            {values.automaticEnabled && <>
+              {values.recognitionMode === "PAYMENT"
+                ? <label>首次实际收支日<input aria-label="首次实际收支日" type="date" readOnly value={values.startDate ?? ""} /><small>沿用规则开始日期作为支付锚点，每隔 {values.periodMonths} 个月按同一日入账；短月取月末，随后恢复原日期。</small></label>
+                : <label>首次实际收支日<input aria-label="首次实际收支日" type="date" min={values.startDate} max={values.endDate || undefined} {...form.register("automaticFirstDate")} />{form.formState.errors.automaticFirstDate && <em>{form.formState.errors.automaticFirstDate.message}</em>}<small>{values.periodMonths === 1 ? "默认新月份第一日，可以修改收支日。" : "请明确选择实际付款或收款日期；月均预算没有隐含收支日。"}</small></label>}
+              <p>每隔 {values.periodMonths} 个月自动记录一次完整原币金额 {formatMoney(values.plannedAmount || "0.00", values.currency ?? settings.base_currency)}，不会把月均预算重复记作实际。修改后从下月生效；关闭立即停止后续自动入账，已记录的实际保留。</p>
+              <p>应用打开或重新回到前台时检查已到期收支；不会补记历史月份。已有手动实际会提示核对，不自动追加重复记录。</p>
+            </>}
+          </section>
           <label>备注<textarea rows={3} {...form.register("note")} /></label>
 
           {previewIsCurrent && preview && (
@@ -359,16 +454,21 @@ function PlanEditor({
               <div><span>生效状态</span><strong>{preview.data.effective ? "有效" : "未生效"}</strong></div>
               <div><span>生成月度项目</span><strong>{preview.data.recognized_in_target_month ? "会" : "不会"}</strong></div>
               <div><span>月度等价金额</span><strong>{formatMoney(preview.data.monthly_equivalent, preview.data.base_currency)}</strong></div>
-              <div><span>当月确认金额</span><strong>{formatMoney(preview.data.recognized_amount, preview.data.base_currency)}</strong></div>
+              <div><span>当月计划金额</span><strong>{formatMoney(preview.data.recognized_amount, preview.data.base_currency)}</strong></div>
               <div><span>计划支付日</span><strong>{preview.data.scheduled_date ?? "—"}</strong></div>
             </div>
           )}
           {(previewMutation.isError || saveMutation.isError) && (
             <div className="inline-error" role="alert">{describeError(previewMutation.error ?? saveMutation.error)}</div>
           )}
+          {policySaveError != null && <div className="inline-error" role="alert"><strong>周期规则已保存，自动入账设置尚未保存。</strong><p>{describeError(policySaveError)}</p><p>可再次确认保存以重试设置；不会重复创建规则。</p></div>}
         </form>
       </Dialog>
   );
+}
+
+function laterDate(first: string, second: string) {
+  return first > second ? first : second;
 }
 
 function DeleteDialog({ item, onClose, onDeleted }: { item: PlanItem; onClose: () => void; onDeleted: () => Promise<void> }) {

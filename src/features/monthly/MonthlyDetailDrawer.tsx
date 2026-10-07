@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 
 import {
   deleteActualEntry,
@@ -43,6 +44,7 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
   const [editingNote, setEditingNote] = useState(false);
   const [entryPendingDeletion, setEntryPendingDeletion] = useState<ActualEntry | null>(null);
   const [categoryPendingDeletion, setCategoryPendingDeletion] = useState(false);
+  const deletingEntry = useRef(false);
   const entriesQuery = useQuery({
     queryKey: queryKeys.actualEntries(item.id),
     queryFn: () => listActualEntries(item.id),
@@ -58,6 +60,7 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
       await queryClient.invalidateQueries({ queryKey: queryKeys.actualEntries(item.id) });
       await onSaved();
     },
+    onSettled: () => { deletingEntry.current = false; },
   });
   const deleteCategoryMutation = useMutation({
     mutationFn: () => deleteManualMonthlyItem(item.id),
@@ -73,10 +76,11 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
     };
   }, []);
 
+  const closeDrawer = () => { if (!deletingEntry.current) onClose(); };
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      onClose();
+      closeDrawer();
       return;
     }
     if (event.key !== "Tab") return;
@@ -98,12 +102,17 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
   };
 
   const closeDeleteDialog = () => {
-    if (!deleteMutation.isPending) setEntryPendingDeletion(null);
+    if (!deletingEntry.current) setEntryPendingDeletion(null);
+  };
+  const confirmDeleteEntry = () => {
+    if (deletingEntry.current || !entryPendingDeletion) return;
+    deletingEntry.current = true;
+    deleteMutation.mutate(entryPendingDeletion.id);
   };
 
   return <>
     {createPortal(
-    <div className="monthly-drawer-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="monthly-drawer-backdrop" onMouseDown={(event) => event.target === event.currentTarget && closeDrawer()}>
       <aside
         aria-labelledby={titleId}
         aria-modal="true"
@@ -117,14 +126,14 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
           <div>
             <p className="section-label">项目详情</p>
             <h2 id={titleId}>{item.item_name}</h2>
-            <p>{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{item.item_origin === "PLAN_LINKED" ? ` · ${recognitionLabel(item.recognition_mode)}` : " · 本月项目"}</p>
+            <p>{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{item.item_origin === "PLAN_LINKED" ? ` · ${recognitionLabel(item.recognition_mode)}` : item.item_origin === "SPECIAL_PROJECT" ? " · 专项" : " · 本月项目"}</p>
           </div>
-          <button aria-label="关闭项目详情" className="icon-button" data-drawer-initial-focus onClick={onClose} type="button">×</button>
+          <button aria-label="关闭项目详情" className="icon-button" data-drawer-initial-focus onClick={closeDrawer} type="button">×</button>
         </header>
 
         <div className="monthly-drawer-body">
           <section aria-label="项目执行摘要" className="monthly-drawer-metrics">
-            <DrawerMetric label="计划金额" value={item.item_origin === "MANUAL" ? "—" : formatMoney(item.planned_amount, item.currency)} />
+            <DrawerMetric label="计划金额" value={item.item_origin === "MANUAL" || (item.item_origin === "SPECIAL_PROJECT" && isActualOnly(item)) ? "—" : formatMoney(item.planned_amount, item.currency)} />
             <DrawerMetric label="实际净额" value={formatMoney(item.actual_amount, item.currency)} />
             <DrawerMetric label="偏差" value={formatMoney(item.variance_amount, item.currency)} />
             <DrawerMetric label="完成率" value={formatPercent(item.completion_rate_percent)} />
@@ -132,8 +141,9 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
 
           <div className="monthly-drawer-context">
             <span>{item.actual_entry_count} 条实际记录</span>
-            <span>{isTemporaryItem(item) ? "临时类目" : isActualOnly(item) ? "计划外预算类目" : "预算类目"}</span>
+            <span>{item.item_origin === "SPECIAL_PROJECT" ? isActualOnly(item) ? "专项计划外实际" : "专项月度预算" : isTemporaryItem(item) ? "临时类目" : isActualOnly(item) ? "计划外预算类目" : "预算类目"}</span>
             {item.scheduled_date && <span>计划支付 {item.scheduled_date}</span>}
+            {item.source_special_project_id && <Link className="text-button" to={`/specials?id=${encodeURIComponent(item.source_special_project_id)}`}>查看专项</Link>}
           </div>
 
           <section className="monthly-drawer-section">
@@ -184,12 +194,13 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
       onClose={closeDeleteDialog}
       footer={<>
         <button className="button button-quiet" disabled={deleteMutation.isPending} onClick={closeDeleteDialog} type="button">取消</button>
-        <button className="button button-danger" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(entryPendingDeletion.id)} type="button">
+        <button className="button button-danger" disabled={deleteMutation.isPending} onClick={confirmDeleteEntry} type="button">
           {deleteMutation.isPending ? "删除中…" : "确认删除"}
         </button>
       </>}
     >
       <p>删除后无法在应用内撤销，但不会影响该类目的其他实际条目。</p>
+      {entryPendingDeletion.origin === "AUTOMATIC" && <p>这是自动入账记录；删除后本次记录不会在再次检查或重启时重新生成。</p>}
       <dl className="delete-entry-summary">
         <div><dt>日期</dt><dd>{entryPendingDeletion.occurred_on}</dd></div>
         <div><dt>类型</dt><dd>{entryPendingDeletion.effect === "INCREASE" ? (item.flow_type === "EXPENSE" ? "支出" : "收入") : (item.flow_type === "EXPENSE" ? "退款" : "冲减")}</dd></div>
@@ -233,7 +244,9 @@ function ActualEntryList({ item, entries, pending, error, onEdit, onDelete }: {
       <div><time dateTime={entry.occurred_on}>{entry.occurred_on}</time><strong>{formatMoney(`${entry.effect === "INCREASE" ? "+" : "-"}${entry.source_amount}`, entry.source_currency)}</strong></div>
       {entry.source_currency !== item.currency && <small className="monthly-entry-conversion">折合 {formatMoney(entry.amount, item.currency)} · 1 {entry.source_currency} = {entry.exchange_rate} {item.currency} · {entry.exchange_rate_source === "ECB_REFERENCE" ? "欧洲央行每日参考汇率" : "备用手动汇率"} · {entry.exchange_rate_observed_on}</small>}
       <p>{entry.note ?? (entry.origin === "MIGRATED_AGGREGATE" ? "旧版实际总额迁移" : "无备注")}</p>
-      {entry.origin === "USER" && <div><button className="text-button" onClick={() => onEdit(entry)} type="button">编辑</button><button className="text-button danger-text" onClick={() => onDelete(entry)} type="button">删除</button></div>}
+      {entry.origin === "AUTOMATIC" && <span className="automatic-entry-badge">自动入账</span>}
+      {entry.detail_group && <small className="special-entry-group">分组：{entry.detail_group}</small>}
+      {(entry.origin === "USER" || entry.origin === "AUTOMATIC") && <div><button className="text-button" onClick={() => onEdit(entry)} type="button">编辑</button><button className="text-button danger-text" onClick={() => onDelete(entry)} type="button">删除</button></div>}
     </article>
   ))}</div>;
 }

@@ -1,8 +1,6 @@
 use std::cmp::Ordering;
 
-use pfcm_domain::{
-    Category, FlowType, MonthlyItem, MonthlyItemOrigin, MonthlyItemSource, SignedAmount, YearMonth,
-};
+use pfcm_domain::{Category, FlowType, MonthlyItem, MonthlyItemSource, SignedAmount, YearMonth};
 use rust_decimal::{Decimal, RoundingStrategy};
 
 use super::dto::{
@@ -133,7 +131,8 @@ pub fn build_month_analytics(
                 FlowType::Income => actual_income,
                 FlowType::Expense => actual_expense,
             };
-            let variance = (item.item_origin() != MonthlyItemOrigin::Manual)
+            let variance = item
+                .has_plan_baseline()
                 .then(|| actual.map(|actual| actual - planned))
                 .flatten();
             ProjectBreakdownDto {
