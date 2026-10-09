@@ -27,6 +27,7 @@ import {
   SoftwareUpdateProvider,
   SoftwareUpdateRestartDialog,
 } from "./features/software-updates/SoftwareUpdateProvider";
+import { AutomaticEntryProvider } from "./features/automatic/AutomaticEntryProvider";
 
 const DashboardPage = lazy(() =>
   import("./features/dashboard/DashboardPage").then((module) => ({ default: module.DashboardPage })),
@@ -43,10 +44,14 @@ const MonthlyPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("./features/settings/SettingsPage").then((module) => ({ default: module.SettingsPage })),
 );
+const SpecialsPage = lazy(() =>
+  import("./features/specials/SpecialsPage").then((module) => ({ default: module.SpecialsPage })),
+);
 
 const navigation = [
   { to: "/dashboard", label: "总览", icon: "dashboard" },
   { to: "/monthly", label: "月度执行", icon: "calendar" },
+  { to: "/specials", label: "专项", icon: "specials" },
   { to: "/history", label: "历史报表", icon: "history" },
   { to: "/goals", label: "配置预算", icon: "target" },
   { to: "/settings", label: "设置", icon: "settings" },
@@ -132,20 +137,23 @@ function AppBootstrap() {
     <>
       <StartupReferenceRateRefresh settings={settingsQuery.data} />
       <SoftwareUpdateProvider>
-        <Routes>
-          <Route element={<AppLayout currentMonth={startupQuery.data.current_month} settings={settingsQuery.data} />}>
-            <Route index element={<Navigate replace to="/dashboard" />} />
-            <Route path="dashboard" element={<DashboardPage />} />
-            <Route path="monthly" element={<MonthlyPage />} />
-            <Route path="history" element={<HistoryPage />} />
-            <Route path="history/:month" element={<HistoryPage />} />
-            <Route path="goals" element={<GoalsPage />} />
-            <Route path="plans" element={<Navigate replace to="/goals" />} />
-            <Route path="analysis" element={<Navigate replace to={`/history/${startupQuery.data.current_month}`} />} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate replace to="/dashboard" />} />
-          </Route>
-        </Routes>
+        <AutomaticEntryProvider>
+          <Routes>
+            <Route element={<AppLayout currentMonth={startupQuery.data.current_month} settings={settingsQuery.data} />}>
+              <Route index element={<Navigate replace to="/dashboard" />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="monthly" element={<MonthlyPage />} />
+              <Route path="specials" element={<SpecialsPage />} />
+              <Route path="history" element={<HistoryPage />} />
+              <Route path="history/:month" element={<HistoryPage />} />
+              <Route path="goals" element={<GoalsPage />} />
+              <Route path="plans" element={<Navigate replace to="/goals" />} />
+              <Route path="analysis" element={<Navigate replace to={`/history/${startupQuery.data.current_month}`} />} />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate replace to="/dashboard" />} />
+            </Route>
+          </Routes>
+        </AutomaticEntryProvider>
       </SoftwareUpdateProvider>
     </>
   );
@@ -300,6 +308,7 @@ function NavigationIcon({ name }: { name: (typeof navigation)[number]["icon"] })
   const paths = {
     dashboard: "M4 4h6v6H4zm10 0h6v6h-6zM4 14h6v6H4zm10 0h6v6h-6z",
     calendar: "M5 3v3m14-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z",
+    specials: "M3 7h7l2 2h9v11H3V7Zm0 0V4h7l2 3m1 6h5m-5 4h5",
     history: "M4 12a8 8 0 1 0 2.34-5.66L4 8m0-5v5h5m3-1v5l3 2",
     target: "M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5m-5-1 9-8m0 0v5m0-5h-5",
     settings: "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7.4-3.5a7.6 7.6 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L15 3.5h-4l-.4 2.6a8 8 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.5a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.4 2.6h4l.4-2.6a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5a7.6 7.6 0 0 0 .1-1Z",

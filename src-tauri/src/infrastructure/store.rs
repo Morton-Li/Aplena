@@ -24,7 +24,6 @@ impl Store {
         Self { pool }
     }
 
-    #[cfg(test)]
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -242,6 +241,14 @@ impl Store {
     }
 
     pub async fn get_plan_item(&self, id: Uuid) -> Result<StoredPlanItem, StoreError> {
+        let mut connection = self.acquire().await?;
+        Self::get_plan_item_on(&mut connection, id).await
+    }
+
+    pub(crate) async fn get_plan_item_on(
+        connection: &mut SqliteConnection,
+        id: Uuid,
+    ) -> Result<StoredPlanItem, StoreError> {
         let row = sqlx::query(
             "SELECT id, name, category, planned_amount_scaled, currency_code, period_months, \
                     recognition_mode, start_date, end_date, note, created_at, updated_at, \
@@ -250,7 +257,7 @@ impl Store {
              FROM plan_items WHERE id = ?",
         )
         .bind(id.to_string())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?
         .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
         plan_item_from_row(&row)
@@ -335,7 +342,7 @@ impl Store {
     ) -> Result<Vec<StoredMonthlyItem>, StoreError> {
         let next_month = month.next_month()?;
         let rows = sqlx::query(
-            "SELECT m.id, m.source_plan_item_id, m.month, m.snapshot_name, m.category, m.flow_type, \
+            "SELECT m.id, m.source_plan_item_id, m.source_special_project_id, m.source_special_allocation_id, m.month, m.snapshot_name, m.category, m.flow_type, \
                     m.recognition_mode, m.item_source, m.item_origin, m.scheduled_date, m.planned_amount_scaled, \
                     CASE WHEN COUNT(e.id) > 0 \
                       THEN SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END) \
@@ -429,6 +436,16 @@ impl Store {
         // The in-memory test store deliberately has a single connection. Release
         // it before the follow-up aggregate read so this method cannot deadlock
         // while waiting for another lease from the same pool.
+        if let Some(project_id) = monthly_item.source_special_project_id() {
+            return Self::get_monthly_item_by_special_month_on(
+                &mut connection,
+                project_id,
+                monthly_item.month(),
+                monthly_item.category(),
+            )
+            .await?
+            .ok_or(StoreError::Database(sqlx::Error::RowNotFound));
+        }
         drop(connection);
         match monthly_item.source_plan_item_id() {
             Some(source_plan_item_id) => self
@@ -440,8 +457,16 @@ impl Store {
     }
 
     pub async fn get_monthly_item(&self, id: Uuid) -> Result<StoredMonthlyItem, StoreError> {
+        let mut connection = self.acquire().await?;
+        Self::get_monthly_item_on(&mut connection, id).await
+    }
+
+    pub(crate) async fn get_monthly_item_on(
+        connection: &mut SqliteConnection,
+        id: Uuid,
+    ) -> Result<StoredMonthlyItem, StoreError> {
         let row = sqlx::query(
-            "SELECT m.id, m.source_plan_item_id, m.month, m.snapshot_name, m.category, m.flow_type, \
+            "SELECT m.id, m.source_plan_item_id, m.source_special_project_id, m.source_special_allocation_id, m.month, m.snapshot_name, m.category, m.flow_type, \
                     m.recognition_mode, m.item_source, m.item_origin, m.scheduled_date, m.planned_amount_scaled, \
                     CASE WHEN COUNT(e.id) > 0 \
                       THEN SUM(CASE e.effect WHEN 'INCREASE' THEN e.amount_scaled ELSE -e.amount_scaled END) \
@@ -452,7 +477,7 @@ impl Store {
              WHERE m.id = ? GROUP BY m.id",
         )
         .bind(id.to_string())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?
         .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
         monthly_item_from_row(&row)
@@ -463,18 +488,55 @@ impl Store {
         source_plan_item_id: Uuid,
         month: YearMonth,
     ) -> Result<Option<StoredMonthlyItem>, StoreError> {
+        let mut connection = self.acquire().await?;
+        Self::get_monthly_item_by_source_month_on(&mut connection, source_plan_item_id, month).await
+    }
+
+    pub(crate) async fn get_monthly_item_by_source_month_on(
+        connection: &mut SqliteConnection,
+        source_plan_item_id: Uuid,
+        month: YearMonth,
+    ) -> Result<Option<StoredMonthlyItem>, StoreError> {
         let id: Option<String> = sqlx::query_scalar(
             "SELECT id FROM monthly_items WHERE source_plan_item_id = ? AND month = ?",
         )
         .bind(source_plan_item_id.to_string())
         .bind(month.database_anchor())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?;
         match id {
-            Some(id) => self
-                .get_monthly_item(Uuid::parse_str(&id).map_err(|_| StoreError::InvalidUuid)?)
-                .await
-                .map(Some),
+            Some(id) => Self::get_monthly_item_on(
+                connection,
+                Uuid::parse_str(&id).map_err(|_| StoreError::InvalidUuid)?,
+            )
+            .await
+            .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn get_monthly_item_by_special_month_on(
+        connection: &mut SqliteConnection,
+        project_id: Uuid,
+        month: YearMonth,
+        category: Category,
+    ) -> Result<Option<StoredMonthlyItem>, StoreError> {
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM monthly_items \
+             WHERE source_special_project_id = ? AND month = ? AND category = ?",
+        )
+        .bind(project_id.to_string())
+        .bind(month.database_anchor())
+        .bind(category.code())
+        .fetch_optional(&mut *connection)
+        .await?;
+        match id {
+            Some(id) => Self::get_monthly_item_on(
+                connection,
+                Uuid::parse_str(&id).map_err(|_| StoreError::InvalidUuid)?,
+            )
+            .await
+            .map(Some),
             None => Ok(None),
         }
     }
@@ -486,7 +548,7 @@ impl Store {
         let rows = sqlx::query(
             "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, \
                     e.source_amount_scaled, e.source_currency_code, e.exchange_rate_scaled, \
-                    e.exchange_rate_source, e.exchange_rate_observed_on, e.origin, e.note, \
+                    e.exchange_rate_source, e.exchange_rate_observed_on, e.origin, e.note, e.detail_group, \
                     e.created_at, e.updated_at, m.month, s.base_currency_code \
              FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id \
              JOIN settings s ON s.id = 1 \
@@ -504,11 +566,22 @@ impl Store {
         exchange_snapshot: &ActualEntryExchangeSnapshot,
         timestamp: &str,
     ) -> Result<StoredActualEntry, StoreError> {
+        let mut connection = self.acquire().await?;
+        Self::insert_actual_entry_on(&mut connection, entry, exchange_snapshot, timestamp).await?;
+        Self::get_actual_entry_on(&mut connection, entry.id()).await
+    }
+
+    pub(crate) async fn insert_actual_entry_on(
+        connection: &mut SqliteConnection,
+        entry: &ActualEntry,
+        exchange_snapshot: &ActualEntryExchangeSnapshot,
+        timestamp: &str,
+    ) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO actual_entries (id, monthly_item_id, occurred_on, effect, amount_scaled, \
                     source_amount_scaled, source_currency_code, exchange_rate_scaled, \
-                    exchange_rate_source, exchange_rate_observed_on, origin, note, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    exchange_rate_source, exchange_rate_observed_on, origin, note, detail_group, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(entry.id().to_string())
         .bind(entry.monthly_item_id().to_string())
@@ -522,11 +595,12 @@ impl Store {
         .bind(exchange_snapshot.observed_on.to_string())
         .bind(entry.origin().code())
         .bind(entry.note())
+        .bind(entry.detail_group())
         .bind(timestamp)
         .bind(timestamp)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
-        self.get_actual_entry(entry.id()).await
+        Ok(())
     }
 
     pub async fn update_actual_entry(
@@ -538,8 +612,8 @@ impl Store {
         let result = sqlx::query(
             "UPDATE actual_entries SET occurred_on = ?, effect = ?, amount_scaled = ?, \
                     source_amount_scaled = ?, source_currency_code = ?, exchange_rate_scaled = ?, \
-                    exchange_rate_source = ?, exchange_rate_observed_on = ?, note = ?, updated_at = ? \
-             WHERE id = ? AND origin = 'USER'",
+                    exchange_rate_source = ?, exchange_rate_observed_on = ?, note = ?, detail_group = ?, updated_at = ? \
+             WHERE id = ? AND origin IN ('USER', 'AUTOMATIC')",
         )
         .bind(entry.occurred_on().to_string())
         .bind(entry.effect().code())
@@ -550,6 +624,7 @@ impl Store {
         .bind(&exchange_snapshot.source)
         .bind(exchange_snapshot.observed_on.to_string())
         .bind(entry.note())
+        .bind(entry.detail_group())
         .bind(timestamp)
         .bind(entry.id().to_string())
         .execute(&self.pool)
@@ -559,24 +634,45 @@ impl Store {
     }
 
     pub async fn delete_actual_entry(&self, id: Uuid) -> Result<(), StoreError> {
-        let result = sqlx::query("DELETE FROM actual_entries WHERE id = ? AND origin = 'USER'")
-            .bind(id.to_string())
-            .execute(&self.pool)
-            .await?;
-        require_changed(result.rows_affected())
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE automatic_occurrences SET state = 'DELETED', actual_entry_id = NULL, \
+                    error_code = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+             WHERE actual_entry_id = ?",
+        )
+        .bind(id.to_string())
+        .execute(&mut *transaction)
+        .await?;
+        let result = sqlx::query(
+            "DELETE FROM actual_entries WHERE id = ? AND origin IN ('USER', 'AUTOMATIC')",
+        )
+        .bind(id.to_string())
+        .execute(&mut *transaction)
+        .await?;
+        require_changed(result.rows_affected())?;
+        transaction.commit().await?;
+        Ok(())
     }
 
     pub async fn get_actual_entry(&self, id: Uuid) -> Result<StoredActualEntry, StoreError> {
+        let mut connection = self.acquire().await?;
+        Self::get_actual_entry_on(&mut connection, id).await
+    }
+
+    pub(crate) async fn get_actual_entry_on(
+        connection: &mut SqliteConnection,
+        id: Uuid,
+    ) -> Result<StoredActualEntry, StoreError> {
         let row = sqlx::query(
             "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, \
                     e.source_amount_scaled, e.source_currency_code, e.exchange_rate_scaled, \
-                    e.exchange_rate_source, e.exchange_rate_observed_on, e.origin, e.note, \
+                    e.exchange_rate_source, e.exchange_rate_observed_on, e.origin, e.note, e.detail_group, \
                     e.created_at, e.updated_at, m.month, s.base_currency_code \
              FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id \
              JOIN settings s ON s.id = 1 WHERE e.id = ?",
         )
         .bind(id.to_string())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *connection)
         .await?
         .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
         actual_entry_from_row(&row)
@@ -665,20 +761,31 @@ impl Store {
         timestamp: &str,
     ) -> Result<bool, StoreError> {
         let result = sqlx::query(
-            "INSERT INTO monthly_items (id, source_plan_item_id, month, snapshot_name, category, \
+            "INSERT INTO monthly_items (id, source_plan_item_id, source_special_project_id, source_special_allocation_id, month, snapshot_name, category, \
                     flow_type, recognition_mode, item_source, item_origin, scheduled_date, planned_amount_scaled, \
                     currency_code, note, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(source_plan_item_id, month) DO UPDATE SET \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT DO UPDATE SET \
+               source_special_project_id = excluded.source_special_project_id, \
+               source_special_allocation_id = excluded.source_special_allocation_id, \
                snapshot_name = excluded.snapshot_name, category = excluded.category, \
                flow_type = excluded.flow_type, recognition_mode = excluded.recognition_mode, \
                item_source = excluded.item_source, item_origin = excluded.item_origin, scheduled_date = excluded.scheduled_date, \
                planned_amount_scaled = excluded.planned_amount_scaled, \
                currency_code = excluded.currency_code, note = excluded.note, updated_at = excluded.updated_at \
-             WHERE monthly_items.item_source = 'ACTUAL_ONLY' AND excluded.item_source = 'PLANNED'",
+             WHERE monthly_items.item_source = 'ACTUAL_ONLY' AND excluded.item_source = 'PLANNED' \
+               AND monthly_items.item_origin = excluded.item_origin \
+               AND monthly_items.month = excluded.month \
+               AND ((monthly_items.source_plan_item_id IS NOT NULL \
+                 AND monthly_items.source_plan_item_id = excluded.source_plan_item_id) \
+                 OR (monthly_items.source_special_project_id IS NOT NULL \
+                   AND monthly_items.source_special_project_id = excluded.source_special_project_id \
+                   AND monthly_items.category = excluded.category))",
         )
         .bind(monthly_item.id().to_string())
         .bind(monthly_item.source_plan_item_id().map(|id| id.to_string()))
+        .bind(monthly_item.source_special_project_id().map(|id| id.to_string()))
+        .bind(monthly_item.source_special_allocation_id().map(|id| id.to_string()))
         .bind(monthly_item.month().database_anchor())
         .bind(monthly_item.item_name())
         .bind(monthly_item.category().code())
@@ -823,10 +930,25 @@ fn monthly_item_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredMonthlyI
             entry_count,
             CurrencyCode::new(row.try_get::<String, _>("currency_code")?)?,
             row.try_get("note")?,
+        )
+        .with_special_sources(
+            optional_uuid_from_row(row, "source_special_project_id")?,
+            optional_uuid_from_row(row, "source_special_allocation_id")?,
         ),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
+}
+
+fn optional_uuid_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+    column: &str,
+) -> Result<Option<Uuid>, StoreError> {
+    row.try_get::<Option<String>, _>(column)?
+        .as_deref()
+        .map(Uuid::parse_str)
+        .transpose()
+        .map_err(|_| StoreError::InvalidUuid)
 }
 
 fn actual_entry_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredActualEntry, StoreError> {
@@ -847,7 +969,8 @@ fn actual_entry_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredActualEn
             Amount::from_scaled_i64(row.try_get("amount_scaled")?)?,
             ActualEntryOrigin::from_str(row.try_get::<String, _>("origin")?.as_str())?,
             row.try_get("note")?,
-        )?,
+        )?
+        .with_detail_group(row.try_get("detail_group")?),
         exchange_snapshot: ActualEntryExchangeSnapshot {
             source_amount: Amount::from_scaled_i64(row.try_get("source_amount_scaled")?)?,
             source_currency: source_currency.clone(),

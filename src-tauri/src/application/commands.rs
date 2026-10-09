@@ -11,6 +11,10 @@ use uuid::Uuid;
 use tauri::State;
 
 use super::{
+    automatic::{
+        AutomaticCheckDto, AutomaticOccurrenceDto, AutomaticPolicyDto, AutomaticPolicyInputDto,
+        ResolveAutomaticEntryConflictInputDto,
+    },
     dto::{
         ActualEntryDto, ActualEntryInputDto, BudgetProjectionDto, BudgetProjectionRequestDto,
         DeleteManualMonthlyItemInputDto, DeletePlanItemDto, DomainContractDto,
@@ -23,7 +27,105 @@ use super::{
     },
     error::AppError,
     service::FinanceService,
+    specials::{
+        ArchiveSpecialProjectInputDto, SpecialActualEntryInputDto, SpecialAllocationDto,
+        SpecialAllocationInputDto, SpecialProjectDetailDto, SpecialProjectDto,
+        SpecialProjectInputDto,
+    },
 };
+
+#[tauri::command]
+pub async fn list_automatic_entry_policies(
+    service: State<'_, FinanceService>,
+) -> Result<Vec<AutomaticPolicyDto>, AppError> {
+    service.list_automatic_entry_policies().await
+}
+
+#[tauri::command]
+pub async fn save_automatic_entry_policy(
+    service: State<'_, FinanceService>,
+    input: AutomaticPolicyInputDto,
+) -> Result<AutomaticPolicyDto, AppError> {
+    service.save_automatic_entry_policy(input).await
+}
+
+#[tauri::command]
+pub async fn check_automatic_entries(
+    service: State<'_, FinanceService>,
+) -> Result<AutomaticCheckDto, AppError> {
+    service.check_automatic_entries().await
+}
+
+#[tauri::command]
+pub async fn list_automatic_occurrences(
+    service: State<'_, FinanceService>,
+    month: Option<String>,
+) -> Result<Vec<AutomaticOccurrenceDto>, AppError> {
+    service.list_automatic_occurrences(month).await
+}
+
+#[tauri::command]
+pub async fn resolve_automatic_entry_conflict(
+    service: State<'_, FinanceService>,
+    input: ResolveAutomaticEntryConflictInputDto,
+) -> Result<AutomaticOccurrenceDto, AppError> {
+    service.resolve_automatic_entry_conflict(input).await
+}
+
+#[tauri::command]
+pub async fn list_special_projects(
+    service: State<'_, FinanceService>,
+) -> Result<Vec<SpecialProjectDto>, AppError> {
+    service.list_special_projects().await
+}
+
+#[tauri::command]
+pub async fn save_special_project(
+    service: State<'_, FinanceService>,
+    input: SpecialProjectInputDto,
+) -> Result<SpecialProjectDto, AppError> {
+    service.save_special_project(input).await
+}
+
+#[tauri::command]
+pub async fn archive_special_project(
+    service: State<'_, FinanceService>,
+    input: ArchiveSpecialProjectInputDto,
+) -> Result<SpecialProjectDto, AppError> {
+    service.archive_special_project(input).await
+}
+
+#[tauri::command]
+pub async fn get_special_project(
+    service: State<'_, FinanceService>,
+    id: String,
+) -> Result<SpecialProjectDetailDto, AppError> {
+    service.get_special_project(id).await
+}
+
+#[tauri::command]
+pub async fn save_special_allocation(
+    service: State<'_, FinanceService>,
+    input: SpecialAllocationInputDto,
+) -> Result<SpecialAllocationDto, AppError> {
+    service.save_special_allocation(input).await
+}
+
+#[tauri::command]
+pub async fn delete_special_allocation(
+    service: State<'_, FinanceService>,
+    id: String,
+) -> Result<(), AppError> {
+    service.delete_special_allocation(id).await
+}
+
+#[tauri::command]
+pub async fn create_special_actual_entry(
+    service: State<'_, FinanceService>,
+    input: SpecialActualEntryInputDto,
+) -> Result<ActualEntryDto, AppError> {
+    service.create_special_actual_entry(input).await
+}
 
 #[tauri::command]
 pub async fn get_startup_status(
@@ -329,6 +431,8 @@ pub fn calculate_budget_projection(
         discretionary_budget: result.discretionary_budget().decimal_string(),
         projected_income: result.projected_income().decimal_string(),
         projected_expenses: result.projected_expenses().decimal_string(),
+        recurring_expenses: result.projected_expenses().decimal_string(),
+        special_expenses: Amount::zero().decimal_string(),
         projected_savings: result.projected_savings().decimal_string(),
         projected_savings_rate_percent: result
             .projected_savings_rate()

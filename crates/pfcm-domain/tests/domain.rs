@@ -70,6 +70,151 @@ fn year_month_and_calendar_date_are_canonical_and_leap_safe() {
 }
 
 #[test]
+fn special_monthly_sources_distinguish_nominal_allocation_from_actual_only() {
+    let project_id = Uuid::new_v4();
+    let actual_only = MonthlyItem::special_project(
+        Uuid::new_v4(),
+        project_id,
+        None,
+        "搬家",
+        month("2026-06"),
+        Category::EssentialExpense,
+        Amount::zero(),
+        currency("CNY"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(actual_only.source_plan_item_id(), None);
+    assert_eq!(actual_only.source_special_project_id(), Some(project_id));
+    assert_eq!(actual_only.item_source(), MonthlyItemSource::ActualOnly);
+    assert!(!actual_only.has_plan_baseline());
+
+    let allocation_id = Uuid::new_v4();
+    let planned = MonthlyItem::special_project(
+        actual_only.id(),
+        project_id,
+        Some(allocation_id),
+        "搬家",
+        month("2026-06"),
+        Category::EssentialExpense,
+        amount("123.45"),
+        currency("CNY"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(planned.id(), actual_only.id());
+    assert_eq!(planned.source_special_allocation_id(), Some(allocation_id));
+    assert_eq!(planned.planned_amount(), amount("123.45"));
+    assert_eq!(planned.scheduled_date(), None);
+    assert!(planned.has_plan_baseline());
+    assert!(
+        MonthlyItem::special_project(
+            Uuid::new_v4(),
+            project_id,
+            None,
+            "非法",
+            month("2026-06"),
+            Category::FixedIncome,
+            Amount::zero(),
+            currency("CNY"),
+            None,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn automatic_origin_and_detail_groups_preserve_expense_and_refund_signs() {
+    assert_eq!(
+        ActualEntryOrigin::from_str("AUTOMATIC").unwrap(),
+        ActualEntryOrigin::Automatic
+    );
+    let refund = ActualEntry::new(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        month("2026-06"),
+        date("2026-06-03"),
+        ActualEntryEffect::Decrease,
+        amount("25"),
+        ActualEntryOrigin::Automatic,
+        None,
+    )
+    .unwrap()
+    .with_detail_group(Some("  交通  ".to_owned()));
+    assert_eq!(refund.origin().code(), "AUTOMATIC");
+    assert_eq!(refund.detail_group(), Some("交通"));
+    assert_eq!(refund.signed_amount().decimal_string(), "-25.00");
+}
+
+#[test]
+fn special_allocations_add_once_to_expense_categories_and_all_projection_ratios() {
+    let income = plan(
+        "收入",
+        Category::FixedIncome,
+        "1000",
+        "CNY",
+        1,
+        "2026-01-01",
+        None,
+        RecognitionMode::Amortized,
+    );
+    let ordinary = plan(
+        "常规",
+        Category::EssentialExpense,
+        "100",
+        "CNY",
+        1,
+        "2026-01-01",
+        None,
+        RecognitionMode::Amortized,
+    );
+    let one = rate("CNY", "CNY", "1");
+    let projection = calculate_budget_projection(
+        month("2026-06"),
+        currency("CNY"),
+        &[
+            ProjectionInput {
+                plan_item: &income,
+                exchange_rate: &one,
+            },
+            ProjectionInput {
+                plan_item: &ordinary,
+                exchange_rate: &one,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(projection.projected_expenses(), amount("100"));
+    let combined = projection
+        .with_expense_allocations(&[
+            (Category::EssentialExpense, amount("80")),
+            (Category::FixedCommitmentExpense, amount("20")),
+            (Category::DiscretionaryBudget, amount("300")),
+        ])
+        .unwrap();
+    assert_eq!(combined.essential_expenses(), amount("180"));
+    assert_eq!(combined.fixed_commitments(), amount("20"));
+    assert_eq!(combined.discretionary_budget(), amount("300"));
+    assert_eq!(combined.projected_expenses(), amount("500"));
+    assert_eq!(combined.projected_savings().decimal_string(), "500.00");
+    assert_eq!(
+        combined.projected_savings_rate().unwrap().decimal_string(),
+        "0.50000000"
+    );
+    assert_eq!(
+        combined.fixed_commitment_ratio().unwrap().decimal_string(),
+        "0.02000000"
+    );
+    assert_eq!(
+        combined
+            .stable_income_coverage_ratio()
+            .unwrap()
+            .decimal_string(),
+        "5.00000000"
+    );
+}
+
+#[test]
 fn authoritative_amounts_are_cents_and_calculations_round_half_up_once() {
     assert_eq!(amount("1.23").scaled_i64(), 123);
     assert_eq!(amount("0").decimal_string(), "0.00");

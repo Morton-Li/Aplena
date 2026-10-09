@@ -555,7 +555,7 @@ a:focus-visible {
   }
 
   .navigation {
-    grid-template-columns: repeat(5, minmax(max-content, 1fr));
+    grid-template-columns: repeat(6, minmax(max-content, 1fr));
     gap: 4px;
     overflow-x: auto;
   }
@@ -589,7 +589,7 @@ a:focus-visible {
   }
 
   .navigation {
-    grid-template-columns: repeat(5, max-content);
+    grid-template-columns: repeat(6, max-content);
   }
 
   .topbar {
@@ -5292,7 +5292,7 @@ textarea:focus,
 
   .navigation {
     display: grid;
-    grid-template-columns: repeat(5, max-content);
+    grid-template-columns: repeat(6, max-content);
     gap: 3px;
     width: 100%;
     overflow-x: auto;
@@ -5355,7 +5355,7 @@ textarea:focus,
   }
 
   .navigation {
-    grid-template-columns: repeat(5, max-content);
+    grid-template-columns: repeat(6, max-content);
   }
 
   .main-content {
@@ -5548,6 +5548,385 @@ textarea:focus,
     border-top: 1px solid #cbd5e1;
     border-left: 0;
     border-radius: 12px 12px 0 0;
+  }
+}
+
+.automatic-entry-notices {
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.automatic-entry-summary,
+.automatic-entry-occurrence,
+.special-detail-header,
+.special-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.automatic-entry-summary > div,
+.special-detail-header > div {
+  min-width: 0;
+}
+
+.automatic-entry-summary p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.automatic-entry-summary > button {
+  flex-shrink: 0;
+}
+
+.automatic-entry-conflicts {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.automatic-entry-occurrence + .automatic-entry-occurrence {
+  margin-top: 8px;
+}
+
+.automatic-rule-setting {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+
+.automatic-policy-state,
+.special-entry-group {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.automatic-rule-setting .settings-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.automatic-rule-setting .settings-switch-copy strong,
+.automatic-rule-setting .settings-switch-copy small {
+  text-align: left;
+}
+
+.automatic-rule-setting .settings-switch-track {
+  flex-shrink: 0;
+}
+
+.automatic-entry-badge {
+  display: inline-flex;
+  padding: 2px 7px;
+  border-radius: 4px;
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.specials-workspace {
+  display: grid;
+  grid-template-columns: minmax(200px, 250px) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+}
+
+.special-project-list,
+.special-detail-content,
+.special-project-detail,
+.special-list-controls {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.special-project-list {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.special-list-controls .search-field,
+.special-list-controls input {
+  min-width: 0;
+  width: 100%;
+}
+
+.special-project-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 8px;
+  width: 100%;
+  padding: 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--ink-soft);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.special-project-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
+}
+
+.special-project-card-selected {
+  border-color: #93b4f7;
+  background: var(--accent-soft);
+}
+
+.special-list-project-name {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.special-list-project-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.special-project-card small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.special-detail-header {
+  align-items: flex-start;
+}
+
+.special-detail-header h2 {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 24px;
+}
+
+.special-project-note,
+.special-entry-note {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.special-project-note,
+.special-empty-copy {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.special-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.special-archive-notice,
+.special-freeze-notice {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #ead3a7;
+  border-radius: var(--radius-control);
+  color: #865516;
+  background: #fff8eb;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.special-budget-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.special-budget-metric {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.special-budget-metric > span,
+.special-budget-metric > small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.special-budget-metric strong {
+  overflow-wrap: anywhere;
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.special-budget-negative strong {
+  color: var(--danger);
+}
+
+.special-section {
+  min-width: 0;
+}
+
+.special-section-heading h3 {
+  margin: 5px 0 0;
+  font-size: 17px;
+}
+
+.special-table-scroll {
+  max-height: 440px;
+  margin-top: 12px;
+}
+
+.special-table-scroll table {
+  min-width: 470px;
+}
+
+.special-table-scroll .special-entries-table {
+  min-width: 810px;
+}
+
+.special-table-scroll th,
+.special-table-scroll td {
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+
+.special-table-scroll small {
+  display: block;
+  max-width: 260px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.special-entry-filters {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.special-analysis-grid,
+.goal-budget-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.goal-budget-source-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.goal-budget-source-grid > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.goal-budget-source-grid strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.goal-budget-source-grid span,
+.goal-budget-source-grid small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.special-project-dialog form,
+.special-allocation-dialog form,
+.special-entry-dialog form {
+  display: grid;
+  gap: 16px;
+}
+
+.special-project-dialog label,
+.special-allocation-dialog label,
+.special-entry-dialog label,
+.automatic-conflict-dialog label {
+  display: grid;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.monthly-special-link {
+  display: inline-flex;
+  margin-top: 6px;
+  color: var(--accent-hover);
+  font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .specials-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .special-project-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .special-list-controls,
+  .special-project-list > .special-empty-copy {
+    grid-column: 1 / -1;
+  }
+
+  .special-list-controls {
+    grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto;
+    align-items: center;
+  }
+}
+
+@media (max-width: 760px) {
+  .automatic-entry-summary,
+  .automatic-entry-occurrence,
+  .special-detail-header,
+  .special-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .special-budget-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .special-analysis-grid,
+  .goal-budget-source-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .special-budget-grid,
+  .special-project-list,
+  .special-list-controls,
+  .special-entry-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .special-budget-metric {
+    padding: 14px;
   }
 }
 

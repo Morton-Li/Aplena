@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import {
@@ -31,6 +31,7 @@ import { currencyName, formatExchangeRate, formatMoney, monthLabel } from "../..
 import { Dialog } from "../../shared/components/Dialog";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { Select } from "../../shared/components/Select";
+import { AutomaticEntryNotices } from "../automatic/AutomaticEntryNotices";
 import { MonthlyDetailDrawer } from "./MonthlyDetailDrawer";
 import { MonthlyWorkspace } from "./MonthlyWorkspaceView";
 import {
@@ -75,11 +76,15 @@ export function MonthlyPage() {
 
   const invalidateMonth = async () => {
     await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.startup }),
       queryClient.invalidateQueries({ queryKey: queryKeys.monthly(month) }),
       queryClient.invalidateQueries({ queryKey: ["month-preview", month] }),
       queryClient.invalidateQueries({ queryKey: queryKeys.existingMonths }),
       queryClient.invalidateQueries({ queryKey: queryKeys.monthAnalytics(month) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
+      queryClient.invalidateQueries({ queryKey: ["automatic-occurrences"] }),
+      queryClient.invalidateQueries({ queryKey: ["special-projects"] }),
+      queryClient.invalidateQueries({ queryKey: ["special-project"] }),
     ]);
   };
   const items = useMemo(() => itemsQuery.data ?? [], [itemsQuery.data]);
@@ -110,6 +115,8 @@ export function MonthlyPage() {
           当前月已自动检查：新增 {startupQuery.data.initialization.created_count} 项，保留 {startupQuery.data.initialization.skipped_existing_count} 项。
         </div>
       )}
+
+      <AutomaticEntryNotices month={month} currentMonth={currentMonth} />
 
       {previewQuery.data && (previewQuery.data.candidate_count > 0 || previewQuery.data.missing_currencies.length > 0) && (
         <MonthContext
@@ -279,6 +286,8 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
   const [amount, setAmount] = useState(existing?.source_amount ?? "");
   const [saveAttempted, setSaveAttempted] = useState(false);
   const [note, setNote] = useState(existing?.note ?? "");
+  const [detailGroup, setDetailGroup] = useState(existing?.detail_group ?? "");
+  const savingEntry = useRef(false);
   const cachedRate = rates.find((rate) => rate.currency === currency);
   const officialRate = useMemo(
     () => deriveReferenceRate(referenceQuery.data ?? [], currency, baseCurrency),
@@ -331,24 +340,30 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
         exchangeRateSource: source as "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL",
         exchangeRateObservedOn: exchangeRate.observedOn,
         note: note.trim() || undefined,
+        detailGroup: detailGroup.trim() || undefined,
       };
       return existing ? updateActualEntry({ ...input, id: existing.id }) : createActualEntry(input);
     },
     onSuccess: onSaved,
+    onSettled: () => { savingEntry.current = false; },
   });
   const increaseLabel = flow === "EXPENSE" ? "支出" : "收入";
   const decreaseLabel = flow === "EXPENSE" ? "退款" : "冲减";
   const entryLabel = flow === "EXPENSE" ? "支出或退款" : "收入或冲减";
   const saveEntry = () => {
+    if (savingEntry.current) return;
     setSaveAttempted(true);
-    if (amountEvaluation.ok) mutation.mutate(amountEvaluation.amount);
+    if (amountEvaluation.ok) {
+      savingEntry.current = true;
+      mutation.mutate(amountEvaluation.amount);
+    }
   };
   return <Dialog
     className="entry-dialog"
     eyebrow={item.item_name}
     title={existing ? `编辑${entryLabel}` : `添加${entryLabel}`}
-    onClose={onClose}
-    footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={mutation.isPending} type="button" onClick={saveEntry}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
+    onClose={() => { if (!savingEntry.current) onClose(); }}
+    footer={<><button className="button button-quiet" disabled={mutation.isPending} type="button" onClick={() => { if (!savingEntry.current) onClose(); }}>取消</button><button className="button button-primary" disabled={mutation.isPending} type="button" onClick={saveEntry}>{mutation.isPending ? "保存中…" : "保存条目"}</button></>}
   >
     <div className="entry-detail-grid">
       <label>日期<input type="date" min={`${month}-01`} max={`${month}-${new Date(Number(month.slice(0,4)), Number(month.slice(5,7)), 0).getDate()}`} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
@@ -372,6 +387,7 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
       </div>
     )}
     <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
+    {(item.item_origin === "SPECIAL_PROJECT" || existing?.detail_group) && <label>明细分组（可选）<input value={detailGroup} onChange={(event) => setDetailGroup(event.target.value)} placeholder="例如：交通、住宿、材料" /></label>}
     {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
   </Dialog>;
 }

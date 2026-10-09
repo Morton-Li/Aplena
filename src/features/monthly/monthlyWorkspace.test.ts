@@ -5,7 +5,9 @@ import {
   defaultMonthlyWorkspaceFilters,
   filterAndSortMonthlyItems,
   hasActiveMonthlyFilters,
+  hasMonthlyBudgetBaseline,
   monthlyItemCounts,
+  specialProjectLink,
 } from "./monthlyWorkspace";
 
 function item(overrides: Partial<MonthlyItem>): MonthlyItem {
@@ -64,5 +66,21 @@ describe("monthly workspace filtering and ordering", () => {
     expect(monthlyItemCounts(items)).toEqual({ total: 4, planned: 3, temporary: 1, entries: 4 });
     expect(hasActiveMonthlyFilters(defaultMonthlyWorkspaceFilters)).toBe(false);
     expect(hasActiveMonthlyFilters({ ...defaultMonthlyWorkspaceFilters, category: "ESSENTIAL_EXPENSE" })).toBe(true);
+  });
+
+  it("counts only actual budget baselines, including zero-valued special snapshots", () => {
+    const specialPlanned = item({ id: "special-planned", item_origin: "SPECIAL_PROJECT", source_plan_item_id: null, source_special_project_id: "trip", source_special_allocation_id: "allocation", planned_amount: "0.00" });
+    const specialActualOnly = item({ id: "special-actual", item_origin: "SPECIAL_PROJECT", item_source: "ACTUAL_ONLY", source_plan_item_id: null, source_special_project_id: "trip", source_special_allocation_id: null, planned_amount: "0.00", actual_entry_count: 2 });
+    const planActualOnly = item({ id: "plan-actual", item_source: "ACTUAL_ONLY", actual_entry_count: 1 });
+    expect(monthlyItemCounts([specialPlanned, specialActualOnly, planActualOnly])).toEqual({ total: 3, planned: 1, temporary: 0, entries: 3 });
+    expect(hasMonthlyBudgetBaseline(specialPlanned)).toBe(true);
+    expect(hasMonthlyBudgetBaseline(specialActualOnly)).toBe(false);
+    expect(hasMonthlyBudgetBaseline(planActualOnly)).toBe(false);
+  });
+
+  it("links special containers to their single owning project", () => {
+    expect(specialProjectLink(item({ item_origin: "SPECIAL_PROJECT", source_special_project_id: "trip /1" }))).toBe("/specials?id=trip%20%2F1");
+    expect(specialProjectLink(item({ item_origin: "SPECIAL_PROJECT", source_special_project_id: null }))).toBeNull();
+    expect(specialProjectLink(item({ item_origin: "PLAN_LINKED", source_special_project_id: "trip" }))).toBeNull();
   });
 });

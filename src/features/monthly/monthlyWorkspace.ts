@@ -45,10 +45,24 @@ export function isTemporaryItem(item: MonthlyItem) {
   return item.item_origin === "MANUAL";
 }
 
+export function isSpecialProjectItem(item: MonthlyItem) {
+  return item.item_origin === "SPECIAL_PROJECT";
+}
+
+export function hasMonthlyBudgetBaseline(item: MonthlyItem) {
+  return item.item_source === "PLANNED" && !isTemporaryItem(item);
+}
+
+export function specialProjectLink(item: MonthlyItem) {
+  return isSpecialProjectItem(item) && item.source_special_project_id
+    ? `/specials?id=${encodeURIComponent(item.source_special_project_id)}`
+    : null;
+}
+
 export function monthlyItemCounts(items: MonthlyItem[]): MonthlyItemCounts {
   return items.reduce<MonthlyItemCounts>((counts, item) => {
     counts.total += 1;
-    if (item.item_origin === "PLAN_LINKED") counts.planned += 1;
+    if (hasMonthlyBudgetBaseline(item)) counts.planned += 1;
     if (isTemporaryItem(item)) counts.temporary += 1;
     counts.entries += item.actual_entry_count;
     return counts;

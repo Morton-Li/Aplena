@@ -10,6 +10,8 @@ use crate::{
 pub struct MonthlyItem {
     id: Uuid,
     source_plan_item_id: Option<Uuid>,
+    source_special_project_id: Option<Uuid>,
+    source_special_allocation_id: Option<Uuid>,
     item_name: String,
     month: YearMonth,
     category: Category,
@@ -74,6 +76,8 @@ impl MonthlyItem {
         Self {
             id,
             source_plan_item_id: Some(source.id()),
+            source_special_project_id: None,
+            source_special_allocation_id: None,
             item_name: source.name().to_owned(),
             month,
             category: source.category(),
@@ -106,6 +110,8 @@ impl MonthlyItem {
         Ok(Self {
             id,
             source_plan_item_id: None,
+            source_special_project_id: None,
+            source_special_allocation_id: None,
             item_name: name,
             month,
             category,
@@ -122,6 +128,37 @@ impl MonthlyItem {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn special_project(
+        id: Uuid,
+        project_id: Uuid,
+        allocation_id: Option<Uuid>,
+        name: impl AsRef<str>,
+        month: YearMonth,
+        category: Category,
+        planned_amount: Amount,
+        base_currency: CurrencyCode,
+        note: Option<String>,
+    ) -> Result<Self, DomainError> {
+        if category.flow_type() != FlowType::Expense {
+            return Err(DomainError::InvalidCategory);
+        }
+        if allocation_id.is_none() && planned_amount != Amount::zero() {
+            return Err(DomainError::InvalidMonthlyItemSource);
+        }
+        let mut value = Self::manual(id, name, month, category, base_currency, note)?;
+        value.item_origin = MonthlyItemOrigin::SpecialProject;
+        value.source_special_project_id = Some(project_id);
+        value.source_special_allocation_id = allocation_id;
+        value.item_source = if allocation_id.is_some() {
+            MonthlyItemSource::Planned
+        } else {
+            MonthlyItemSource::ActualOnly
+        };
+        value.planned_amount = planned_amount;
+        Ok(value)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -145,6 +182,8 @@ impl MonthlyItem {
         Self {
             id,
             source_plan_item_id,
+            source_special_project_id: None,
+            source_special_allocation_id: None,
             item_name,
             month,
             category,
@@ -166,6 +205,32 @@ impl MonthlyItem {
     }
     pub const fn source_plan_item_id(&self) -> Option<Uuid> {
         self.source_plan_item_id
+    }
+    pub const fn source_special_project_id(&self) -> Option<Uuid> {
+        self.source_special_project_id
+    }
+    pub const fn source_special_allocation_id(&self) -> Option<Uuid> {
+        self.source_special_allocation_id
+    }
+
+    pub fn with_special_sources(
+        mut self,
+        project_id: Option<Uuid>,
+        allocation_id: Option<Uuid>,
+    ) -> Self {
+        self.source_special_project_id = project_id;
+        self.source_special_allocation_id = allocation_id;
+        self
+    }
+
+    pub const fn has_plan_baseline(&self) -> bool {
+        match self.item_origin {
+            MonthlyItemOrigin::PlanLinked => true,
+            MonthlyItemOrigin::Manual => false,
+            MonthlyItemOrigin::SpecialProject => {
+                matches!(self.item_source, MonthlyItemSource::Planned)
+            }
+        }
     }
     pub fn item_name(&self) -> &str {
         &self.item_name
