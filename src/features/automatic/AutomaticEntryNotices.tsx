@@ -27,21 +27,14 @@ export function AutomaticEntryNotices({ month, currentMonth }: { month: string; 
   const occurrences = occurrencesQuery.data ?? [];
   const conflicts = occurrences.filter((entry) => entry.state === "CONFLICT");
   const failures = occurrences.filter((entry) => entry.state === "FAILED");
-  const postedCount = occurrences.filter((entry) => entry.state === "POSTED").length;
   const isCurrent = month === currentMonth;
+  const hasCheckError = isCurrent && automatic.error != null;
 
-  if (!month) return null;
+  if (!month || (!hasCheckError && !occurrencesQuery.isError && conflicts.length === 0 && failures.length === 0)) return null;
   return <>
-    <section aria-label="自动入账" className="automatic-entry-notices">
-      <div className="automatic-entry-summary">
-        <div>
-          <strong>自动入账</strong>
-          <p>{postedCount > 0 ? `本月已完成 ${postedCount} 项自动入账，可在对应类目中查看、编辑或删除实际条目。` : "按已启用规则的收支日记录实际；尚未到期的规则不会提前入账。"}</p>
-        </div>
-        {isCurrent && <button className="button button-secondary" disabled={automatic.checking} onClick={() => void automatic.check()} type="button">{automatic.checking ? "检查中…" : "检查自动入账"}</button>}
-      </div>
-      {isCurrent && automatic.error != null && <p className="inline-error" role="alert">自动入账检查未完成：{describeError(automatic.error)}</p>}
-      {occurrencesQuery.isError && <p className="inline-error" role="alert">自动入账记录读取失败：{describeError(occurrencesQuery.error)}</p>}
+    <section aria-label="自动入账待处理" className="automatic-entry-notices">
+      {hasCheckError && <p className="inline-error" role="alert">自动入账检查未完成：{describeError(automatic.error)} 应用会自动重试。</p>}
+      {occurrencesQuery.isError && <p className="inline-error" role="alert">自动入账记录读取失败：{describeError(occurrencesQuery.error)} <button className="text-button" disabled={occurrencesQuery.isFetching} onClick={() => void occurrencesQuery.refetch()} type="button">{occurrencesQuery.isFetching ? "正在读取…" : "重新读取"}</button></p>}
       {conflicts.length > 0 && <div className="automatic-entry-conflicts">
         <p className="warning-text">{conflicts.length} 项规则已有实际记录，请选择如何处理；系统没有另记重复条目。</p>
         {conflicts.map((occurrence) => <div className="automatic-entry-occurrence" key={occurrence.id}>
@@ -49,7 +42,9 @@ export function AutomaticEntryNotices({ month, currentMonth }: { month: string; 
           <button className="button button-secondary" onClick={() => setResolving(occurrence)} type="button">处理重复记录</button>
         </div>)}
       </div>}
-      {failures.length > 0 && <p className="warning-text">{failures.length} 项自动入账未完成。请补齐可用汇率或处理对应设置后重新检查。</p>}
+      {failures.length > 0 && <p className="warning-text" role="alert">{failures.length} 项自动入账未完成。{isCurrent
+        ? "请补齐可用汇率或处理对应设置，修复后应用会自动重试。"
+        : "历史月份不会自动补记，请在对应类目中手动补录实际。"}</p>}
     </section>
     {resolving && <AutomaticConflictDialog occurrence={resolving} onClose={() => setResolving(null)} />}
   </>;
