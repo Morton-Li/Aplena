@@ -1,6 +1,6 @@
 # Aplena 数据库 Schema
 
-当前正式 schema：6
+当前正式 schema：7
 数据库：SQLite STRICT tables + foreign keys + WAL
 
 ## 1. 存储约定
@@ -216,3 +216,17 @@ END AS derived_actual_amount_scaled
 保存 `id`、`rule_key`、`month`、`state`、`policy_version_id`、`occurred_on`、可空 `actual_entry_id`、可空 `monthly_item_id`、可空 `error_code` 和审计时间。状态限定 `POSTED`、`CONFLICT`、`SKIPPED`、`DELETED`、`FAILED`。`UNIQUE(rule_key, month)` 是普通支付发生槽屏障，`actual_entry_id` 也唯一；发生日与槽月份相同。
 
 实际删除时关联 ID 置空并留下墓碑；策略版本与月度容器引用限制删除。发生槽不使用金额或修改时间作身份，编辑金额、重复点击和重开不能绕过去重。失败允许重试；冲突须由关联、跳过或另建的显式动作解决。
+
+## 15. 借贷（schema 7）
+
+追加 `0007_loans.sql`，保留全部已有月度、实际、专项和自动入账记录。新增七张 STRICT 表：
+
+- `loans`：双向合同、本位币本金、跟踪起点、期初/完整记录模式及归档资料；
+- `loan_schedule_versions`：日/月/季/年、间隔、生成方法、显式每期利率及变更说明；
+- `loan_installments`：版本内期次、到期日、本金/利息/费用和被替代标记；
+- `loan_payments`：稳定请求 UUID、实际日期、三项组成金额与编辑时间戳；
+- `loan_payment_allocations`：一次收付到各期次的金额分配；
+- `loan_monthly_items`：每笔借贷、月份唯一的利息费用容器；
+- `loan_actual_links`：收付与正式实际条目的一对一关联。
+
+余额、逾期与结清状态从实际和有效计划派生。事务校验分配合计及期次上限；数据库触发器保护本金上限、版本/分配合同归属、关联实际及本位币锁定。还款预览通过回滚事务读取编辑后的结果，不删除已存事实。完整行为见 [ADR-0014](adr/0014-loans-and-principal-cash-flow.md)。

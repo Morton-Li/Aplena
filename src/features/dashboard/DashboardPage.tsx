@@ -26,6 +26,7 @@ import {
   monthLabel,
 } from "../../shared/formatting/finance";
 import { categoryLabel } from "../../shared/formatting/labels";
+import { LoanMonthCard } from "../loans/LoanMonthCard";
 
 const chartText = { color: "#64748b", fontSize: 11 };
 const axisLine = { lineStyle: { color: "#d8dee8" } };
@@ -78,6 +79,7 @@ export function DashboardPage() {
   return (
     <div className="dashboard-page">
       <DashboardHeader analytics={analytics} hasPlanBaseline={hasPlanBaseline} />
+      <LoanMonthCard month={analytics.month} />
       {analytics.total_item_count === 0 ? (
         <EmptyDashboard month={analytics.month} currency={analytics.currency} />
       ) : (

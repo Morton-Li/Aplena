@@ -433,6 +433,11 @@ pub fn calculate_budget_projection(
         projected_expenses: result.projected_expenses().decimal_string(),
         recurring_expenses: result.projected_expenses().decimal_string(),
         special_expenses: Amount::zero().decimal_string(),
+        loan_interest_expenses: Amount::zero().decimal_string(),
+        loan_interest_income: Amount::zero().decimal_string(),
+        loan_principal_due: Amount::zero().decimal_string(),
+        loan_principal_receivable: Amount::zero().decimal_string(),
+        projected_cash_net: result.projected_savings().decimal_string(),
         projected_savings: result.projected_savings().decimal_string(),
         projected_savings_rate_percent: result
             .projected_savings_rate()

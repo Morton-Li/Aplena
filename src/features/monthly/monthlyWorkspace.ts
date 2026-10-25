@@ -42,7 +42,7 @@ export function isActualOnly(item: MonthlyItem) {
 }
 
 export function isTemporaryItem(item: MonthlyItem) {
-  return item.item_origin === "MANUAL";
+  return item.item_origin === "MANUAL" && !item.source_loan_id;
 }
 
 export function isSpecialProjectItem(item: MonthlyItem) {

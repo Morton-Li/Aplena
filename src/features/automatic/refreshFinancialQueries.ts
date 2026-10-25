@@ -4,6 +4,9 @@ import { queryKeys } from "../../shared/api/finance";
 
 export async function refreshFinancialQueries(queryClient: QueryClient) {
   await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["loan-month"] }),
+    queryClient.invalidateQueries({ queryKey: ["loans"] }),
+    queryClient.invalidateQueries({ queryKey: ["loan"] }),
     queryClient.invalidateQueries({ queryKey: ["monthly-items"] }),
     queryClient.invalidateQueries({ queryKey: ["actual-entries"] }),
     queryClient.invalidateQueries({ queryKey: ["month-analytics"] }),

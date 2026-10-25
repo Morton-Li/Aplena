@@ -191,6 +191,7 @@ function MonthlyTableRow({ item, selected, onSelect }: { item: MonthlyItem; sele
         <span className="monthly-item-name">{item.item_name}</span>
         <small>{categoryLabel(item.category)} · {flowLabel(item.flow_type)}{isSpecialProjectItem(item) ? ` · 专项${isActualOnly(item) ? " · 未分配月预算" : ""}` : isTemporaryItem(item) ? " · 临时类目" : isActualOnly(item) ? " · 计划外预算类目" : ""}</small>
         {specialLink && <Link className="monthly-special-link" onClick={(event) => event.stopPropagation()} to={specialLink}>打开专项</Link>}
+        {item.source_loan_id && <Link className="monthly-special-link" onClick={(event) => event.stopPropagation()} to={`/loans?id=${encodeURIComponent(item.source_loan_id)}`}>打开借贷</Link>}
       </th>
       <td className="numeric-column">{hasBaseline ? formatMoney(item.planned_amount, item.currency) : "—"}</td>
       <td className="numeric-column monthly-actual-value">{formatMoney(item.actual_amount, item.currency)}</td>

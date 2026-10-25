@@ -148,6 +148,15 @@ impl AppError {
                         "name",
                         "error.duplicate_plan_item_name",
                     )
+                } else if message.contains("APLENA_LOAN_MANAGED_ENTRY") {
+                    Self::business("LOAN_MANAGED_ENTRY", "error.loan_managed_entry")
+                } else if message.contains("APLENA_LOAN_PRINCIPAL_OVERPAYMENT") {
+                    Self::business(
+                        "LOAN_PRINCIPAL_OVERPAYMENT",
+                        "error.loan_principal_overpayment",
+                    )
+                } else if message.contains("APLENA_LOAN_ALLOCATION_MISMATCH") {
+                    Self::business("LOAN_ALLOCATION_MISMATCH", "error.loan_allocation_mismatch")
                 } else if message.contains("APLENA_BASE_CURRENCY_LOCKED") {
                     Self::business("BASE_CURRENCY_LOCKED", "error.base_currency_locked")
                 } else if message.contains("APLENA_BASE_RATE_MUST_EQUAL_ONE") {

@@ -144,12 +144,13 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
             <span>{item.item_origin === "SPECIAL_PROJECT" ? isActualOnly(item) ? "专项计划外实际" : "专项月度预算" : isTemporaryItem(item) ? "临时类目" : isActualOnly(item) ? "计划外预算类目" : "预算类目"}</span>
             {item.scheduled_date && <span>计划支付 {item.scheduled_date}</span>}
             {item.source_special_project_id && <Link className="text-button" to={`/specials?id=${encodeURIComponent(item.source_special_project_id)}`}>查看专项</Link>}
+            {item.source_loan_id && <Link className="text-button" to={`/loans?id=${encodeURIComponent(item.source_loan_id)}`}>查看借贷并调整还款</Link>}
           </div>
 
           <section className="monthly-drawer-section">
             <div className="monthly-drawer-section-heading">
               <div><p className="section-label">ACTUAL ENTRIES</p><h3>实际条目</h3></div>
-              <button className="button button-primary" onClick={() => onAddEntry(item)} type="button">添加{item.flow_type === "EXPENSE" ? "支出或退款" : "收入或冲减"}</button>
+              {!item.source_loan_id && <button className="button button-primary" onClick={() => onAddEntry(item)} type="button">添加{item.flow_type === "EXPENSE" ? "支出或退款" : "收入或冲减"}</button>}
             </div>
             <ActualEntryList
               entries={entriesQuery.data ?? []}
@@ -246,7 +247,8 @@ function ActualEntryList({ item, entries, pending, error, onEdit, onDelete }: {
       <p>{entry.note ?? (entry.origin === "MIGRATED_AGGREGATE" ? "旧版实际总额迁移" : "无备注")}</p>
       {entry.origin === "AUTOMATIC" && <span className="automatic-entry-badge">自动入账</span>}
       {entry.detail_group && <small className="special-entry-group">分组：{entry.detail_group}</small>}
-      {(entry.origin === "USER" || entry.origin === "AUTOMATIC") && <div><button className="text-button" onClick={() => onEdit(entry)} type="button">编辑</button><button className="text-button danger-text" onClick={() => onDelete(entry)} type="button">删除</button></div>}
+      {!item.source_loan_id && (entry.origin === "USER" || entry.origin === "AUTOMATIC") && <div><button className="text-button" onClick={() => onEdit(entry)} type="button">编辑</button><button className="text-button danger-text" onClick={() => onDelete(entry)} type="button">删除</button></div>}
+      {item.source_loan_id && <small>借贷关联记录，请从借贷详情调整。</small>}
     </article>
   ))}</div>;
 }

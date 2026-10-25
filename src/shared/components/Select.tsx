@@ -111,7 +111,9 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
     setOpen(false);
     setPosition(null);
     onBlur?.();
-    if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
+    // Restore focus in this interaction; a deferred callback can steal focus
+    // after the user has already moved to the next form field.
+    if (restoreFocus) triggerRef.current?.focus();
   };
 
   const openMenu = (preferredIndex?: number) => {
