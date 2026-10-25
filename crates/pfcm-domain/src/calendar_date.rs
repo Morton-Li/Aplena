@@ -32,6 +32,17 @@ impl CalendarDate {
     pub fn day(self) -> u32 {
         u32::from(self.day)
     }
+
+    pub fn add_days(self, mut days: u32) -> Result<Self, DomainError> {
+        let mut month = self.year_month();
+        let mut day = self.day();
+        while days > month.last_day() - day {
+            days -= month.last_day() - day + 1;
+            month = month.next_month()?;
+            day = 1;
+        }
+        Self::new(month.year(), u32::from(month.month()), day + days)
+    }
 }
 
 impl fmt::Display for CalendarDate {

@@ -486,12 +486,29 @@ impl FinanceService {
     pub async fn list_monthly_items(&self, month: String) -> Result<Vec<MonthlyItemDto>, AppError> {
         let _operation = self.operation_gate.read().await;
         let month = parse_month(&month, "month")?;
-        self.current_store()
+        let mut items: Vec<_> = self
+            .current_store()
             .await
             .list_monthly_items(month)
             .await
-            .map_err(AppError::from)
-            .map(|items| items.into_iter().map(monthly_item_dto).collect())
+            .map_err(AppError::from)?
+            .into_iter()
+            .map(monthly_item_dto)
+            .collect();
+        let store = self.current_store().await;
+        let links: Vec<(String, String)> =
+            sqlx::query_as("SELECT monthly_item_id,loan_id FROM loan_monthly_items WHERE month=?")
+                .bind(month.database_anchor())
+                .fetch_all(store.pool())
+                .await
+                .map_err(|e| AppError::from(crate::infrastructure::StoreError::Database(e)))?;
+        for item in &mut items {
+            item.source_loan_id = links
+                .iter()
+                .find(|(id, _)| id == &item.id)
+                .map(|(_, loan)| loan.clone());
+        }
+        Ok(items)
     }
 
     pub async fn ensure_actual_only(
@@ -555,6 +572,8 @@ impl FinanceService {
         input: DeleteManualMonthlyItemInputDto,
     ) -> Result<(), AppError> {
         let _operation = self.operation_gate.write().await;
+        self.reject_loan_monthly_write(parse_uuid(&input.id, "id")?)
+            .await?;
         self.current_store()
             .await
             .delete_manual_monthly_item(parse_uuid(&input.id, "id")?)
@@ -581,6 +600,7 @@ impl FinanceService {
     ) -> Result<ActualEntryDto, AppError> {
         let _operation = self.operation_gate.write().await;
         let monthly_item_id = parse_uuid(&input.monthly_item_id, "monthlyItemId")?;
+        self.reject_loan_monthly_write(monthly_item_id).await?;
         let monthly = self
             .current_store()
             .await
@@ -635,6 +655,7 @@ impl FinanceService {
                 "error.actual_entry_reparent_forbidden",
             ));
         }
+        self.reject_loan_monthly_write(monthly_item_id).await?;
         let monthly = self
             .current_store()
             .await
@@ -662,6 +683,14 @@ impl FinanceService {
 
     pub async fn delete_actual_entry(&self, id: String) -> Result<(), AppError> {
         let _operation = self.operation_gate.write().await;
+        let existing = self
+            .current_store()
+            .await
+            .get_actual_entry(parse_uuid(&id, "id")?)
+            .await
+            .map_err(AppError::from)?;
+        self.reject_loan_monthly_write(existing.value.monthly_item_id())
+            .await?;
         self.current_store()
             .await
             .delete_actual_entry(parse_uuid(&id, "id")?)
@@ -800,6 +829,29 @@ impl FinanceService {
         let result = result
             .with_expense_allocations(&special_allocations)
             .map_err(|error| AppError::from_domain(error, None))?;
+        let loans = self.loan_month_summary_unlocked(target_month).await?;
+        let loan_expense: Amount = loans
+            .planned_borrow_charges
+            .parse()
+            .map_err(|e| AppError::from_domain(e, None))?;
+        let loan_income: Amount = loans
+            .planned_lent_charges
+            .parse()
+            .map_err(|e| AppError::from_domain(e, None))?;
+        let result = result
+            .with_loan_charges(loan_income, loan_expense)
+            .map_err(|e| AppError::from_domain(e, None))?;
+        let projected_cash_net = pfcm_domain::SignedAmount::from_decimal(
+            result.projected_savings().as_decimal()
+                - Amount::from_str(&loans.planned_borrow_principal)
+                    .map_err(|e| AppError::from_domain(e, None))?
+                    .as_decimal()
+                + Amount::from_str(&loans.planned_lent_principal)
+                    .map_err(|e| AppError::from_domain(e, None))?
+                    .as_decimal(),
+        )
+        .map_err(|e| AppError::from_domain(e, None))?
+        .decimal_string();
         Ok(BudgetProjectionDto {
             target_month: target_month.to_string(),
             base_currency: result.base_currency().to_string(),
@@ -812,6 +864,11 @@ impl FinanceService {
             projected_expenses: result.projected_expenses().decimal_string(),
             recurring_expenses: recurring_expenses.decimal_string(),
             special_expenses: special_expenses.decimal_string(),
+            loan_interest_expenses: loan_expense.decimal_string(),
+            loan_interest_income: loan_income.decimal_string(),
+            loan_principal_due: loans.planned_borrow_principal,
+            loan_principal_receivable: loans.planned_lent_principal,
+            projected_cash_net,
             projected_savings: result.projected_savings().decimal_string(),
             projected_savings_rate_percent: result
                 .projected_savings_rate()
@@ -1432,6 +1489,7 @@ pub(crate) fn monthly_item_dto(stored: StoredMonthlyItem) -> MonthlyItemDto {
     };
     MonthlyItemDto {
         id: value.id().to_string(),
+        source_loan_id: None,
         source_plan_item_id: value.source_plan_item_id().map(|id| id.to_string()),
         source_special_project_id: value.source_special_project_id().map(|id| id.to_string()),
         source_special_allocation_id: value

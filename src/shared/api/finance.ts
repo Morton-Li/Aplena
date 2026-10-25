@@ -56,6 +56,7 @@ export interface PlanItem {
 }
 
 export interface MonthlyItem {
+  source_loan_id?: string | null;
   id: string;
   source_plan_item_id: string | null;
   source_special_project_id?: string | null;
@@ -239,6 +240,11 @@ export interface BudgetProjection {
   projected_expenses: string;
   recurring_expenses?: string;
   special_expenses?: string;
+  loan_interest_expenses?: string;
+  loan_interest_income?: string;
+  loan_principal_due?: string;
+  loan_principal_receivable?: string;
+  projected_cash_net?: string;
   projected_savings: string;
   projected_savings_rate_percent: string | null;
   fixed_commitment_ratio_percent: string | null;

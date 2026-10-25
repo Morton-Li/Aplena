@@ -5,6 +5,7 @@ mod calendar_date;
 mod category;
 mod currency;
 mod error;
+mod loan;
 mod monthly_item;
 mod plan_item;
 mod recognition;
@@ -20,6 +21,7 @@ pub use calendar_date::CalendarDate;
 pub use category::{Category, FlowType, MonthlyItemOrigin, MonthlyItemSource, RecognitionMode};
 pub use currency::CurrencyCode;
 pub use error::DomainError;
+pub use loan::{LoanFrequency, LoanScheduleMethod, LoanScheduleRow, generate_loan_schedule};
 pub use monthly_item::MonthlyItem;
 pub use plan_item::PlanItem;
 pub use recognition::{

@@ -10,6 +10,7 @@ import type {
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
 import { formatMoney, formatPercent } from "../../shared/formatting/finance";
 import { categoryLabel, flowLabel } from "../../shared/formatting/labels";
+import { LoanMonthCard } from "../loans/LoanMonthCard";
 
 type FlowFilter = "INCOME" | "EXPENSE";
 type ProjectTableSort = "PLANNED" | "ACTUAL";
@@ -21,6 +22,7 @@ export function MonthReportDetail({ analytics }: { analytics: MonthAnalytics }) 
   return (
     <div className="month-report-detail">
       <MonthSummary analytics={analytics} actualLabel={actualLabel} hasPlanBaseline={hasPlanBaseline} />
+      <LoanMonthCard month={analytics.month} />
       <ExecutionTable analytics={analytics} actualLabel={actualLabel} hasPlanBaseline={hasPlanBaseline} />
       <CategoryAnalysis analytics={analytics} actualLabel={actualLabel} hasPlanBaseline={hasPlanBaseline} />
       <ProjectRanking analytics={analytics} hasPlanBaseline={hasPlanBaseline} />

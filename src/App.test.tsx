@@ -383,6 +383,8 @@ function installHarness(options: HarnessOptions = {}) {
       throw options.rejectCommand.error;
     }
     switch (command) {
+      case "get_loan_month_summary":
+        return { has_loans: false } as T;
       case "get_domain_contract":
         return contract as T;
       case "get_settings":
@@ -656,6 +658,7 @@ describe("planning workflows", () => {
       "总览",
       "月度执行",
       "专项",
+      "借贷",
       "历史报表",
       "配置预算",
       "设置",
@@ -1559,7 +1562,7 @@ describe("planning workflows", () => {
       },
     });
     render(<App />);
-    expect((await screen.findAllByText("已有月度数据或专项预算，本位币已锁定。")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("已有月度数据、专项预算或借贷，本位币已锁定。")).length).toBeGreaterThan(0);
   });
 
 });

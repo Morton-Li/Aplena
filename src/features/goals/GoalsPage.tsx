@@ -38,7 +38,9 @@ export function GoalsPage() {
 
   const projection = projectionQuery.data;
   const hasRules = plansQuery.data.length > 0;
-  const hasBudget = hasRules || (decimalValue(projection.special_expenses ?? "0") ?? 0) > 0;
+  const hasBudget = hasRules || (decimalValue(projection.special_expenses ?? "0") ?? 0) > 0
+    || (decimalValue(projection.loan_interest_expenses ?? "0") ?? 0) > 0
+    || (decimalValue(projection.loan_interest_income ?? "0") ?? 0) > 0;
 
   return (
     <>
@@ -55,6 +57,17 @@ export function GoalsPage() {
         <BudgetProjectionSummary projection={projection} hasRules={hasBudget} />
         <ExpenseCategorySummary projection={projection} hasRules={hasBudget} />
       </div>
+      {projection.projected_cash_net !== undefined && <section className="report-card loan-month-card" aria-label="下月借贷预算">
+        <div className="special-section-heading"><h2>下月借贷安排</h2><Link className="text-button" to="/loans">管理借贷计划</Link></div>
+        <div className="loan-metrics">
+          <ProjectionMetric label="待还本金" value={formatMoney(projection.loan_principal_due ?? "0.00", projection.base_currency)} detail="本金独立列示" />
+          <ProjectionMetric label="待收本金" value={formatMoney(projection.loan_principal_receivable ?? "0.00", projection.base_currency)} detail="约定回款，尚未到账" />
+          <ProjectionMetric label="预计利息及费用支出" value={formatMoney(projection.loan_interest_expenses ?? "0.00", projection.base_currency)} detail="已包含在上方预计支出" />
+          <ProjectionMetric label="预计利息及费用收入" value={formatMoney(projection.loan_interest_income ?? "0.00", projection.base_currency)} detail="已包含在上方预计收入" />
+          <ProjectionMetric label="含借贷的预计现金净结余" value={formatMoney(projection.projected_cash_net, projection.base_currency)} detail="预计储蓄减待还本金加待收本金" />
+        </div>
+        <p className="chart-note">按下月实际到期的各期剩余金额汇总，季度或年度还款不均摊。已有同一借贷的周期规则时，请调整该规则，避免重复安排预算。</p>
+      </section>}
 
       <BudgetSourcesSummary projection={projection} />
       <RecurringRulesPanel targetMonth={projection.target_month} />
@@ -71,7 +84,8 @@ function BudgetSourcesSummary({ projection }: { projection: BudgetProjection }) 
     <div className="goal-budget-source-grid">
       <ProjectionMetric label="周期规则月度预算" value={formatMoney(projection.recurring_expenses ?? projection.projected_expenses, projection.base_currency)} detail="按周期规则的月均等价金额汇总" />
       <ProjectionMetric label="专项月分配" value={formatMoney(projection.special_expenses ?? "0", projection.base_currency)} detail="直接计入该月分配金额" />
-      <ProjectionMetric label="预计支出合计" value={formatMoney(projection.projected_expenses, projection.base_currency)} detail="周期规则预算加专项月分配" />
+      <ProjectionMetric label="借贷利息及费用" value={formatMoney(projection.loan_interest_expenses ?? "0", projection.base_currency)} detail="按下月到期期次计入" />
+      <ProjectionMetric label="预计支出合计" value={formatMoney(projection.projected_expenses, projection.base_currency)} detail="周期预算、专项分配与借贷利息费用合计" />
     </div>
     <p className="chart-note">专项总预算用于项目管理；下月测算只计入 {projection.target_month} 的月分配。</p>
   </section>;
