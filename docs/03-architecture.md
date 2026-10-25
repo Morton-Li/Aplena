@@ -200,3 +200,7 @@ restart_after_software_update
 除类型、Lint、单元测试和构建外，发布候选必须完成 Tauri release `.app` 构建，并以系统临时目录下的隔离 `APLENA_SMOKE_DATA_DIR` 启动真实应用，检查关键页面和数据写读；禁止连接真实用户数据库。
 
 Updater 发行还必须验证双架构 `.app.tar.gz` 及 `.sig`、精确资产集合、确定性 `latest.json`、远端 digest 与逐字节回读。正式自签名身份、Intel 包及 GitHub `/releases/latest` 只能由远程严格标签流水线形成最终证据。
+
+## 借贷扩展（schema 7）
+
+借贷合同、计划版本、期次和实际收付位于独立聚合中，本金不进入既有收入/支出模型。实际利息及费用通过受保护的一对一关联进入月度实际，借贷余额、计划状态和现金流由事实派生。分期日期与本息公式仍由 Rust 领域层权威计算，前端仅展示预览、录入和分配结果。边界见 [ADR-0014](adr/0014-loans-and-principal-cash-flow.md)。

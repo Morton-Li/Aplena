@@ -48,7 +48,7 @@ docs/                 产品、领域、架构、数据库和发行决策
 
 ### 2.2 数据库
 
-首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1；当前应用依次执行迁移至 `0006_budget_specials.sql`，支持 schema 6。schema 3 删除旧目标表及数据，schema 4 保存启动时自动更新汇率偏好，schema 5 保存独立软件更新偏好，schema 6 在保留已有月度与实际事实的基础上追加自动入账策略、发生记录、专项及月分配。已发布迁移不可修改，只能追加。预发布数据库迁移链不属于公开兼容范围，换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
+首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1；当前应用依次执行迁移至 `0007_loans.sql`，支持 schema 7。schema 3 删除旧目标表及数据，schema 4 保存启动时自动更新汇率偏好，schema 5 保存独立软件更新偏好，schema 6 在保留已有月度与实际事实的基础上追加自动入账策略、发生记录、专项及月分配。已发布迁移不可修改，只能追加。预发布数据库迁移链不属于公开兼容范围，换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
 
 本地 SQLite 使用外键、STRICT 表和 WAL，并将数据目录限制为 `0700`、数据库及 WAL/SHM 限制为 `0600`。数据库文件未静态加密，具体决策见 [ADR 0006](adr/0006-database-encryption-release-gate.md)。
 
@@ -142,3 +142,9 @@ Updater 私钥需要独立的安全备份。丢失私钥后，已经安装的客
 6. 只有流水线公开草稿且 `/releases/latest/download/latest.json` 与已验证清单完全一致后，GitHub Release 才能作为远程发行证据。
 
 当前仓库内存在工作流文件不等于远程 Actions 已经成功运行。完整本地检查记录见 [发布就绪检查](07-release-readiness.md)。
+
+## 6. 借贷验证
+
+schema 7 追加借贷表，旧迁移保持不变。测试使用合成 SQLite 账本，覆盖双向四种周期、本金/利息隔离、部分及跨期分配、跨月纠错、未来计划替换、提前结清、下月预算与关联实际保护。前端覆盖建档、四种周期预览失效和失败草稿保留。
+
+不得将正式账本用于自动化或界面检查。原生 smoke 构建必须使用独立 `.smoke` bundle 标识与显式系统临时数据目录；debug 可用 `APLENA_COMPILED_SMOKE_DATA_DIR` 将目录编入测试构建，防止 Launch Services 丢失环境变量时回退到默认账本。正式发布构建不支持该编译路径；无隔离目录的 smoke 构建拒绝启动。界面布局也可通过纯合成 IPC 响应检查。

@@ -363,7 +363,7 @@ impl Store {
 
     pub async fn list_existing_months(&self) -> Result<Vec<YearMonth>, StoreError> {
         let rows: Vec<String> =
-            sqlx::query_scalar("SELECT DISTINCT month FROM monthly_items ORDER BY month DESC")
+            sqlx::query_scalar("SELECT month FROM monthly_items UNION SELECT substr(occurred_on,1,7)||'-01' FROM loan_payments UNION SELECT substr(started_on,1,7)||'-01' FROM loans WHERE opening_only=0 ORDER BY month DESC")
                 .fetch_all(&self.pool)
                 .await?;
         rows.iter()

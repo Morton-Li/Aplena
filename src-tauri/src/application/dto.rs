@@ -70,6 +70,7 @@ pub struct PlanItemDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MonthlyItemDto {
     pub id: String,
+    pub source_loan_id: Option<String>,
     pub source_plan_item_id: Option<String>,
     pub source_special_project_id: Option<String>,
     pub source_special_allocation_id: Option<String>,
@@ -306,6 +307,11 @@ pub struct BudgetProjectionDto {
     pub projected_expenses: String,
     pub recurring_expenses: String,
     pub special_expenses: String,
+    pub loan_interest_expenses: String,
+    pub loan_interest_income: String,
+    pub loan_principal_due: String,
+    pub loan_principal_receivable: String,
+    pub projected_cash_net: String,
     pub projected_savings: String,
     pub projected_savings_rate_percent: Option<String>,
     pub fixed_commitment_ratio_percent: Option<String>,

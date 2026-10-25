@@ -116,6 +116,16 @@ impl BudgetProjection {
             ratio(self.stable_income.as_decimal(), committed_costs)?;
         Ok(self)
     }
+
+    pub fn with_loan_charges(
+        mut self,
+        income: Amount,
+        expense: Amount,
+    ) -> Result<Self, DomainError> {
+        self.variable_income = self.variable_income.checked_add(income)?;
+        self.projected_income = self.projected_income.checked_add(income)?;
+        self.with_expense_allocations(&[(Category::FixedCommitmentExpense, expense)])
+    }
 }
 
 pub fn calculate_budget_projection(
