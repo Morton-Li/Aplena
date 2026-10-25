@@ -79,7 +79,6 @@ export function DashboardPage() {
   return (
     <div className="dashboard-page">
       <DashboardHeader analytics={analytics} hasPlanBaseline={hasPlanBaseline} />
-      <LoanMonthCard month={analytics.month} />
       {analytics.total_item_count === 0 ? (
         <EmptyDashboard month={analytics.month} currency={analytics.currency} />
       ) : (
@@ -94,6 +93,7 @@ export function DashboardPage() {
           <VarianceReport analytics={analytics} />
         </>
       )}
+      <LoanMonthCard month={analytics.month} />
     </div>
   );
 }
