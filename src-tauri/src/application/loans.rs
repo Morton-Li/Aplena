@@ -55,6 +55,8 @@ pub struct LoanDto {
     pub paid_principal: String,
     pub remaining_principal: String,
     pub remaining_charges: String,
+    pub scheduled_remaining_principal: String,
+    pub plan_review_required: bool,
     pub overdue_total: String,
     pub next_due_on: Option<String>,
     pub status: String,
@@ -169,6 +171,7 @@ pub struct LoanMonthSummary {
     pub month: String,
     pub currency: String,
     pub has_loans: bool,
+    pub plan_review_required_count: i64,
     pub actual_principal_in: String,
     pub actual_principal_out: String,
     pub actual_cash_net: Option<String>,
@@ -367,10 +370,23 @@ impl FinanceService {
         let store = self.current_store().await;
         let mut tx = store.pool().begin().await.map_err(db)?;
         let editing = prepare_payment_on(&mut tx, &input).await?;
+        let original_allocations = payment_allocations_for_on(&mut tx, &input.id).await?;
+        if !editing {
+            let existing =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM loan_payments WHERE id=?")
+                    .bind(&input.id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(db)?;
+            if existing > 0 {
+                tx.rollback().await.map_err(db)?;
+                return Ok(original_allocations);
+            }
+        }
         if editing {
             detach_payment_on(&mut tx, &input.id).await?;
         }
-        let allocations = payment_allocations_on(&mut tx, &input).await?;
+        let allocations = payment_allocations_on(&mut tx, &input, &original_allocations).await?;
         // Preview never commits the temporary removal of an existing payment.
         tx.rollback().await.map_err(db)?;
         Ok(allocations)
@@ -381,6 +397,7 @@ impl FinanceService {
         let store = self.current_store().await;
         let mut tx = store.pool().begin().await.map_err(db)?;
         let editing = prepare_payment_on(&mut tx, &input).await?;
+        let original_allocations = payment_allocations_for_on(&mut tx, &input.id).await?;
         if editing {
             detach_payment_on(&mut tx, &input.id).await?;
         } else if sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM loan_payments WHERE id=?")
@@ -393,7 +410,7 @@ impl FinanceService {
             // A retry of an identical creation is already committed.
             return Ok(());
         }
-        let allocations = payment_allocations_on(&mut tx, &input).await?;
+        let allocations = payment_allocations_on(&mut tx, &input, &original_allocations).await?;
         let parts = components(&input.principal, &input.interest, &input.fees)?;
         let now = timestamp();
         sqlx::query("INSERT INTO loan_payments (id,loan_id,occurred_on,principal_scaled,interest_scaled,fees_scaled,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET occurred_on=excluded.occurred_on,principal_scaled=excluded.principal_scaled,interest_scaled=excluded.interest_scaled,fees_scaled=excluded.fees_scaled,note=excluded.note,updated_at=excluded.updated_at")
@@ -483,6 +500,12 @@ impl FinanceService {
             .fetch_one(&mut *tx)
             .await
             .map_err(db)?;
+        let plan_review_required_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM loans l WHERE EXISTS (SELECT 1 FROM loan_schedule_versions v WHERE v.loan_id=l.id) AND
+             l.principal_scaled - (SELECT COALESCE(SUM(p.principal_scaled),0) FROM loan_payments p WHERE p.loan_id=l.id)
+             != (SELECT COALESCE(SUM(i.principal_scaled),0) FROM loan_installments i WHERE i.loan_id=l.id AND i.superseded=0)
+                - (SELECT COALESCE(SUM(a.principal_scaled),0) FROM loan_payment_allocations a JOIN loan_installments i ON i.id=a.installment_id WHERE i.loan_id=l.id AND i.superseded=0)"
+        ).fetch_one(&mut *tx).await.map_err(db)?;
         let mut principal_in = 0;
         let mut principal_out = 0;
         let mut cash_count = 0_i64;
@@ -537,6 +560,7 @@ impl FinanceService {
             month: month.to_string(),
             currency,
             has_loans: loans > 0,
+            plan_review_required_count,
             actual_principal_in: money(principal_in)?,
             actual_principal_out: money(principal_out)?,
             actual_cash_net,
@@ -589,6 +613,7 @@ async fn detail_on(
     let rows = sqlx::query("SELECT i.*,COALESCE(SUM(a.principal_scaled),0) AS paid_principal,COALESCE(SUM(a.interest_scaled),0) AS paid_interest,COALESCE(SUM(a.fees_scaled),0) AS paid_fees FROM loan_installments i LEFT JOIN loan_payment_allocations a ON a.installment_id=i.id WHERE i.loan_id=? GROUP BY i.id ORDER BY i.due_on,i.position,i.id").bind(id).fetch_all(&mut *connection).await.map_err(db)?;
     let mut overdue = 0;
     let mut charges = 0;
+    let mut scheduled_remaining_principal = 0;
     let mut next_due: Option<String> = None;
     for row in rows {
         let original = [
@@ -621,6 +646,8 @@ async fn detail_on(
             "PENDING"
         };
         if !superseded {
+            scheduled_remaining_principal =
+                sum([scheduled_remaining_principal, remaining[0]].into_iter())?;
             charges = sum([charges, remaining[1], remaining[2]].into_iter())?;
             if total > 0 && due < today.to_string() {
                 overdue = sum([overdue, total].into_iter())?;
@@ -665,23 +692,7 @@ async fn detail_on(
             row.get("fees_scaled"),
         ];
         repaid = sum([repaid, parts[0]].into_iter())?;
-        let allocations = sqlx::query(
-            "SELECT * FROM loan_payment_allocations WHERE payment_id=? ORDER BY installment_id,id",
-        )
-        .bind(&payment_id)
-        .fetch_all(&mut *connection)
-        .await
-        .map_err(db)?
-        .into_iter()
-        .map(|a| {
-            Ok(LoanAllocation {
-                installment_id: a.get("installment_id"),
-                principal: money(a.get("principal_scaled"))?,
-                interest: money(a.get("interest_scaled"))?,
-                fees: money(a.get("fees_scaled"))?,
-            })
-        })
-        .collect::<Result<Vec<_>, AppError>>()?;
+        let allocations = payment_allocations_for_on(connection, &payment_id).await?;
         payments.push(LoanPaymentDto {
             id: payment_id,
             occurred_on: row.get("occurred_on"),
@@ -696,7 +707,7 @@ async fn detail_on(
     }
     let principal: i64 = loan.get("principal_scaled");
     let remaining = principal - repaid;
-    let versions = sqlx::query(
+    let versions: Vec<_> = sqlx::query(
         "SELECT * FROM loan_schedule_versions WHERE loan_id=? ORDER BY created_at DESC,id",
     )
     .bind(id)
@@ -714,6 +725,7 @@ async fn detail_on(
         created_at: v.get("created_at"),
     })
     .collect();
+    let plan_review_required = !versions.is_empty() && scheduled_remaining_principal != remaining;
     Ok(LoanDetailDto {
         loan: LoanDto {
             id: id.to_owned(),
@@ -729,9 +741,11 @@ async fn detail_on(
             paid_principal: money(repaid)?,
             remaining_principal: money(remaining)?,
             remaining_charges: money(charges)?,
+            scheduled_remaining_principal: money(scheduled_remaining_principal)?,
+            plan_review_required,
             overdue_total: money(overdue)?,
             next_due_on: next_due,
-            status: if remaining == 0 && charges == 0 {
+            status: if remaining == 0 && charges == 0 && !plan_review_required {
                 "SETTLED"
             } else {
                 "ACTIVE"
@@ -910,6 +924,29 @@ async fn prepare_payment_on(
     Ok(false)
 }
 
+async fn payment_allocations_for_on(
+    connection: &mut SqliteConnection,
+    payment_id: &str,
+) -> Result<Vec<LoanAllocation>, AppError> {
+    sqlx::query(
+        "SELECT * FROM loan_payment_allocations WHERE payment_id=? ORDER BY installment_id,id",
+    )
+    .bind(payment_id)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(db)?
+    .into_iter()
+    .map(|row| {
+        Ok(LoanAllocation {
+            installment_id: row.get("installment_id"),
+            principal: money(row.get("principal_scaled"))?,
+            interest: money(row.get("interest_scaled"))?,
+            fees: money(row.get("fees_scaled"))?,
+        })
+    })
+    .collect()
+}
+
 async fn detach_payment_on(connection: &mut SqliteConnection, id: &str) -> Result<(), AppError> {
     let actual: Option<String> =
         sqlx::query_scalar("SELECT actual_entry_id FROM loan_actual_links WHERE payment_id=?")
@@ -941,6 +978,7 @@ async fn detach_payment_on(connection: &mut SqliteConnection, id: &str) -> Resul
 async fn payment_allocations_on(
     connection: &mut SqliteConnection,
     input: &LoanPaymentInput,
+    original_allocations: &[LoanAllocation],
 ) -> Result<Vec<LoanAllocation>, AppError> {
     let today = current_natural_date()?;
     let detail = detail_on(connection, &input.loan_id, today).await?;
@@ -964,6 +1002,32 @@ async fn payment_allocations_on(
     let mut allocations = input.allocations.clone();
     if allocations.is_empty() {
         let mut remaining = parts;
+        // Later plans have already deducted these historical amounts from their
+        // principal basis. Reassigning them to the new plan would count them twice.
+        for original in original_allocations {
+            if original.installment_id.as_ref().is_some_and(|id| {
+                detail
+                    .installments
+                    .iter()
+                    .any(|row| &row.id == id && !row.superseded)
+            }) {
+                continue;
+            }
+            let prior = components(&original.principal, &original.interest, &original.fees)?;
+            let mut retained = [0; 3];
+            for index in 0..3 {
+                retained[index] = remaining[index].min(prior[index]);
+                remaining[index] -= retained[index];
+            }
+            if sum(retained.into_iter())? > 0 {
+                allocations.push(LoanAllocation {
+                    installment_id: original.installment_id.clone(),
+                    principal: money(retained[0])?,
+                    interest: money(retained[1])?,
+                    fees: money(retained[2])?,
+                });
+            }
+        }
         for row in detail.installments.iter().filter(|v| !v.superseded) {
             let available = components(
                 &row.remaining_principal,
@@ -985,12 +1049,26 @@ async fn payment_allocations_on(
             }
         }
         if sum(remaining.into_iter())? > 0 {
-            allocations.push(LoanAllocation {
-                installment_id: None,
-                principal: money(remaining[0])?,
-                interest: money(remaining[1])?,
-                fees: money(remaining[2])?,
-            });
+            if let Some(unassigned) = allocations
+                .iter_mut()
+                .find(|row| row.installment_id.is_none())
+            {
+                let retained = components(
+                    &unassigned.principal,
+                    &unassigned.interest,
+                    &unassigned.fees,
+                )?;
+                unassigned.principal = money(sum([retained[0], remaining[0]].into_iter())?)?;
+                unassigned.interest = money(sum([retained[1], remaining[1]].into_iter())?)?;
+                unassigned.fees = money(sum([retained[2], remaining[2]].into_iter())?)?;
+            } else {
+                allocations.push(LoanAllocation {
+                    installment_id: None,
+                    principal: money(remaining[0])?,
+                    interest: money(remaining[1])?,
+                    fees: money(remaining[2])?,
+                });
+            }
         }
     }
     let mut totals = [0; 3];
@@ -1041,7 +1119,15 @@ async fn payment_allocations_on(
         .map(|v| amount(&v.remaining_principal).map(|a| a.scaled_i64()))
         .collect::<Result<Vec<_>, _>>()?
         .into_iter())?;
-    if unassigned_principal > 0 && planned_principal > allocated_active_principal {
+    let original_unassigned_principal = sum(original_allocations
+        .iter()
+        .filter(|row| row.installment_id.is_none())
+        .map(|row| amount(&row.principal).map(|value| value.scaled_i64()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter())?;
+    if unassigned_principal > original_unassigned_principal
+        && planned_principal > allocated_active_principal
+    {
         return Err(invalid("LOAN_ALLOCATION_MISMATCH"));
     }
     Ok(allocations)

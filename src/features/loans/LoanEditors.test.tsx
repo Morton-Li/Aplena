@@ -13,7 +13,7 @@ function wrap(children: ReactNode) {
   return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
 }
 const detail: LoanDetail = {
-  loan: { id: "loan", name: "住房贷款", counterparty: "银行", direction: "BORROWED", currency: "CNY", principal: "1000.00", started_on: "2000-01-01", opening_only: true, archived: false, note: null, paid_principal: "0.00", remaining_principal: "1000.00", remaining_charges: "0.00", overdue_total: "0.00", next_due_on: null, status: "ACTIVE" },
+  loan: { id: "loan", name: "住房贷款", counterparty: "银行", direction: "BORROWED", currency: "CNY", principal: "1000.00", started_on: "2000-01-01", opening_only: true, archived: false, note: null, paid_principal: "0.00", remaining_principal: "1000.00", remaining_charges: "0.00", scheduled_remaining_principal: "0.00", plan_review_required: false, overdue_total: "0.00", next_due_on: null, status: "ACTIVE" },
   installments: [], payments: [], versions: [],
 };
 beforeEach(() => { vi.mocked(invoke).mockReset(); });
@@ -68,4 +68,28 @@ it("previews allocations before saving a payment and keeps a rejected draft", as
   expect(await screen.findByRole("alert")).toHaveTextContent("超过剩余本金");
   expect(screen.getByLabelText("本金（CNY）")).toHaveValue("100.00");
   expect(saved).not.toHaveBeenCalled();
+});
+
+it("omits settled future installments from manual edits and ignores a hidden calculator rate", async () => {
+  const user = userEvent.setup();
+  const installment = {
+    id: "paid", version_id: "version", position: 1, due_on: "2099-12-01", principal: "250.00", interest: "0.00", fees: "0.00",
+    paid_principal: "250.00", paid_interest: "0.00", paid_fees: "0.00", remaining_principal: "0.00", remaining_interest: "0.00",
+    remaining_fees: "0.00", remaining_total: "0.00", state: "PAID" as const, superseded: false,
+  };
+  const existing: LoanDetail = { ...detail, installments: [installment, {
+    ...installment, id: "unpaid", position: 2, due_on: "2099-12-02", principal: "750.00", paid_principal: "0.00",
+    remaining_principal: "750.00", remaining_total: "750.00", state: "PENDING",
+  }] };
+  vi.mocked(invoke).mockResolvedValue({ principal_to_schedule: "750.00", preserved_count: 0, rows: [] });
+  wrap(<LoanScheduleEditor detail={existing} onClose={vi.fn()} onSaved={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText(/每期利率/), { target: { value: "" } });
+  await user.click(screen.getByRole("combobox", { name: "生成方式" }));
+  await user.click(screen.getByRole("option", { name: "手动逐期指定" }));
+  expect(screen.getByLabelText("第1期本金")).toHaveValue("750.00");
+  expect(screen.queryByLabelText("第2期本金")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "预览并核对" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("preview_loan_schedule", { input: expect.objectContaining({
+    method: "MANUAL", periodRatePercent: "0", rows: [{ due_on: "2099-12-02", principal: "750.00", interest: "0.00", fees: "0.00" }],
+  }) }));
 });

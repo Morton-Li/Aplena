@@ -65,19 +65,20 @@ export function LoansPage() {
     {list.isPending && <section className="state-card">正在读取借贷…</section>}
     {list.isSuccess && filtered.length === 0 && !explicitId && <EmptyState title={activeDirection === "BORROWED" ? "记录一笔需要偿还的借款" : "记录一笔借给他人的款项"} description="可从借款发生日完整记录，也可从已有剩余本金开始跟踪。" action={<button className="button button-secondary" disabled={!ready} type="button" onClick={() => setEditor({ kind: "loan" })}>新建借贷</button>} />}
     {(filtered.length > 0 || explicitId) && <div className="loan-workspace">
-      <aside className="loan-list" aria-label="借贷列表">{filtered.map((item) => <button className={id === item.id ? "loan-list-item selected" : "loan-list-item"} aria-pressed={id === item.id} key={item.id} type="button" onClick={() => { setParams({ id: item.id }); setShowOld(false); }}><strong>{item.name}</strong><span>{item.counterparty} · {item.status === "SETTLED" ? "已结清" : item.overdue_total !== "0.00" ? "有逾期" : "进行中"}</span><small>剩余本金 {formatMoney(item.remaining_principal, item.currency)}</small><small>{item.next_due_on ? "最近待还 " + item.next_due_on : "未安排后续还款"}</small></button>)}</aside>
+      <aside className="loan-list" aria-label="借贷列表">{filtered.map((item) => <button className={id === item.id ? "loan-list-item selected" : "loan-list-item"} aria-pressed={id === item.id} key={item.id} type="button" onClick={() => { setParams({ id: item.id }); setShowOld(false); }}><strong>{item.name}</strong><span>{item.counterparty} · {item.plan_review_required ? "计划待核对" : item.status === "SETTLED" ? "已结清" : item.overdue_total !== "0.00" ? "有逾期" : "进行中"}</span><small>剩余本金 {formatMoney(item.remaining_principal, item.currency)}</small><small>{item.next_due_on ? "最近待还 " + item.next_due_on : "未安排后续还款"}</small></button>)}</aside>
       <div className="loan-detail">
         {detail.isPending && id && <section className="state-card">正在读取借贷详情…</section>}
         {detail.isError && <div className="inline-error" role="alert">{describeError(detail.error)}<button className="text-button" onClick={() => void detail.refetch()} type="button">重试详情</button></div>}
         {detail.data && loan && <>
           <header className="loan-detail-heading"><div><p className="section-label">{loan.direction === "BORROWED" ? "我需偿还" : "待他人归还"} · {loan.status === "SETTLED" ? "已结清" : "进行中"}{loan.archived ? " · 已归档" : ""}</p><h2>{loan.name}</h2><p>{loan.counterparty} · {loan.opening_only ? "期初剩余本金" : "借款发生日"} {loan.started_on}</p>{loan.note && <p>{loan.note}</p>}</div><div className="special-actions"><button className="button button-secondary" type="button" onClick={() => setEditor({ kind: "loan", loan })}>编辑资料</button><button className="button button-quiet" type="button" disabled={archive.isPending || (!loan.archived && loan.status !== "SETTLED")} onClick={() => archive.mutate(loan)}>{loan.archived ? "恢复" : "归档"}</button></div></header>
           {archive.isError && <div className="inline-error" role="alert">{describeError(archive.error)}</div>}
+          {loan.plan_review_required && <div className="inline-error" role="alert">当前计划未还本金 {formatMoney(loan.scheduled_remaining_principal, loan.currency)} 与剩余本金 {formatMoney(loan.remaining_principal, loan.currency)} 不一致。请核对实际还款的期次分配，或调整后续计划；核对前暂停预算预测。</div>}
           <section className="loan-metrics" aria-label="借贷余额">
             <LoanMetric label={loan.opening_only ? "期初本金" : "借款本金"} value={loan.principal} currency={loan.currency} />
             <LoanMetric label="已归还本金" value={loan.paid_principal} currency={loan.currency} />
             <LoanMetric label="剩余本金" value={loan.remaining_principal} currency={loan.currency} />
             <LoanMetric label="计划剩余利息及费用" value={loan.remaining_charges} currency={loan.currency} />
-            <LoanMetric label="逾期未还清" value={loan.overdue_total} currency={loan.currency} />
+            <LoanMetric label="逾期未还清" value={loan.plan_review_required ? null : loan.overdue_total} currency={loan.currency} />
           </section>
           <section className="report-card loan-section">
             <div className="special-section-heading"><h3>分期还款计划</h3><button className="button button-secondary" disabled={loan.archived} onClick={() => setEditor({ kind: "schedule" })} type="button">{detail.data.versions.length ? "调整后续计划" : "建立还款计划"}</button></div>

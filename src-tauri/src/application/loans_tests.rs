@@ -56,6 +56,141 @@ fn payment(loan: &LoanDto, principal: &str, interest: &str, fees: &str) -> LoanP
 }
 
 #[tokio::test]
+async fn preview_of_an_already_committed_request_returns_its_original_allocations() {
+    let service = service().await;
+    let loan = service
+        .create_loan(creation("BORROWED", true))
+        .await
+        .unwrap();
+    service
+        .save_loan_schedule(schedule(&loan, LoanFrequency::Month))
+        .await
+        .unwrap();
+    let mut input = payment(&loan, "250", "10", "0");
+    input.allocations = service.preview_loan_payment(input.clone()).await.unwrap();
+    service.save_loan_payment(input.clone()).await.unwrap();
+    let preview = service.preview_loan_payment(input.clone()).await.unwrap();
+    assert_eq!(preview, input.allocations);
+    service.save_loan_payment(input).await.unwrap();
+    assert_eq!(service.get_loan(loan.id).await.unwrap().payments.len(), 1);
+}
+
+#[tokio::test]
+async fn editing_payments_preserves_the_principal_basis_already_used_by_later_plans() {
+    for paid_before_plan in [true, false] {
+        let service = service().await;
+        let loan = service
+            .create_loan(creation("BORROWED", true))
+            .await
+            .unwrap();
+        let next = current_natural_date()
+            .unwrap()
+            .year_month()
+            .next_month()
+            .unwrap();
+        let mut plan = schedule(&loan, LoanFrequency::Month);
+        plan.first_date = next.first_date().to_string();
+        if !paid_before_plan {
+            service.save_loan_schedule(plan.clone()).await.unwrap();
+        }
+        let mut input = payment(&loan, "250", "0", "0");
+        service.save_loan_payment(input.clone()).await.unwrap();
+        plan.count = 3;
+        service.save_loan_schedule(plan).await.unwrap();
+        let recorded = service
+            .get_loan(loan.id.clone())
+            .await
+            .unwrap()
+            .payments
+            .remove(0);
+        input.expected_updated_at = Some(recorded.updated_at);
+        input.allocations = recorded.allocations;
+        input.note = Some("只修正备注".into());
+        service.save_loan_payment(input.clone()).await.unwrap();
+        assert!(
+            !service
+                .get_loan(loan.id.clone())
+                .await
+                .unwrap()
+                .loan
+                .plan_review_required
+        );
+        let recorded = service
+            .get_loan(loan.id.clone())
+            .await
+            .unwrap()
+            .payments
+            .remove(0);
+        input.expected_updated_at = Some(recorded.updated_at);
+        input.principal = "350".into();
+        input.allocations.clear();
+        input.allocations = service.preview_loan_payment(input.clone()).await.unwrap();
+        service.save_loan_payment(input).await.unwrap();
+        let updated = service.get_loan(loan.id).await.unwrap();
+        assert_eq!(updated.loan.remaining_principal, "650.00");
+        assert_eq!(updated.loan.scheduled_remaining_principal, "650.00");
+        assert!(!updated.loan.plan_review_required);
+    }
+}
+
+#[tokio::test]
+async fn correcting_a_payment_used_by_a_replacement_plan_requires_plan_review_before_forecasting() {
+    let service = service().await;
+    let loan = service
+        .create_loan(creation("BORROWED", true))
+        .await
+        .unwrap();
+    let next = current_natural_date()
+        .unwrap()
+        .year_month()
+        .next_month()
+        .unwrap();
+    let mut original = schedule(&loan, LoanFrequency::Month);
+    original.first_date = next.first_date().to_string();
+    service.save_loan_schedule(original.clone()).await.unwrap();
+    let input = payment(&loan, "250", "0", "0");
+    service.save_loan_payment(input.clone()).await.unwrap();
+    let mut replacement = original.clone();
+    replacement.count = 3;
+    service.save_loan_schedule(replacement).await.unwrap();
+    let recorded = service
+        .get_loan(loan.id.clone())
+        .await
+        .unwrap()
+        .payments
+        .remove(0);
+    service
+        .delete_loan_payment(DeleteLoanPaymentInput {
+            id: input.id,
+            expected_updated_at: recorded.updated_at,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .get_loan(loan.id.clone())
+            .await
+            .unwrap()
+            .loan
+            .remaining_principal,
+        "1000.00"
+    );
+    assert_eq!(
+        service.budget_projection().await.unwrap_err().error_code,
+        "LOAN_PLAN_REVIEW_REQUIRED"
+    );
+    service.save_loan_schedule(original).await.unwrap();
+    assert_eq!(
+        service
+            .budget_projection()
+            .await
+            .unwrap()
+            .loan_principal_due,
+        "250.00"
+    );
+}
+
+#[tokio::test]
 async fn full_principal_payment_can_be_corrected_without_bypassing_the_database_limit() {
     let service = service().await;
     let loan = service

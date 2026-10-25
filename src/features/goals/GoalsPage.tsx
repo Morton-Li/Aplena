@@ -33,7 +33,9 @@ export function GoalsPage() {
     return <GoalLoading />;
   }
   if (projectionQuery.isError || plansQuery.isError) {
-    return <section className="state-card state-card-error"><span role="alert">{describeError(projectionQuery.error ?? plansQuery.error)}</span></section>;
+    const error = projectionQuery.error ?? plansQuery.error;
+    const reviewLoanPlan = typeof error === "object" && error !== null && "error_code" in error && error.error_code === "LOAN_PLAN_REVIEW_REQUIRED";
+    return <section className="state-card state-card-error"><span role="alert">{describeError(error)}</span>{reviewLoanPlan && <Link className="button button-secondary" to="/loans">核对借贷计划</Link>}</section>;
   }
 
   const projection = projectionQuery.data;

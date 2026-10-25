@@ -13,6 +13,7 @@ export function describeError(value: unknown): string {
     const descriptions: Record<string, string> = {
       BASE_CURRENCY_LOCKED: "已有月度数据、专项预算或借贷，本位币已锁定。",
       LOAN_MANAGED_ENTRY: "这是借贷关联的利息及费用，请从借贷详情调整实际还款或回款。",
+      LOAN_PLAN_REVIEW_REQUIRED: "更正还款后，借贷计划本金与剩余本金不一致。请先核对还款分配或调整后续计划，再查看预算预测。",
       LOAN_NAME_REQUIRED: "请填写借贷名称和对方名称。",
       LOAN_DIRECTION_INVALID: "请选择有效的借贷方向。",
       LOAN_DATE_OR_AMOUNT_INVALID: "借贷本金须大于零，起始日期不能晚于今天。",

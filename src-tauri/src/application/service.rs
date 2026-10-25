@@ -830,6 +830,12 @@ impl FinanceService {
             .with_expense_allocations(&special_allocations)
             .map_err(|error| AppError::from_domain(error, None))?;
         let loans = self.loan_month_summary_unlocked(target_month).await?;
+        if loans.plan_review_required_count > 0 {
+            return Err(AppError::business(
+                "LOAN_PLAN_REVIEW_REQUIRED",
+                "error.loan_plan_review_required",
+            ));
+        }
         let loan_expense: Amount = loans
             .planned_borrow_charges
             .parse()

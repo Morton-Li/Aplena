@@ -8,6 +8,7 @@ export interface Loan {
   id: string; name: string; counterparty: string; direction: LoanDirection; currency: string;
   principal: string; started_on: string; opening_only: boolean; archived: boolean; note: string | null;
   paid_principal: string; remaining_principal: string; remaining_charges: string;
+  scheduled_remaining_principal: string; plan_review_required: boolean;
   overdue_total: string; next_due_on: string | null; status: "ACTIVE" | "SETTLED";
 }
 export interface LoanInput {
@@ -41,6 +42,7 @@ export interface LoanDetail {
 }
 export interface LoanMonthSummary {
   month: string; currency: string; has_loans: boolean; actual_principal_in: string; actual_principal_out: string;
+  plan_review_required_count: number;
   actual_cash_net: string | null; planned_borrow_principal: string; planned_borrow_charges: string; planned_borrow_total: string;
   planned_lent_principal: string; planned_lent_charges: string; planned_lent_total: string;
 }

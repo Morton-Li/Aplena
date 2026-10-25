@@ -12,9 +12,10 @@ export function LoanMonthCard({ month }: { month: string }) {
   const summary = query.data;
   return <section className="report-card loan-month-card" aria-label={month + " 借贷与现金流"}>
     <div className="special-section-heading"><div><p className="section-label">借贷与现金流 · {month}</p><h2>本金往来独立统计</h2></div><Link className="text-button" to="/loans">查看借贷</Link></div>
+    {summary.plan_review_required_count > 0 && <p className="inline-error" role="alert">有借贷计划本金与剩余本金不一致。请在借贷详情核对还款分配或调整后续计划；待还与待收计划汇总暂不显示，实际现金流保留。</p>}
     <div className="loan-metrics">
-      <LoanMetric label="本月计划尚待偿还" value={summary.planned_borrow_total} currency={summary.currency} />
-      <LoanMetric label="本月约定尚待收回" value={summary.planned_lent_total} currency={summary.currency} />
+      <LoanMetric label="本月计划尚待偿还" value={summary.plan_review_required_count > 0 ? null : summary.planned_borrow_total} currency={summary.currency} />
+      <LoanMetric label="本月约定尚待收回" value={summary.plan_review_required_count > 0 ? null : summary.planned_lent_total} currency={summary.currency} />
       <LoanMetric label="实际本金流入" value={summary.actual_principal_in} currency={summary.currency} />
       <LoanMetric label="实际本金流出" value={summary.actual_principal_out} currency={summary.currency} />
       <LoanMetric label="含借贷的现金净结余" value={summary.actual_cash_net} currency={summary.currency} />

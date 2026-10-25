@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -17,6 +17,25 @@ function Harness() {
 }
 
 describe("Select", () => {
+  it("does not steal focus from the next field after selecting an option", async () => {
+    const frames: FrameRequestCallback[] = [];
+    const animation = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      const user = userEvent.setup();
+      render(<><Harness /><input aria-label="Next field" /></>);
+      await user.click(screen.getByRole("combobox", { name: "Test select" }));
+      await user.click(screen.getByRole("option", { name: /Beta/ }));
+      const input = screen.getByRole("textbox", { name: "Next field" });
+      input.focus();
+      act(() => { for (const frame of frames) frame(0); });
+      expect(input).toHaveFocus();
+    } finally {
+      animation.mockRestore();
+    }
+  });
   it("opens in a portal and selects an option with pointer input", async () => {
     const user = userEvent.setup();
     const portalHost = document.createElement("div");

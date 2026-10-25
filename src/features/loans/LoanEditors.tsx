@@ -72,10 +72,10 @@ export function LoanScheduleEditor({ detail, onClose, onSaved }: { detail: LoanD
   const [method, setMethod] = useState<LoanScheduleInput["method"]>("EQUAL_PRINCIPAL");
   const [rate, setRate] = useState("0");
   const [note, setNote] = useState("");
-  const [rows, setRows] = useState<LoanScheduleRow[]>(() => detail.installments.filter((row) => !row.superseded && row.due_on >= today).map((row) => ({ due_on: row.due_on, principal: row.remaining_principal, interest: row.remaining_interest, fees: row.remaining_fees })));
+  const [rows, setRows] = useState<LoanScheduleRow[]>(() => detail.installments.filter((row) => !row.superseded && row.due_on >= today && row.remaining_total !== "0.00").map((row) => ({ due_on: row.due_on, principal: row.remaining_principal, interest: row.remaining_interest, fees: row.remaining_fees })));
   const [preview, setPreview] = useState<LoanSchedulePreview | null>(null);
   const [page, setPage] = useState(0);
-  const input = (): LoanScheduleInput => ({ loanId: detail.loan.id, frequency, intervalCount: Number(interval), firstDate: first, count: Number(count), method, periodRatePercent: rate, note: note || undefined, rows });
+  const input = (): LoanScheduleInput => ({ loanId: detail.loan.id, frequency, intervalCount: Number(interval), firstDate: first, count: Number(count), method, periodRatePercent: method === "MANUAL" ? "0" : rate, note: note || undefined, rows });
   const mutation = useMutation({ mutationFn: () => saveLoanSchedule(input()), onSuccess: onSaved, onSettled: () => { lock.current = false; } });
   const checking = useMutation({ mutationFn: () => previewLoanSchedule(input()), onSuccess: (value) => { setPreview(value); setPage(0); } });
   const busy = mutation.isPending || checking.isPending;
@@ -132,7 +132,7 @@ export function LoanPaymentEditor({ detail, payment, onClose, onSaved }: { detai
   const invalidate = () => { setAllocations(null); preview.reset(); mutation.reset(); };
   const save = () => { if (!allocations || lock.current) return; lock.current = true; mutation.mutate(); };
   const changeAllocation = (index: number, field: keyof LoanAllocation, value: string) => setAllocations((current) => current?.map((row, position) => position === index ? { ...row, [field]: field === "installmentId" ? value || null : value } : row) ?? null);
-  const eligible = detail.installments.filter((row) => !row.superseded || payment?.allocations.some((a) => a.installmentId === row.id));
+  const eligible = detail.installments.filter((row) => !row.superseded || payment);
   return <Dialog title={(payment ? "编辑" : "记录") + (detail.loan.direction === "BORROWED" ? "还款" : "回款")} size="wide" onClose={close} footer={<><button className="button button-quiet" disabled={busy} onClick={close} type="button">取消</button><button className="button button-secondary" disabled={busy} form={form} type="submit">{preview.isPending ? "分配中…" : "预览分配"}</button><button className="button button-primary" disabled={busy || !allocations} onClick={save} type="button">{mutation.isPending ? "保存中…" : "保存实际收付"}</button></>}>
     <p className="dialog-intro">按实际金额分别填写本金、利息和费用。预览默认分配到最早期次，也可调整到其他期次；未约定的额外收付单独保留。提前还款后，可调整后续计划。</p>
     <form id={form} className="loan-form" onSubmit={(event) => { event.preventDefault(); if (!busy) preview.mutate(); }}><fieldset disabled={busy}>
