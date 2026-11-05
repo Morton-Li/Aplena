@@ -27,12 +27,14 @@ import {
 } from "../../shared/api/referenceRates";
 import { getDomainContract } from "../../shared/api/domain";
 import { describeError } from "../../shared/formatting/errors";
-import { currencyName, formatExchangeRate, formatMoney, monthLabel } from "../../shared/formatting/finance";
+import { currencyName, formatExchangeRate, formatMoney, isValidMonth, monthLabel } from "../../shared/formatting/finance";
 import { Dialog } from "../../shared/components/Dialog";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { Select } from "../../shared/components/Select";
 import { AutomaticEntryNotices } from "../automatic/AutomaticEntryNotices";
+import { refreshFinancialQueries } from "../automatic/refreshFinancialQueries";
 import { MonthlyDetailDrawer } from "./MonthlyDetailDrawer";
+import { LinkedActualDialog } from "./LinkedActualDialog";
 import { MonthlyWorkspace } from "./MonthlyWorkspaceView";
 import {
   defaultActualEntryDate,
@@ -55,7 +57,7 @@ export function MonthlyPage() {
   const [previewOverrides, setPreviewOverrides] = useState<RateOverrideInput[]>([]);
   const currentMonth = startupQuery.data?.current_month ?? "";
   const requestedMonth = searchParams.get("month");
-  const month = validMonth(requestedMonth) ? requestedMonth : currentMonth;
+  const month = isValidMonth(requestedMonth) ? requestedMonth : currentMonth;
   const isCurrentMonth = month === currentMonth;
   const isHistoricalMonth = Boolean(currentMonth && month < currentMonth);
   const itemsQuery = useQuery({
@@ -72,19 +74,13 @@ export function MonthlyPage() {
   const [filters, setFilters] = useState<MonthlyWorkspaceFilters>(defaultMonthlyWorkspaceFilters);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => searchParams.get("item"));
   const [creatingTemporaryCategory, setCreatingTemporaryCategory] = useState(false);
+  const [linkingRule, setLinkingRule] = useState(false);
   const [entryDialog, setEntryDialog] = useState<EntryDialogRequest>(null);
 
   const invalidateMonth = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.startup }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.monthly(month) }),
-      queryClient.invalidateQueries({ queryKey: ["month-preview", month] }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.existingMonths }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.monthAnalytics(month) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
-      queryClient.invalidateQueries({ queryKey: ["automatic-occurrences"] }),
-      queryClient.invalidateQueries({ queryKey: ["special-projects"] }),
-      queryClient.invalidateQueries({ queryKey: ["special-project"] }),
+      refreshFinancialQueries(queryClient),
     ]);
   };
   const items = useMemo(() => itemsQuery.data ?? [], [itemsQuery.data]);
@@ -102,7 +98,7 @@ export function MonthlyPage() {
             ? "按实际归属月份补录、编辑或删除条目；计划快照仍保持冻结。"
             : "查看预算类目、补充临时类目并记录实际收支。"}</p>
         </div>
-        <div className="header-actions"><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button></div>
+        <div className="header-actions"><button className="button button-secondary" disabled={!month || !ratesQuery.data} type="button" onClick={() => setLinkingRule(true)}>关联规则录入实际</button><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button></div>
       </header>
 
       {startupQuery.data?.error && (
@@ -170,6 +166,19 @@ export function MonthlyPage() {
           }}
         />
       )}
+      {linkingRule && <LinkedActualDialog
+        month={month}
+        onClose={() => setLinkingRule(false)}
+        onLinked={async (item) => {
+          queryClient.setQueryData<MonthlyItem[]>(queryKeys.monthly(month), (current = []) => [
+            ...current.filter((candidate) => candidate.id !== item.id), item,
+          ]);
+          setLinkingRule(false);
+          setSelectedItemId(item.id);
+          setEntryDialog({ item });
+          await invalidateMonth();
+        }}
+      />}
       {entryDialog && ratesQuery.data && (
         <EntryDialog
           month={month}
@@ -178,7 +187,6 @@ export function MonthlyPage() {
           item={entryDialog.item}
           onClose={() => setEntryDialog(null)}
           onSaved={async () => {
-            await queryClient.invalidateQueries({ queryKey: queryKeys.actualEntries(entryDialog.item.id) });
             setEntryDialog(null);
             await invalidateMonth();
           }}
@@ -390,14 +398,6 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
     {(item.item_origin === "SPECIAL_PROJECT" || existing?.detail_group) && <label>明细分组（可选）<input value={detailGroup} onChange={(event) => setDetailGroup(event.target.value)} placeholder="例如：交通、住宿、材料" /></label>}
     {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
   </Dialog>;
-}
-
-function validMonth(value: string | null): value is string {
-  if (!value) return false;
-  const match = /^(\d{4})-(\d{2})$/.exec(value);
-  if (!match) return false;
-  const numericMonth = Number(match[2]);
-  return Number(match[1]) > 0 && numericMonth >= 1 && numericMonth <= 12;
 }
 
 function flowForCategory(category: string): "INCOME" | "EXPENSE" {

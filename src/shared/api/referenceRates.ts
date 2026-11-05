@@ -12,28 +12,32 @@ export async function fetchEcbReferenceRates(
 ): Promise<ReferenceRateObservation[]> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), ECB_REQUEST_TIMEOUT_MS);
-  let response: Response;
   try {
-    response = await fetcher(ECB_REFERENCE_RATES_URL, {
+    const response = await fetcher(ECB_REFERENCE_RATES_URL, {
       headers: { Accept: "text/csv" },
       signal: controller.signal,
     });
+    if (!response.ok) {
+      throw new Error(`ECB reference rates request failed (${response.status})`);
+    }
+    const rows = parseEcbCsv(await response.text());
+    const observedOn = rows.reduce(
+      (latest, row) => row.observedOn > latest ? row.observedOn : latest,
+      "",
+    );
+    if (!observedOn) throw new Error("ECB reference rates response was empty");
+    return [
+      { currency: "EUR", euroRate: "1", observedOn },
+      ...rows.filter((row) => row.observedOn === observedOn),
+    ].sort((left, right) => left.currency.localeCompare(right.currency));
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("获取欧洲央行参考汇率超时，请稍后重试，或在设置中补充备用汇率。", { cause: error });
+    }
+    throw error;
   } finally {
     window.clearTimeout(timeout);
   }
-  if (!response.ok) {
-    throw new Error(`ECB reference rates request failed (${response.status})`);
-  }
-  const rows = parseEcbCsv(await response.text());
-  const observedOn = rows.reduce(
-    (latest, row) => row.observedOn > latest ? row.observedOn : latest,
-    "",
-  );
-  if (!observedOn) throw new Error("ECB reference rates response was empty");
-  return [
-    { currency: "EUR", euroRate: "1", observedOn },
-    ...rows.filter((row) => row.observedOn === observedOn),
-  ].sort((left, right) => left.currency.localeCompare(right.currency));
 }
 
 export function isReferenceRateStale(

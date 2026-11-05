@@ -5,7 +5,8 @@ import { Link, useParams } from "react-router-dom";
 import { getHistoryAnalytics, queryKeys, type MonthAnalytics } from "../../shared/api/finance";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { describeError } from "../../shared/formatting/errors";
-import { formatMoney, formatPercent, monthLabel } from "../../shared/formatting/finance";
+import { formatMoney, formatPercent, isValidMonth, monthLabel } from "../../shared/formatting/finance";
+import { HistoricalMonthEntry } from "./HistoricalMonthEntry";
 import { MonthReportDetail } from "./MonthReportDetail";
 import {
   defaultExpandedHistoryYears,
@@ -26,7 +27,7 @@ export function HistoryPage() {
   const months = historyQuery.data.months;
   if (month) return <MonthReportPage requestedMonth={month} months={months} />;
   if (months.length === 0) {
-    return <EmptyState eyebrow="历史报表" title="还没有可查看的月份" description="录入第一个月份的实际数据后，月度详细报告会自动出现在这里；只有进入明确的调整操作才会修改数据。" action={<Link className="button button-primary" to="/monthly">录入本月实际</Link>} />;
+    return <EmptyState eyebrow="历史报表" title="还没有可查看的月份" description="录入第一个月份的实际数据后，月度详细报告会自动出现在这里；只有进入明确的调整操作才会修改数据。" action={<div className="empty-actions"><Link className="button button-primary" to="/monthly">录入本月实际</Link><HistoricalMonthEntry /></div>} />;
   }
   return <HistoryIndex months={months} />;
 }
@@ -53,7 +54,7 @@ function HistoryIndex({ months }: { months: MonthAnalytics[] }) {
           <h1>历史报表</h1>
           <p>按年份浏览月度财务结果，再进入某个月查看完整分析；实际条目可在明确的调整入口中补录、编辑或删除。</p>
         </div>
-        <span className="context-chip">{groups.length} 个年度 · {months.length} 个月份</span>
+        <div className="header-actions"><span className="context-chip">{groups.length} 个年度 · {months.length} 个月份</span><HistoricalMonthEntry /></div>
       </header>
 
       <section className="history-year-index" aria-labelledby="history-year-index-title">
@@ -134,8 +135,8 @@ function HistoryMonthRow({ analytics }: { analytics: MonthAnalytics }) {
 function MonthReportPage({ requestedMonth, months }: { requestedMonth: string; months: MonthAnalytics[] }) {
   const selectedIndex = months.findIndex((item) => item.month === requestedMonth);
   const selected = selectedIndex >= 0 ? months[selectedIndex] : null;
-  if (!selected || !/^\d{4}-\d{2}$/.test(requestedMonth)) {
-    return <EmptyState eyebrow="历史报表" title="没有找到这个月份" description="该月份没有可用的月度快照或实际条目。历史浏览不会自动创建缺失数据。" action={<Link className="button button-primary" to="/history">返回历史报表</Link>} />;
+  if (!selected || !isValidMonth(requestedMonth)) {
+    return <EmptyState eyebrow="历史报表" title="没有找到这个月份" description="该月份没有可用的月度快照或实际条目。历史浏览不会自动创建缺失数据。" action={<div className="empty-actions"><HistoricalMonthEntry month={requestedMonth} /><Link className="button button-secondary" to="/history">返回历史报表</Link></div>} />;
   }
   const previous = months[selectedIndex - 1];
   const next = months[selectedIndex + 1];

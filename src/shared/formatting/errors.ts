@@ -29,6 +29,7 @@ export function describeError(value: unknown): string {
       LOAN_NOT_SETTLED: "本金或计划利息费用尚未结清，暂不能归档。",
       LOAN_ARCHIVED: "借贷已归档，请恢复后调整计划。",
       DUPLICATE_PLAN_ITEM_NAME: "已有同名周期规则，请使用不同名称。",
+      DELETED_PLAN_CANNOT_ACCEPT_ENTRY: "原规则已删除，已有条目继续保留；新增实际请关联仍存在的规则或添加临时类目。",
       MISSING_EXCHANGE_RATE: currency ? `缺少 ${currency} 汇率，请先到设置中补充。` : "缺少必要汇率。",
       INVALID_REFERENCE_RATE: "欧洲央行返回了无法识别的参考汇率。",
       REFERENCE_RATES_EMPTY: "欧洲央行未返回可用的每日参考汇率。",

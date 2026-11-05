@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deleteActualEntry, listActualEntries, type ActualEntry, type MonthlyItem } from "../../shared/api/finance";
 import { MonthlyDetailDrawer } from "./MonthlyDetailDrawer";
+import { refreshFinancialQueries } from "../automatic/refreshFinancialQueries";
 
 vi.mock("../../shared/api/finance", async () => ({
   ...await vi.importActual<typeof import("../../shared/api/finance")>("../../shared/api/finance"),
@@ -30,7 +31,7 @@ const migrated: ActualEntry = { ...automatic, id: "entry-migrated", origin: "MIG
 function setup(monthlyItem = item) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const onClose = vi.fn();
-  const onSaved = vi.fn().mockResolvedValue(undefined);
+  const onSaved = vi.fn(() => refreshFinancialQueries(client));
   const onEditEntry = vi.fn();
   render(<QueryClientProvider client={client}><MemoryRouter><MonthlyDetailDrawer item={monthlyItem} onClose={onClose} onSaved={onSaved} onDeleted={vi.fn()} onAddEntry={vi.fn()} onEditEntry={onEditEntry} /></MemoryRouter></QueryClientProvider>);
   return { onClose, onSaved, onEditEntry };

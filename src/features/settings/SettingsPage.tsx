@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import {
@@ -68,6 +68,7 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
       baseCurrency: settings.base_currency,
     },
   });
+  const selectedBaseCurrency = useWatch({ control: form.control, name: "baseCurrency" });
   const mutation = useMutation({
     mutationFn: (values: SettingsValues) =>
       saveSettings({
@@ -100,6 +101,7 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
         </label>
         <button className="button button-secondary" disabled={mutation.isPending || !form.formState.isDirty} type="submit">{mutation.isPending ? "保存中…" : "保存"}</button>
       </div>
+      {selectedBaseCurrency !== settings.base_currency && <p className="base-currency-feedback">切换前，请先在“当前汇率”中保存目标币相对于 {settings.base_currency} 的有效汇率（1 单位目标币 = N {settings.base_currency}）。现有汇率将按比例换算为备用手动汇率，参考日期清空；需要最新报价时可再更新官方汇率。</p>}
       {mutation.isError && <div className="base-currency-feedback inline-error" role="alert">{describeError(mutation.error)}</div>}
       {mutation.isSuccess && <div className="base-currency-feedback inline-success" role="status">本位币已保存。</div>}
     </form>
@@ -191,7 +193,7 @@ function RateSettings({ settings }: { settings: Settings }) {
         <button className="button button-secondary" disabled={saveMutation.isPending} type="submit">{editing ? "更新汇率" : "添加汇率"}</button>
         {editing && <button className="button button-quiet" type="button" onClick={() => { setEditing(null); form.reset(); }}>取消编辑</button>}
       </form>
-      <small className="settings-rate-fallback">手动输入仅作为官方接口暂不可用或币种未覆盖时的备用方式。</small>
+      <small className="settings-rate-fallback">汇率表示 1 单位所选币种可兑换多少 {settings.base_currency}。手动输入可用于补充切换本位币的兑换依据，或作为官方接口暂不可用时的备用方式。</small>
       {(saveMutation.isError || deleteMutation.isError || syncMutation.isError || autoUpdateMutation.isError) && <div className="inline-error" role="alert">{describeError(saveMutation.error ?? deleteMutation.error ?? syncMutation.error ?? autoUpdateMutation.error)}</div>}
     </section>
   );

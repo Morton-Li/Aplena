@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
@@ -36,7 +36,6 @@ const focusableSelector = [
 ].join(",");
 
 export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEntry, onEditEntry }: MonthlyDetailDrawerProps) {
-  const queryClient = useQueryClient();
   const titleId = useId();
   const drawerRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null);
@@ -57,7 +56,6 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
     mutationFn: (id: string) => deleteActualEntry(id),
     onSuccess: async () => {
       setEntryPendingDeletion(null);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.actualEntries(item.id) });
       await onSaved();
     },
     onSettled: () => { deletingEntry.current = false; },
