@@ -1149,6 +1149,213 @@ async fn automatic_rate_refresh_preference_is_persisted() {
     );
 }
 
+async fn saved_rate(service: &FinanceService, currency: &str, rate: &str) {
+    service
+        .upsert_exchange_rate(ExchangeRateUpsertDto {
+            currency: currency.to_owned(),
+            rate: rate.to_owned(),
+        })
+        .await
+        .unwrap();
+}
+
+fn settings_input(base: &str, auto_update: bool) -> SettingsInputDto {
+    SettingsInputDto {
+        base_currency: base.to_owned(),
+        auto_update_exchange_rates: auto_update,
+    }
+}
+
+#[tokio::test]
+async fn base_currency_change_rebases_rates_and_future_rule_projection_without_deleting_references()
+{
+    let service = test_service().await;
+    saved_rate(&service, "USD", "7.2").await;
+    saved_rate(&service, "EUR", "8").await;
+    let next = current_month().next_month().unwrap();
+    for (name, category, amount, currency) in [
+        ("未来工资", "FIXED_INCOME", "720", "CNY"),
+        ("未来美元支出", "ESSENTIAL_EXPENSE", "10", "USD"),
+        ("未来欧元支出", "ESSENTIAL_EXPENSE", "9", "EUR"),
+    ] {
+        service
+            .create_plan_item(plan(
+                name,
+                category,
+                amount,
+                currency,
+                1,
+                "AMORTIZED",
+                next,
+                None,
+            ))
+            .await
+            .unwrap();
+    }
+    let store = service.test_store().await;
+    sqlx::query("UPDATE exchange_rates SET source = 'ECB_REFERENCE', observed_on = '2026-10-30' WHERE currency_code != 'CNY'")
+        .execute(store.pool()).await.unwrap();
+
+    let settings = service
+        .save_settings(settings_input("USD", true))
+        .await
+        .unwrap();
+    assert_eq!(settings.base_currency, "USD");
+    let rates = service.list_exchange_rates().await.unwrap();
+    for (currency, expected) in [
+        ("CNY", "0.13888889"),
+        ("USD", "1.00000000"),
+        ("EUR", "1.11111111"),
+    ] {
+        let rate = rates.iter().find(|rate| rate.currency == currency).unwrap();
+        assert_eq!(rate.base_currency, "USD");
+        assert_eq!(rate.rate, expected);
+        assert_eq!(rate.plan_reference_count, 1);
+        if currency == "USD" {
+            assert!(rate.is_base_currency);
+            assert_eq!(rate.source, "BASE_CURRENCY");
+        } else {
+            assert!(!rate.is_base_currency);
+            assert_eq!(rate.source, "MANUAL");
+            assert_eq!(rate.observed_on, None);
+        }
+    }
+    let projection = service.budget_projection().await.unwrap();
+    assert_eq!(projection.projected_income, "100.00");
+    assert_eq!(projection.projected_expenses, "20.00");
+    let initialized = service.initialize_month(init(next)).await.unwrap();
+    assert_eq!(initialized.created_count, 3);
+    let items = service.list_monthly_items(next.to_string()).await.unwrap();
+    assert!(items.iter().all(|item| item.currency == "USD"));
+    assert_eq!(
+        items
+            .iter()
+            .find(|item| item.item_name == "未来欧元支出")
+            .unwrap()
+            .planned_amount,
+        "10.00"
+    );
+}
+
+#[tokio::test]
+async fn base_currency_change_requires_a_rate_even_in_an_empty_ledger_then_allows_the_switch() {
+    let service = test_service().await;
+    let settings_before = service.get_settings().await.unwrap();
+    let rates_before = service.list_exchange_rates().await.unwrap();
+    let error = service
+        .save_settings(settings_input("EUR", true))
+        .await
+        .unwrap_err();
+    assert_eq!(error.error_code, "MISSING_EXCHANGE_RATE");
+    assert_eq!(
+        error.params.get("currency").map(String::as_str),
+        Some("EUR")
+    );
+    assert_eq!(service.get_settings().await.unwrap(), settings_before);
+    assert_eq!(service.list_exchange_rates().await.unwrap(), rates_before);
+
+    saved_rate(&service, "EUR", "8").await;
+    service
+        .save_settings(settings_input("EUR", true))
+        .await
+        .unwrap();
+    let rates = service.list_exchange_rates().await.unwrap();
+    assert_eq!(
+        rates
+            .iter()
+            .find(|rate| rate.currency == "CNY")
+            .unwrap()
+            .rate,
+        "0.12500000"
+    );
+    assert_eq!(
+        service.get_settings().await.unwrap().unwrap().base_currency,
+        "EUR"
+    );
+}
+
+#[tokio::test]
+async fn base_currency_change_to_unknown_currency_preserves_existing_foreign_rates() {
+    let service = test_service().await;
+    saved_rate(&service, "USD", "7.2").await;
+    let before = service.list_exchange_rates().await.unwrap();
+    assert_eq!(
+        service
+            .save_settings(settings_input("EUR", true))
+            .await
+            .unwrap_err()
+            .error_code,
+        "MISSING_EXCHANGE_RATE"
+    );
+    assert_eq!(service.list_exchange_rates().await.unwrap(), before);
+    assert_eq!(
+        service.get_settings().await.unwrap().unwrap().base_currency,
+        "CNY"
+    );
+}
+
+#[tokio::test]
+async fn same_base_preference_update_keeps_all_rate_values_and_metadata_unchanged() {
+    let service = test_service().await;
+    saved_rate(&service, "USD", "7.2").await;
+    let rates = service.list_exchange_rates().await.unwrap();
+    let settings = service
+        .save_settings(settings_input("CNY", true))
+        .await
+        .unwrap();
+    assert!(settings.auto_update_exchange_rates);
+    assert_eq!(service.list_exchange_rates().await.unwrap(), rates);
+}
+
+#[tokio::test]
+async fn base_currency_change_rejects_overflow_and_rounded_zero_atomically() {
+    for (target_rate, other_rate, code) in [
+        (
+            "0.00000001",
+            "92233720368.54775807",
+            "EXCHANGE_RATE_OUT_OF_RANGE",
+        ),
+        ("10000000000", "0.00000001", "INVALID_EXCHANGE_RATE"),
+    ] {
+        let service = test_service().await;
+        saved_rate(&service, "USD", target_rate).await;
+        saved_rate(&service, "JPY", other_rate).await;
+        let rates = service.list_exchange_rates().await.unwrap();
+        let settings = service.get_settings().await.unwrap();
+        assert_eq!(
+            service
+                .save_settings(settings_input("USD", true))
+                .await
+                .unwrap_err()
+                .error_code,
+            code
+        );
+        assert_eq!(service.get_settings().await.unwrap(), settings);
+        assert_eq!(service.list_exchange_rates().await.unwrap(), rates);
+    }
+}
+
+#[tokio::test]
+async fn base_currency_change_rolls_back_rates_and_settings_after_a_late_database_failure() {
+    let service = test_service().await;
+    saved_rate(&service, "USD", "7.2").await;
+    let rates = service.list_exchange_rates().await.unwrap();
+    let settings = service.get_settings().await.unwrap();
+    let store = service.test_store().await;
+    sqlx::query("CREATE TRIGGER reject_rebased_rate BEFORE UPDATE ON exchange_rates WHEN OLD.currency_code = 'CNY' BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END")
+        .execute(store.pool()).await.unwrap();
+    assert_eq!(
+        service
+            .save_settings(settings_input("USD", true))
+            .await
+            .unwrap_err()
+            .error_code,
+        "DATABASE_CONSTRAINT_FAILED"
+    );
+    assert_eq!(service.get_settings().await.unwrap(), settings);
+    assert_eq!(service.list_exchange_rates().await.unwrap(), rates);
+}
+
 #[tokio::test]
 async fn software_update_preferences_are_persisted_without_overwriting_financial_settings() {
     let directory = tempfile::tempdir().unwrap();
@@ -1476,6 +1683,239 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
         .await
         .unwrap_err();
     assert_eq!(error.error_code, "DELETED_PLAN_CANNOT_ACCEPT_ENTRY");
+}
+
+fn linked_refund(
+    item: &super::dto::MonthlyItemDto,
+    currency: &str,
+    rate: &str,
+) -> ActualEntryInputDto {
+    ActualEntryInputDto {
+        id: None,
+        monthly_item_id: item.id.clone(),
+        occurred_on: format!("{}-03", item.month),
+        effect: "DECREASE".to_owned(),
+        amount: "10.00".to_owned(),
+        currency: currency.to_owned(),
+        exchange_rate: rate.to_owned(),
+        exchange_rate_source: if currency == "CNY" {
+            "BASE_CURRENCY"
+        } else {
+            "MANUAL"
+        }
+        .to_owned(),
+        exchange_rate_observed_on: format!("{}-01", item.month),
+        note: Some("迟到退款".to_owned()),
+        detail_group: None,
+    }
+}
+
+#[tokio::test]
+async fn linked_actual_only_nonpayment_month_stays_zero_and_counts_the_refund_once() {
+    let service = test_service().await;
+    saved_rate(&service, "USD", "7.2").await;
+    let january = YearMonth::new(2026, 1).unwrap();
+    let february = january.next_month().unwrap();
+    let rule = service
+        .create_plan_item(plan(
+            "季度网络费",
+            "ESSENTIAL_EXPENSE",
+            "300",
+            "USD",
+            3,
+            "PAYMENT",
+            january,
+            None,
+        ))
+        .await
+        .unwrap();
+    let request = EnsureActualOnlyInputDto {
+        plan_item_id: rule.id.clone(),
+        month: february.to_string(),
+    };
+    let container = service.ensure_actual_only(request.clone()).await.unwrap();
+    assert_eq!(
+        service.ensure_actual_only(request).await.unwrap(),
+        container
+    );
+    assert_eq!(
+        container.source_plan_item_id.as_deref(),
+        Some(rule.id.as_str())
+    );
+    assert_eq!(container.item_source, "ACTUAL_ONLY");
+    assert_eq!(container.planned_amount, "0.00");
+    assert!(
+        service
+            .list_actual_entries(container.id.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let refund = service
+        .create_actual_entry(linked_refund(&container, "USD", "6.5"))
+        .await
+        .unwrap();
+    assert_eq!(refund.amount, "65.00");
+    let preview = service.preview_month(init(february)).await.unwrap();
+    assert_eq!(preview.candidate_count, 0);
+    assert_eq!(preview.excluded_count, 1);
+    assert_eq!(
+        service
+            .initialize_month(init(february))
+            .await
+            .unwrap()
+            .created_count,
+        0
+    );
+    let items = service
+        .list_monthly_items(february.to_string())
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, container.id);
+    assert_eq!(items[0].item_source, "ACTUAL_ONLY");
+    assert_eq!(items[0].planned_amount, "0.00");
+    assert_eq!(items[0].actual_amount.as_deref(), Some("-65.00"));
+    let analytics = service.month_analytics(february.to_string()).await.unwrap();
+    assert_eq!(analytics.total_item_count, 1);
+    assert_eq!(analytics.expense.actual_to_date.as_deref(), Some("-65.00"));
+    assert_eq!(
+        service.list_actual_entries(container.id).await.unwrap(),
+        vec![refund]
+    );
+}
+
+#[tokio::test]
+async fn linked_actual_only_recognized_month_promotes_with_foreign_snapshot_and_id_preserved() {
+    let service = test_service().await;
+    saved_rate(&service, "USD", "7.2").await;
+    let january = YearMonth::new(2026, 1).unwrap();
+    let rule = service
+        .create_plan_item(plan(
+            "可提升季度网络费",
+            "ESSENTIAL_EXPENSE",
+            "300",
+            "USD",
+            3,
+            "PAYMENT",
+            january,
+            None,
+        ))
+        .await
+        .unwrap();
+    let container = service
+        .ensure_actual_only(EnsureActualOnlyInputDto {
+            plan_item_id: rule.id,
+            month: january.to_string(),
+        })
+        .await
+        .unwrap();
+    let refund = service
+        .create_actual_entry(linked_refund(&container, "USD", "6.5"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .initialize_month(init(january))
+            .await
+            .unwrap()
+            .created_count,
+        1
+    );
+    let promoted = service
+        .list_monthly_items(january.to_string())
+        .await
+        .unwrap();
+    assert_eq!(promoted.len(), 1);
+    assert_eq!(promoted[0].id, container.id);
+    assert_eq!(promoted[0].item_source, "PLANNED");
+    assert_eq!(promoted[0].planned_amount, "2160.00");
+    assert_eq!(promoted[0].actual_amount.as_deref(), Some("-65.00"));
+    assert_eq!(
+        service
+            .list_actual_entries(container.id.clone())
+            .await
+            .unwrap(),
+        vec![refund.clone()]
+    );
+    saved_rate(&service, "USD", "9").await;
+    assert_eq!(
+        service
+            .initialize_month(init(january))
+            .await
+            .unwrap()
+            .created_count,
+        0
+    );
+    assert_eq!(
+        service
+            .list_monthly_items(january.to_string())
+            .await
+            .unwrap(),
+        promoted
+    );
+    assert_eq!(
+        service.list_actual_entries(container.id).await.unwrap(),
+        vec![refund]
+    );
+}
+
+#[tokio::test]
+async fn linked_actual_only_accepts_ended_rules_but_rejects_deleted_rules_without_losing_entries() {
+    let service = test_service().await;
+    let january = YearMonth::new(2026, 1).unwrap();
+    let february = january.next_month().unwrap();
+    let rule = service
+        .create_plan_item(plan(
+            "已结束订阅",
+            "ESSENTIAL_EXPENSE",
+            "300",
+            "CNY",
+            3,
+            "PAYMENT",
+            january,
+            Some(january),
+        ))
+        .await
+        .unwrap();
+    let request = EnsureActualOnlyInputDto {
+        plan_item_id: rule.id.clone(),
+        month: february.to_string(),
+    };
+    let container = service.ensure_actual_only(request.clone()).await.unwrap();
+    let refund = service
+        .create_actual_entry(linked_refund(&container, "CNY", "1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .initialize_month(init(february))
+            .await
+            .unwrap()
+            .created_count,
+        0
+    );
+    service.delete_plan_item(rule.id).await.unwrap();
+    assert_eq!(
+        service
+            .ensure_actual_only(request)
+            .await
+            .unwrap_err()
+            .error_code,
+        "NOT_FOUND"
+    );
+    assert_eq!(
+        service
+            .create_actual_entry(linked_refund(&container, "CNY", "1"))
+            .await
+            .unwrap_err()
+            .error_code,
+        "DELETED_PLAN_CANNOT_ACCEPT_ENTRY"
+    );
+    assert_eq!(
+        service.list_actual_entries(container.id).await.unwrap(),
+        vec![refund]
+    );
 }
 
 #[tokio::test]

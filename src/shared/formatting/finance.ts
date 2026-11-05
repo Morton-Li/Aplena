@@ -70,6 +70,10 @@ export function monthLabel(month: string) {
   return year && value ? `${year} 年 ${Number(value)} 月` : month;
 }
 
+export function isValidMonth(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(value);
+}
+
 function displayDecimal(value: string) {
   return value.startsWith("-") ? `−${value.slice(1)}` : value;
 }

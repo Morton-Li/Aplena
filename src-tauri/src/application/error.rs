@@ -122,6 +122,13 @@ impl AppError {
 
     pub fn from_store(error: StoreError) -> Self {
         match error {
+            StoreError::BaseCurrencyLocked => {
+                Self::business("BASE_CURRENCY_LOCKED", "error.base_currency_locked")
+            }
+            StoreError::MissingExchangeRate(currency) => {
+                Self::business("MISSING_EXCHANGE_RATE", "error.missing_exchange_rate")
+                    .with_param("currency", currency.to_string())
+            }
             StoreError::Domain(error) => Self::from_domain(error, None),
             StoreError::InvalidUuid => {
                 Self::business("INVALID_PERSISTED_UUID", "error.invalid_persisted_uuid")

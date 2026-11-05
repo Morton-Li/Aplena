@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use pfcm_domain::{
     ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, Category,
-    CurrencyCode, ExchangeRate, FlowType, MonthlyItem, MonthlyItemSource, PlanItem,
+    CurrencyCode, DomainError, ExchangeRate, FlowType, MonthlyItem, MonthlyItemSource, PlanItem,
     RecognitionMode, Settings, SignedAmount, YearMonth,
 };
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, pool::PoolConnection};
@@ -129,16 +129,64 @@ impl Store {
         timestamp: &str,
     ) -> Result<StoredSettings, StoreError> {
         let mut transaction = self.pool.begin().await?;
-        sqlx::query(
-            "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
-             VALUES (?, 100000000, 'BASE_CURRENCY', date(?), ?) \
-             ON CONFLICT(currency_code) DO NOTHING",
-        )
-        .bind(settings.base_currency().as_str())
-        .bind(timestamp)
-        .bind(timestamp)
-        .execute(&mut *transaction)
-        .await?;
+        let previous = Self::get_settings_on(&mut transaction)
+            .await?
+            .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
+        let mut rebased = Vec::new();
+        if previous.value.base_currency() != settings.base_currency() {
+            // Check locks before requiring a target rate. The database triggers also
+            // enforce these locks when the settings row is updated below.
+            let locked: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM monthly_items) \
+                 OR EXISTS (SELECT 1 FROM special_projects) OR EXISTS (SELECT 1 FROM loans)",
+            )
+            .fetch_one(&mut *transaction)
+            .await?;
+            if locked {
+                return Err(StoreError::BaseCurrencyLocked);
+            }
+            let target = Self::get_exchange_rate_on(
+                &mut transaction,
+                settings.base_currency(),
+                previous.value.base_currency(),
+            )
+            .await?
+            .ok_or_else(|| StoreError::MissingExchangeRate(settings.base_currency().clone()))?;
+            let rows: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT currency_code, rate_scaled FROM exchange_rates ORDER BY currency_code",
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
+            // Validate every fixed-point result before writing anything.
+            for (currency, scaled) in rows {
+                let source = CurrencyCode::new(currency)?;
+                let previous_rate = ExchangeRate::from_scaled_i64(
+                    source.clone(),
+                    previous.value.base_currency().clone(),
+                    scaled,
+                )?;
+                let value = previous_rate
+                    .value()
+                    .checked_div(target.value())
+                    .ok_or(DomainError::ArithmeticOverflow)?;
+                rebased.push(ExchangeRate::new(
+                    source,
+                    settings.base_currency().clone(),
+                    value,
+                )?);
+            }
+            // The new base must be one before changing settings. The old base
+            // must stay one until settings no longer names it. Keep all FK rows.
+            sqlx::query(
+                "UPDATE exchange_rates SET rate_scaled = 100000000, source = 'BASE_CURRENCY', \
+                 observed_on = date(?), updated_at = ? WHERE currency_code = ?",
+            )
+            .bind(timestamp)
+            .bind(timestamp)
+            .bind(settings.base_currency().as_str())
+            .execute(&mut *transaction)
+            .await?;
+        }
         let result = sqlx::query(
             "UPDATE settings SET base_currency_code = ?, auto_update_exchange_rates = ?, updated_at = ? WHERE id = 1",
         )
@@ -148,6 +196,22 @@ impl Store {
         .execute(&mut *transaction)
         .await?;
         require_changed(result.rows_affected())?;
+        for rate in rebased {
+            if rate.source_currency() == settings.base_currency() {
+                continue;
+            }
+            // Cross rates derived from saved values are not fresh ECB quotes.
+            // A single observation date would misrepresent their mixed inputs.
+            sqlx::query(
+                "UPDATE exchange_rates SET rate_scaled = ?, source = 'MANUAL', \
+                 observed_on = NULL, updated_at = ? WHERE currency_code = ?",
+            )
+            .bind(rate.scaled_i64())
+            .bind(timestamp)
+            .bind(rate.source_currency().as_str())
+            .execute(&mut *transaction)
+            .await?;
+        }
         transaction.commit().await?;
         self.get_settings()
             .await?
