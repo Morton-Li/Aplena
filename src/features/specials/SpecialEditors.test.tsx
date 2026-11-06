@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SpecialActualEntry } from "../../shared/api/specials";
 import { SpecialActualEditor, SpecialAllocationEditor } from "./SpecialEditors";
@@ -19,6 +19,7 @@ function wrap(children: ReactNode) {
 
 describe("special actual editor", () => {
   beforeEach(() => { vi.mocked(invoke).mockReset(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
 
   it("edits the existing monthly fact and keeps its original FX snapshot and identity", async () => {
     const user = userEvent.setup();
@@ -57,6 +58,28 @@ describe("special actual editor", () => {
     }) });
     await act(async () => { release(specialEntry()); await pending; });
     await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+  });
+
+  it("displays and saves derived provenance when the reference service is unavailable", async () => {
+    const user = userEvent.setup();
+    const saved = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Offline")));
+    vi.mocked(invoke).mockResolvedValue(specialEntry());
+    const rates = specialRates.map((rate) => rate.currency === "USD"
+      ? { ...rate, observed_on: null, rebased_from_currency: "EUR", rebased_on: "2026-11-04" }
+      : rate);
+    wrap(<SpecialActualEditor project={specialProject()} currentMonth="2026-11" rates={rates} detailGroups={[]} onClose={vi.fn()} onSaved={saved} />);
+    await user.click(screen.getByRole("combobox", { name: "专项条目币种" }));
+    await user.click(screen.getByRole("option", { name: /美元/ }));
+    await user.type(screen.getByLabelText(/原币金额/), "25.00");
+    await user.click(screen.getByRole("button", { name: "保存条目" }));
+    await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("create_special_actual_entry", { input: expect.objectContaining({
+      currency: "USD", exchangeRate: "8.00000000", exchangeRateSource: "MANUAL", exchangeRateObservedOn: "2026-11-04",
+      exchangeRateRebasedFromCurrency: "EUR", exchangeRateRebasedOn: "2026-11-04",
+    }) });
+    expect(screen.getByText(/本位币切换换算 · 原本位币 EUR · 换算日 2026-11-04/)).toBeInTheDocument();
+    expect(screen.queryByText(/备用手动汇率|欧洲央行每日参考汇率/)).not.toBeInTheDocument();
   });
 
   it("keeps the entered draft reviewable when the backend rejects saving", async () => {

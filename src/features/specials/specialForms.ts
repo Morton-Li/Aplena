@@ -1,7 +1,6 @@
-import type { ActualEntryInput, ExchangeRate } from "../../shared/api/finance";
+import { entryRateInput, type EntryRateSnapshot } from "../../shared/api/entryRateSnapshot";
 import {
   specialExpenseCategories,
-  type SpecialActualEntry,
   type SpecialActualEntryInput,
   type SpecialAllocation,
   type SpecialExpenseCategory,
@@ -15,12 +14,6 @@ export interface SpecialEntryValues {
   currency: string;
   note: string;
   detailGroup: string;
-}
-
-export interface EntryRateSnapshot {
-  rate: string;
-  source: ActualEntryInput["exchangeRateSource"];
-  observedOn: string;
 }
 
 export function validSpecialMonth(value: string) {
@@ -61,25 +54,6 @@ export function specialEntryValidation(values: SpecialEntryValues) {
   return null;
 }
 
-export function specialEntryRateSnapshot(
-  currency: string,
-  baseCurrency: string,
-  occurredOn: string,
-  rates: ExchangeRate[],
-  existing?: SpecialActualEntry,
-): EntryRateSnapshot | null {
-  if (existing) {
-    return {
-      rate: existing.exchange_rate,
-      source: existing.exchange_rate_source === "MIGRATED_BASE" ? "BASE_CURRENCY" : existing.exchange_rate_source,
-      observedOn: existing.exchange_rate_observed_on,
-    };
-  }
-  if (currency === baseCurrency) return { rate: "1.00000000", source: "BASE_CURRENCY", observedOn: occurredOn };
-  const rate = rates.find((candidate) => candidate.currency === currency && candidate.base_currency === baseCurrency);
-  return rate ? { rate: rate.rate, source: rate.source, observedOn: rate.observed_on ?? occurredOn } : null;
-}
-
 export function specialActualInput(
   projectId: string,
   values: SpecialEntryValues,
@@ -94,9 +68,7 @@ export function specialActualInput(
     effect: values.effect,
     amount,
     currency: values.currency,
-    exchangeRate: snapshot.rate,
-    exchangeRateSource: snapshot.source,
-    exchangeRateObservedOn: snapshot.observedOn,
+    ...entryRateInput(snapshot),
     note: values.note.trim() || undefined,
     detailGroup: values.detailGroup.trim() || undefined,
   };

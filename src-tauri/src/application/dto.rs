@@ -30,6 +30,10 @@ pub struct ExchangeRateDto {
     pub is_base_currency: bool,
     pub source: String,
     pub observed_on: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebased_from_currency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebased_on: Option<String>,
     pub plan_reference_count: i64,
     pub updated_at: String,
 }
@@ -119,6 +123,8 @@ pub struct ActualEntryInputDto {
     pub exchange_rate: String,
     pub exchange_rate_source: String,
     pub exchange_rate_observed_on: String,
+    pub exchange_rate_rebased_from_currency: Option<String>,
+    pub exchange_rate_rebased_on: Option<String>,
     pub note: Option<String>,
     #[serde(default)]
     pub detail_group: Option<String>,
@@ -136,6 +142,10 @@ pub struct ActualEntryDto {
     pub exchange_rate: String,
     pub exchange_rate_source: String,
     pub exchange_rate_observed_on: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exchange_rate_rebased_from_currency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exchange_rate_rebased_on: Option<String>,
     pub origin: String,
     pub note: Option<String>,
     pub detail_group: Option<String>,
@@ -362,6 +372,7 @@ pub struct PlanPreviewRequestDto {
     pub target_month: String,
     pub plan_item: PlanItemInputDto,
     pub exchange_rate: ExchangeRateInputDto,
+    pub automatic_first_date: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -371,6 +382,7 @@ pub struct PlanPreviewDto {
     pub monthly_equivalent: Option<String>,
     pub recognized_amount: Option<String>,
     pub scheduled_date: Option<String>,
+    pub next_automatic_date: Option<String>,
     pub base_currency: String,
 }
 

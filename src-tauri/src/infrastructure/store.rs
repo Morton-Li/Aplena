@@ -2,15 +2,15 @@ use std::str::FromStr;
 
 use pfcm_domain::{
     ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, Category,
-    CurrencyCode, ExchangeRate, FlowType, MonthlyItem, MonthlyItemSource, PlanItem,
+    CurrencyCode, DomainError, ExchangeRate, FlowType, MonthlyItem, MonthlyItemSource, PlanItem,
     RecognitionMode, Settings, SignedAmount, YearMonth,
 };
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, pool::PoolConnection};
 use uuid::Uuid;
 
 use super::{
-    ActualEntryExchangeSnapshot, DeletePlanResult, StoreError, StoredActualEntry,
-    StoredExchangeRate, StoredMonthlyItem, StoredPlanItem, StoredSettings,
+    ActualEntryExchangeSnapshot, DeletePlanResult, ExchangeRateDerivation, StoreError,
+    StoredActualEntry, StoredExchangeRate, StoredMonthlyItem, StoredPlanItem, StoredSettings,
     StoredSoftwareUpdatePreferences,
 };
 
@@ -100,7 +100,8 @@ impl Store {
             "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
              VALUES (?, 100000000, 'BASE_CURRENCY', date(?), ?) \
              ON CONFLICT(currency_code) DO UPDATE SET rate_scaled = 100000000, \
-             source = 'BASE_CURRENCY', observed_on = excluded.observed_on, updated_at = excluded.updated_at",
+             source = 'BASE_CURRENCY', observed_on = excluded.observed_on, updated_at = excluded.updated_at, \
+             rebased_from_currency = NULL, rebased_on = NULL",
         )
         .bind(settings.base_currency().as_str())
         .bind(timestamp)
@@ -127,18 +128,74 @@ impl Store {
         &self,
         settings: &Settings,
         timestamp: &str,
+        rebased_on: CalendarDate,
     ) -> Result<StoredSettings, StoreError> {
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query(
-            "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
-             VALUES (?, 100000000, 'BASE_CURRENCY', date(?), ?) \
-             ON CONFLICT(currency_code) DO NOTHING",
-        )
-        .bind(settings.base_currency().as_str())
-        .bind(timestamp)
-        .bind(timestamp)
-        .execute(&mut *transaction)
-        .await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let previous = Self::get_settings_on(&mut transaction)
+            .await?
+            .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
+        let previous_base = previous.value.base_currency();
+        let mut rebased = Vec::new();
+        if previous_base != settings.base_currency() {
+            // Check locks before requiring a target rate. The database triggers also
+            // enforce these locks when the settings row is updated below.
+            let locked: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM monthly_items) \
+                 OR EXISTS (SELECT 1 FROM special_projects) OR EXISTS (SELECT 1 FROM loans)",
+            )
+            .fetch_one(&mut *transaction)
+            .await?;
+            if locked {
+                return Err(StoreError::BaseCurrencyLocked);
+            }
+            let rows: Vec<(String, i64, String)> = sqlx::query_as(
+                "SELECT currency_code, rate_scaled, source FROM exchange_rates ORDER BY currency_code",
+            )
+            .fetch_all(&mut *transaction)
+            .await?;
+            // Older releases could leave the former base at a synthetic rate of one.
+            if let Some((currency, _, _)) = rows.iter().find(|(currency, _, source)| {
+                source == "BASE_CURRENCY" && currency != previous_base.as_str()
+            }) {
+                return Err(StoreError::LegacyBaseRateRequiresUpdate(CurrencyCode::new(
+                    currency,
+                )?));
+            }
+            let target = Self::get_exchange_rate_on(
+                &mut transaction,
+                settings.base_currency(),
+                previous_base,
+            )
+            .await?
+            .ok_or_else(|| StoreError::MissingExchangeRate(settings.base_currency().clone()))?;
+            // Validate every fixed-point result before writing anything.
+            for (currency, scaled, _) in rows {
+                let source = CurrencyCode::new(currency)?;
+                let previous_rate =
+                    ExchangeRate::from_scaled_i64(source.clone(), previous_base.clone(), scaled)?;
+                let value = previous_rate
+                    .value()
+                    .checked_div(target.value())
+                    .ok_or(DomainError::ArithmeticOverflow)?;
+                rebased.push(ExchangeRate::new(
+                    source,
+                    settings.base_currency().clone(),
+                    value,
+                )?);
+            }
+            // The new base must be one before changing settings. The old base
+            // must stay one until settings no longer names it. Keep all FK rows.
+            sqlx::query(
+                "UPDATE exchange_rates SET rate_scaled = 100000000, source = 'BASE_CURRENCY', \
+                 observed_on = date(?), updated_at = ?, rebased_from_currency = NULL, rebased_on = NULL \
+                 WHERE currency_code = ?",
+            )
+            .bind(timestamp)
+            .bind(timestamp)
+            .bind(settings.base_currency().as_str())
+            .execute(&mut *transaction)
+            .await?;
+        }
         let result = sqlx::query(
             "UPDATE settings SET base_currency_code = ?, auto_update_exchange_rates = ?, updated_at = ? WHERE id = 1",
         )
@@ -148,10 +205,30 @@ impl Store {
         .execute(&mut *transaction)
         .await?;
         require_changed(result.rows_affected())?;
-        transaction.commit().await?;
-        self.get_settings()
+        for rate in rebased {
+            if rate.source_currency() == settings.base_currency() {
+                continue;
+            }
+            // Cross rates derived from saved values are not fresh ECB quotes.
+            // A single observation date would misrepresent their mixed inputs.
+            sqlx::query(
+                "UPDATE exchange_rates SET rate_scaled = ?, source = 'MANUAL', \
+                 observed_on = NULL, updated_at = ?, rebased_from_currency = ?, rebased_on = ? \
+                 WHERE currency_code = ?",
+            )
+            .bind(rate.scaled_i64())
+            .bind(timestamp)
+            .bind(previous_base.as_str())
+            .bind(rebased_on.to_string())
+            .bind(rate.source_currency().as_str())
+            .execute(&mut *transaction)
+            .await?;
+        }
+        let saved = Self::get_settings_on(&mut transaction)
             .await?
-            .ok_or(StoreError::Database(sqlx::Error::RowNotFound))
+            .ok_or(StoreError::Database(sqlx::Error::RowNotFound))?;
+        transaction.commit().await?;
+        Ok(saved)
     }
 
     pub async fn list_exchange_rates(&self) -> Result<Vec<StoredExchangeRate>, StoreError> {
@@ -161,10 +238,12 @@ impl Store {
         };
         let rows = sqlx::query(
             "SELECT e.currency_code, e.rate_scaled, e.source, e.observed_on, e.updated_at, \
+                    e.rebased_from_currency, e.rebased_on, \
                     COUNT(p.id) AS plan_reference_count \
              FROM exchange_rates e \
              LEFT JOIN plan_items p ON p.currency_code = e.currency_code \
-             GROUP BY e.currency_code, e.rate_scaled, e.source, e.observed_on, e.updated_at \
+             GROUP BY e.currency_code, e.rate_scaled, e.source, e.observed_on, e.updated_at, \
+                      e.rebased_from_currency, e.rebased_on \
              ORDER BY e.currency_code",
         )
         .fetch_all(&self.pool)
@@ -187,7 +266,8 @@ impl Store {
              VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT(currency_code) DO UPDATE \
              SET rate_scaled = excluded.rate_scaled, source = excluded.source, \
-                 observed_on = excluded.observed_on, updated_at = excluded.updated_at",
+                 observed_on = excluded.observed_on, updated_at = excluded.updated_at, \
+                 rebased_from_currency = NULL, rebased_on = NULL",
         )
         .bind(exchange_rate.source_currency().as_str())
         .bind(exchange_rate.scaled_i64())
@@ -213,7 +293,8 @@ impl Store {
                  VALUES (?, ?, ?, ?, ?) \
                  ON CONFLICT(currency_code) DO UPDATE \
                  SET rate_scaled = excluded.rate_scaled, source = excluded.source, \
-                     observed_on = excluded.observed_on, updated_at = excluded.updated_at",
+                     observed_on = excluded.observed_on, updated_at = excluded.updated_at, \
+                     rebased_from_currency = NULL, rebased_on = NULL",
             )
             .bind(exchange_rate.source_currency().as_str())
             .bind(exchange_rate.scaled_i64())
@@ -290,8 +371,8 @@ impl Store {
         self.get_plan_item(plan_item.id()).await
     }
 
-    pub async fn update_plan_item(
-        &self,
+    pub(crate) async fn update_plan_item_on(
+        connection: &mut SqliteConnection,
         plan_item: &PlanItem,
         timestamp: &str,
     ) -> Result<StoredPlanItem, StoreError> {
@@ -311,10 +392,10 @@ impl Store {
         .bind(plan_item.note())
         .bind(timestamp)
         .bind(plan_item.id().to_string())
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
         require_changed(result.rows_affected())?;
-        self.get_plan_item(plan_item.id()).await
+        Self::get_plan_item_on(connection, plan_item.id()).await
     }
 
     pub async fn delete_plan_item(&self, id: Uuid) -> Result<DeletePlanResult, StoreError> {
@@ -362,10 +443,13 @@ impl Store {
     }
 
     pub async fn list_existing_months(&self) -> Result<Vec<YearMonth>, StoreError> {
-        let rows: Vec<String> =
-            sqlx::query_scalar("SELECT month FROM monthly_items UNION SELECT substr(occurred_on,1,7)||'-01' FROM loan_payments UNION SELECT substr(started_on,1,7)||'-01' FROM loans WHERE opening_only=0 ORDER BY month DESC")
-                .fetch_all(&self.pool)
-                .await?;
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT month FROM monthly_items UNION
+                 SELECT substr(occurred_on,1,7)||'-01' FROM loan_principal_movements WHERE is_cash=1
+                 ORDER BY month DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter()
             .map(|value| YearMonth::from_database_anchor(value).map_err(StoreError::from))
             .collect()
@@ -548,7 +632,8 @@ impl Store {
         let rows = sqlx::query(
             "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, \
                     e.source_amount_scaled, e.source_currency_code, e.exchange_rate_scaled, \
-                    e.exchange_rate_source, e.exchange_rate_observed_on, e.origin, e.note, e.detail_group, \
+                    e.exchange_rate_source, e.exchange_rate_observed_on, e.exchange_rate_rebased_from_currency, \
+                    e.exchange_rate_rebased_on, e.origin, e.note, e.detail_group, \
                     e.created_at, e.updated_at, m.month, s.base_currency_code \
              FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id \
              JOIN settings s ON s.id = 1 \
@@ -580,8 +665,9 @@ impl Store {
         sqlx::query(
             "INSERT INTO actual_entries (id, monthly_item_id, occurred_on, effect, amount_scaled, \
                     source_amount_scaled, source_currency_code, exchange_rate_scaled, \
-                    exchange_rate_source, exchange_rate_observed_on, origin, note, detail_group, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    exchange_rate_source, exchange_rate_observed_on, exchange_rate_rebased_from_currency, \
+                    exchange_rate_rebased_on, origin, note, detail_group, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(entry.id().to_string())
         .bind(entry.monthly_item_id().to_string())
@@ -593,6 +679,18 @@ impl Store {
         .bind(exchange_snapshot.exchange_rate.scaled_i64())
         .bind(&exchange_snapshot.source)
         .bind(exchange_snapshot.observed_on.to_string())
+        .bind(
+            exchange_snapshot
+                .derivation
+                .as_ref()
+                .map(|derivation| derivation.from_base_currency.as_str()),
+        )
+        .bind(
+            exchange_snapshot
+                .derivation
+                .as_ref()
+                .map(|derivation| derivation.rebased_on.to_string()),
+        )
         .bind(entry.origin().code())
         .bind(entry.note())
         .bind(entry.detail_group())
@@ -666,7 +764,8 @@ impl Store {
         let row = sqlx::query(
             "SELECT e.id, e.monthly_item_id, e.occurred_on, e.effect, e.amount_scaled, \
                     e.source_amount_scaled, e.source_currency_code, e.exchange_rate_scaled, \
-                    e.exchange_rate_source, e.exchange_rate_observed_on, e.origin, e.note, e.detail_group, \
+                    e.exchange_rate_source, e.exchange_rate_observed_on, e.exchange_rate_rebased_from_currency, \
+                    e.exchange_rate_rebased_on, e.origin, e.note, e.detail_group, \
                     e.created_at, e.updated_at, m.month, s.base_currency_code \
              FROM actual_entries e JOIN monthly_items m ON m.id = e.monthly_item_id \
              JOIN settings s ON s.id = 1 WHERE e.id = ?",
@@ -847,6 +946,10 @@ fn exchange_rate_from_row(
             .as_deref()
             .map(CalendarDate::from_str)
             .transpose()?,
+        derivation: ExchangeRateDerivation::from_parts(
+            row.try_get("rebased_from_currency")?,
+            row.try_get("rebased_on")?,
+        )?,
         updated_at: row.try_get("updated_at")?,
         plan_reference_count: row.try_get("plan_reference_count")?,
     })
@@ -983,6 +1086,10 @@ fn actual_entry_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<StoredActualEn
             observed_on: CalendarDate::from_str(
                 row.try_get::<String, _>("exchange_rate_observed_on")?
                     .as_str(),
+            )?,
+            derivation: ExchangeRateDerivation::from_parts(
+                row.try_get("exchange_rate_rebased_from_currency")?,
+                row.try_get("exchange_rate_rebased_on")?,
             )?,
         },
         created_at: row.try_get("created_at")?,

@@ -6,7 +6,7 @@ export type LoanFrequency = "DAY" | "MONTH" | "QUARTER" | "YEAR";
 export const loanFrequencyLabels: Record<LoanFrequency, string> = { DAY: "日", MONTH: "月", QUARTER: "季度", YEAR: "年" };
 export interface Loan {
   id: string; name: string; counterparty: string; direction: LoanDirection; currency: string;
-  principal: string; started_on: string; opening_only: boolean; archived: boolean; note: string | null;
+  principal: string; total_principal: string; started_on: string; opening_only: boolean; archived: boolean; note: string | null;
   paid_principal: string; remaining_principal: string; remaining_charges: string;
   scheduled_remaining_principal: string; plan_review_required: boolean;
   overdue_total: string; next_due_on: string | null; status: "ACTIVE" | "SETTLED";
@@ -30,14 +30,24 @@ export interface LoanPaymentInput {
   id: string; loanId: string; expectedUpdatedAt?: string; occurredOn: string;
   principal: string; interest: string; fees: string; note?: string; allocations: LoanAllocation[];
 }
+export interface LoanAdvance {
+  id: string; occurred_on: string; principal: string; note: string | null; updated_at: string;
+}
+export interface LoanAdvanceInput {
+  id: string; loanId: string; expectedUpdatedAt?: string; occurredOn: string; principal: string; note?: string;
+}
 export interface LoanScheduleRow { due_on: string; principal: string; interest: string; fees: string }
 export interface LoanScheduleInput {
   loanId: string; frequency: LoanFrequency; intervalCount: number; firstDate: string; count: number;
   method: "MANUAL" | "EQUAL_PRINCIPAL" | "ANNUITY"; periodRatePercent: string; note?: string; rows: LoanScheduleRow[];
+  correctPastInstallments?: boolean; expectedCorrectionRevision?: string;
 }
-export interface LoanSchedulePreview { principal_to_schedule: string; preserved_count: number; rows: LoanScheduleRow[] }
+export interface LoanSchedulePreview {
+  principal_to_schedule: string; preserved_count: number; rows: LoanScheduleRow[];
+  corrected_past_count: number; correction_revision: string | null;
+}
 export interface LoanDetail {
-  loan: Loan; installments: LoanInstallment[]; payments: LoanPayment[];
+  loan: Loan; installments: LoanInstallment[]; payments: LoanPayment[]; advances: LoanAdvance[];
   versions: Array<{ id: string; frequency: LoanFrequency; interval_count: number; method: string; period_rate_percent: string; note: string | null; created_at: string }>;
 }
 export interface LoanMonthSummary {
@@ -60,4 +70,6 @@ export const saveLoanSchedule = (input: LoanScheduleInput, call: Invoke = invoke
 export const previewLoanPayment = (input: LoanPaymentInput, call: Invoke = invoke) => call<LoanAllocation[]>("preview_loan_payment", { input });
 export const saveLoanPayment = (input: LoanPaymentInput, call: Invoke = invoke) => call<void>("save_loan_payment", { input });
 export const deleteLoanPayment = (input: { id: string; expectedUpdatedAt: string }, call: Invoke = invoke) => call<void>("delete_loan_payment", { input });
+export const saveLoanAdvance = (input: LoanAdvanceInput, call: Invoke = invoke) => call<void>("save_loan_advance", { input });
+export const deleteLoanAdvance = (input: { id: string; expectedUpdatedAt: string }, call: Invoke = invoke) => call<void>("delete_loan_advance", { input });
 export const getLoanMonthSummary = (month: string, call: Invoke = invoke) => call<LoanMonthSummary>("get_loan_month_summary", { month });

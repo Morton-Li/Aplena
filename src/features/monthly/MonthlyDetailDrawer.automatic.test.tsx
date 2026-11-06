@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deleteActualEntry, listActualEntries, type ActualEntry, type MonthlyItem } from "../../shared/api/finance";
 import { MonthlyDetailDrawer } from "./MonthlyDetailDrawer";
+import { refreshFinancialQueries } from "../automatic/refreshFinancialQueries";
 
 vi.mock("../../shared/api/finance", async () => ({
   ...await vi.importActual<typeof import("../../shared/api/finance")>("../../shared/api/finance"),
@@ -30,7 +31,7 @@ const migrated: ActualEntry = { ...automatic, id: "entry-migrated", origin: "MIG
 function setup(monthlyItem = item) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const onClose = vi.fn();
-  const onSaved = vi.fn().mockResolvedValue(undefined);
+  const onSaved = vi.fn(() => refreshFinancialQueries(client));
   const onEditEntry = vi.fn();
   render(<QueryClientProvider client={client}><MemoryRouter><MonthlyDetailDrawer item={monthlyItem} onClose={onClose} onSaved={onSaved} onDeleted={vi.fn()} onAddEntry={vi.fn()} onEditEntry={onEditEntry} /></MemoryRouter></QueryClientProvider>);
   return { onClose, onSaved, onEditEntry };
@@ -52,6 +53,17 @@ describe("automatic actual records in monthly details", () => {
     expect(screen.getAllByRole("button", { name: "删除" })).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "编辑" }));
     expect(onEditEntry).toHaveBeenCalledWith(item, automatic);
+  });
+
+  it("displays stored rate derivation for a foreign-currency actual", async () => {
+    vi.mocked(listActualEntries).mockResolvedValue([{
+      ...automatic, source_currency: "USD", source_amount: "100.00", exchange_rate: "7.20000000",
+      exchange_rate_source: "MANUAL", exchange_rate_observed_on: "2026-11-04",
+      exchange_rate_rebased_from_currency: "EUR", exchange_rate_rebased_on: "2026-11-04",
+    }]);
+    setup();
+    expect(await screen.findByText(/本位币切换换算 · 原本位币 EUR · 换算日 2026-11-04/)).toBeInTheDocument();
+    expect(screen.queryByText(/备用手动汇率|欧洲央行每日参考汇率/)).not.toBeInTheDocument();
   });
 
   it("guards repeated deletion and keeps its confirmation open until the operation finishes", async () => {

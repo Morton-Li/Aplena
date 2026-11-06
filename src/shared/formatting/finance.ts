@@ -1,3 +1,5 @@
+import type { ActualEntry } from "../api/finance";
+
 const currencySymbols: Record<string, string> = {
   CNY: "¥",
   USD: "US$",
@@ -45,6 +47,24 @@ export function formatExchangeRate(value: string) {
   return `${integer}.${significantFraction.padEnd(2, "0")}`;
 }
 
+export function formatRebasedRateSource(rebasedFromCurrency?: string | null, rebasedOn?: string | null) {
+  return rebasedFromCurrency && rebasedOn
+    ? `本位币切换换算 · 原本位币 ${rebasedFromCurrency} · 换算日 ${rebasedOn}`
+    : null;
+}
+
+export function formatEntryRateSource(
+  source: ActualEntry["exchange_rate_source"],
+  observedOn: string,
+  rebasedFromCurrency?: string | null,
+  rebasedOn?: string | null,
+) {
+  const rebased = formatRebasedRateSource(rebasedFromCurrency, rebasedOn);
+  if (rebased) return rebased;
+  const label = source === "ECB_REFERENCE" ? "欧洲央行每日参考汇率" : source === "MANUAL" ? "备用手动汇率" : "本位币";
+  return `${label} · ${observedOn}`;
+}
+
 export function currencyName(currency: string) {
   return currencyNames[currency] ?? currency;
 }
@@ -68,6 +88,10 @@ export function compactMoney(value: number, currency: string) {
 export function monthLabel(month: string) {
   const [year, value] = month.split("-");
   return year && value ? `${year} 年 ${Number(value)} 月` : month;
+}
+
+export function isValidMonth(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(value);
 }
 
 function displayDecimal(value: string) {

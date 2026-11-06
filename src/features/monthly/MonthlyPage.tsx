@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { entryRateInput, entryRateSnapshot, type EntryRateSnapshot } from "../../shared/api/entryRateSnapshot";
 import {
   createActualEntry,
   createManualMonthlyItem,
@@ -27,12 +28,14 @@ import {
 } from "../../shared/api/referenceRates";
 import { getDomainContract } from "../../shared/api/domain";
 import { describeError } from "../../shared/formatting/errors";
-import { currencyName, formatExchangeRate, formatMoney, monthLabel } from "../../shared/formatting/finance";
+import { currencyName, formatEntryRateSource, formatExchangeRate, formatMoney, isValidMonth, monthLabel } from "../../shared/formatting/finance";
 import { Dialog } from "../../shared/components/Dialog";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { Select } from "../../shared/components/Select";
 import { AutomaticEntryNotices } from "../automatic/AutomaticEntryNotices";
+import { refreshFinancialQueries } from "../automatic/refreshFinancialQueries";
 import { MonthlyDetailDrawer } from "./MonthlyDetailDrawer";
+import { LinkedActualDialog } from "./LinkedActualDialog";
 import { MonthlyWorkspace } from "./MonthlyWorkspaceView";
 import {
   defaultActualEntryDate,
@@ -55,7 +58,7 @@ export function MonthlyPage() {
   const [previewOverrides, setPreviewOverrides] = useState<RateOverrideInput[]>([]);
   const currentMonth = startupQuery.data?.current_month ?? "";
   const requestedMonth = searchParams.get("month");
-  const month = validMonth(requestedMonth) ? requestedMonth : currentMonth;
+  const month = isValidMonth(requestedMonth) ? requestedMonth : currentMonth;
   const isCurrentMonth = month === currentMonth;
   const isHistoricalMonth = Boolean(currentMonth && month < currentMonth);
   const itemsQuery = useQuery({
@@ -72,19 +75,13 @@ export function MonthlyPage() {
   const [filters, setFilters] = useState<MonthlyWorkspaceFilters>(defaultMonthlyWorkspaceFilters);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => searchParams.get("item"));
   const [creatingTemporaryCategory, setCreatingTemporaryCategory] = useState(false);
+  const [linkingRuleMonth, setLinkingRuleMonth] = useState<string | null>(null);
   const [entryDialog, setEntryDialog] = useState<EntryDialogRequest>(null);
 
   const invalidateMonth = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.startup }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.monthly(month) }),
-      queryClient.invalidateQueries({ queryKey: ["month-preview", month] }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.existingMonths }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.monthAnalytics(month) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
-      queryClient.invalidateQueries({ queryKey: ["automatic-occurrences"] }),
-      queryClient.invalidateQueries({ queryKey: ["special-projects"] }),
-      queryClient.invalidateQueries({ queryKey: ["special-project"] }),
+      refreshFinancialQueries(queryClient),
     ]);
   };
   const items = useMemo(() => itemsQuery.data ?? [], [itemsQuery.data]);
@@ -102,7 +99,7 @@ export function MonthlyPage() {
             ? "按实际归属月份补录、编辑或删除条目；计划快照仍保持冻结。"
             : "查看预算类目、补充临时类目并记录实际收支。"}</p>
         </div>
-        <div className="header-actions"><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button></div>
+        <div className="header-actions"><button className="button button-secondary" disabled={!month || !ratesQuery.data} type="button" onClick={() => setLinkingRuleMonth(month)}>关联规则录入实际</button><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button></div>
       </header>
 
       {startupQuery.data?.error && (
@@ -170,15 +167,26 @@ export function MonthlyPage() {
           }}
         />
       )}
+      {linkingRuleMonth && <LinkedActualDialog
+        month={linkingRuleMonth}
+        onClose={() => setLinkingRuleMonth(null)}
+        onLinked={async (item) => {
+          queryClient.setQueryData<MonthlyItem[]>(queryKeys.monthly(item.month), (current = []) => [
+            ...current.filter((candidate) => candidate.id !== item.id), item,
+          ]);
+          setLinkingRuleMonth(null);
+          setSelectedItemId(item.id);
+          setEntryDialog({ item });
+          await invalidateMonth();
+        }}
+      />}
       {entryDialog && ratesQuery.data && (
         <EntryDialog
-          month={month}
           rates={ratesQuery.data}
           existing={entryDialog.existing}
           item={entryDialog.item}
           onClose={() => setEntryDialog(null)}
           onSaved={async () => {
-            await queryClient.invalidateQueries({ queryKey: queryKeys.actualEntries(entryDialog.item.id) });
             setEntryDialog(null);
             await invalidateMonth();
           }}
@@ -186,6 +194,7 @@ export function MonthlyPage() {
       )}
       {selectedItem && (
         <MonthlyDetailDrawer
+          entryDialogOpen={Boolean(entryDialog && ratesQuery.data)}
           item={selectedItem}
           key={selectedItem.id}
           onAddEntry={(item) => setEntryDialog({ item })}
@@ -269,12 +278,13 @@ function TemporaryCategoryDialog({ month, onClose, onCreated }: {
   </Dialog>;
 }
 
-function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month: string; rates: ExchangeRate[]; item: MonthlyItem; existing?: ActualEntry; onClose: () => void; onSaved: () => Promise<void> }) {
+function EntryDialog({ rates, item, existing, onClose, onSaved }: { rates: ExchangeRate[]; item: MonthlyItem; existing?: ActualEntry; onClose: () => void; onSaved: () => Promise<void> }) {
   const queryClient = useQueryClient();
+  const month = item.month;
   const flow = item.flow_type;
   const [occurredOn, setOccurredOn] = useState(existing?.occurred_on ?? defaultActualEntryDate(month));
   const [effect, setEffect] = useState<"INCREASE" | "DECREASE">(existing?.effect ?? "INCREASE");
-  const baseCurrency = rates.find((rate) => rate.is_base_currency)?.currency ?? item.currency ?? "CNY";
+  const baseCurrency = item.currency;
   const [currency, setCurrency] = useState(existing?.source_currency ?? baseCurrency);
   const referenceQuery = useQuery({
     queryKey: ["ecb-reference-rates"],
@@ -288,20 +298,14 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
   const [note, setNote] = useState(existing?.note ?? "");
   const [detailGroup, setDetailGroup] = useState(existing?.detail_group ?? "");
   const savingEntry = useRef(false);
-  const cachedRate = rates.find((rate) => rate.currency === currency);
+  const cachedSnapshot = entryRateSnapshot(currency, baseCurrency, occurredOn, rates, existing);
   const officialRate = useMemo(
     () => deriveReferenceRate(referenceQuery.data ?? [], currency, baseCurrency),
     [baseCurrency, currency, referenceQuery.data],
   );
-  const ratePreview = existing
-    ? { rate: existing.exchange_rate, observedOn: existing.exchange_rate_observed_on, source: existing.exchange_rate_source }
-    : currency === baseCurrency
-      ? { rate: "1.00000000", observedOn: occurredOn, source: "BASE_CURRENCY" }
-      : officialRate
-        ? { ...officialRate, source: "ECB_REFERENCE" }
-        : cachedRate
-          ? { rate: cachedRate.rate, observedOn: cachedRate.observed_on ?? occurredOn, source: cachedRate.source }
-          : null;
+  const ratePreview: EntryRateSnapshot | null = !existing && currency !== baseCurrency && officialRate && !referenceQuery.isError
+    ? { ...officialRate, source: "ECB_REFERENCE" }
+    : cachedSnapshot;
   const currencyOptions = useMemo(() => Array.from(new Set([
     baseCurrency,
     ...SUPPORTED_CURRENCIES,
@@ -313,7 +317,7 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
   const amountUsesOperators = /[+\-*/×÷()（）]/.test(amount);
   const mutation = useMutation({
     mutationFn: async (resolvedAmount: string) => {
-      let exchangeRate = ratePreview;
+      let exchangeRate = cachedSnapshot;
       if (!existing && currency !== baseCurrency) {
         try {
           const refreshed = await referenceQuery.refetch();
@@ -321,14 +325,12 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
           const observations = refreshed.data ?? await fetchEcbReferenceRates();
           const updatedRates = await importReferenceRates({ observations, currencies: [currency] });
           queryClient.setQueryData(queryKeys.rates, updatedRates);
-          const imported = updatedRates.find((rate) => rate.currency === currency);
-          if (imported) exchangeRate = { rate: imported.rate, observedOn: imported.observed_on ?? occurredOn, source: imported.source };
+          exchangeRate = entryRateSnapshot(currency, baseCurrency, occurredOn, updatedRates) ?? exchangeRate;
         } catch (error) {
-          if (!cachedRate) throw error;
+          if (!exchangeRate) throw error;
         }
       }
       if (!exchangeRate) throw new Error(`缺少 ${currency} 可用汇率，请先更新官方汇率。`);
-      const source = exchangeRate.source === "MIGRATED_BASE" ? "BASE_CURRENCY" : exchangeRate.source;
       const input = {
         id: existing?.id,
         monthlyItemId: item.id,
@@ -336,9 +338,7 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
         effect,
         amount: resolvedAmount,
         currency,
-        exchangeRate: exchangeRate.rate,
-        exchangeRateSource: source as "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL",
-        exchangeRateObservedOn: exchangeRate.observedOn,
+        ...entryRateInput(exchangeRate),
         note: note.trim() || undefined,
         detailGroup: detailGroup.trim() || undefined,
       };
@@ -383,21 +383,20 @@ function EntryDialog({ month, rates, item, existing, onClose, onSaved }: { month
     {currency !== baseCurrency && (
       <div className="entry-rate-snapshot" aria-live="polite">
         <span>本次换算基准</span>
-        {ratePreview ? <><strong>1 {currency} = {formatExchangeRate(ratePreview.rate)} {baseCurrency}</strong><small>{ratePreview.source === "ECB_REFERENCE" ? `欧洲央行每日参考汇率 · ${ratePreview.observedOn}${isReferenceRateStale(ratePreview.observedOn) ? " · 数据日期较早" : ""}` : `备用手动汇率 · ${ratePreview.observedOn}`}{existing ? " · 编辑仍沿用原快照" : " · 保存后固定"}</small></> : <><strong>{referenceQuery.isPending ? "正在获取欧洲央行每日参考汇率…" : "暂无可用汇率"}</strong><small>无法获取时可使用设置页中已经保存的备用汇率。</small></>}
+        {ratePreview ? <>
+          <strong>1 {currency} = {formatExchangeRate(ratePreview.rate)} {baseCurrency}</strong>
+          <small>
+            {formatEntryRateSource(ratePreview.source, ratePreview.observedOn, ratePreview.rebasedFromCurrency, ratePreview.rebasedOn)}
+            {ratePreview.source === "ECB_REFERENCE" && isReferenceRateStale(ratePreview.observedOn) && " · 数据日期较早"}
+            {existing ? " · 编辑仍沿用原快照" : " · 保存后固定"}
+          </small>
+        </> : <><strong>{referenceQuery.isPending ? "正在获取欧洲央行每日参考汇率…" : "暂无可用汇率"}</strong><small>无法获取时可使用设置页中已经保存的备用汇率。</small></>}
       </div>
     )}
     <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
     {(item.item_origin === "SPECIAL_PROJECT" || existing?.detail_group) && <label>明细分组（可选）<input value={detailGroup} onChange={(event) => setDetailGroup(event.target.value)} placeholder="例如：交通、住宿、材料" /></label>}
     {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
   </Dialog>;
-}
-
-function validMonth(value: string | null): value is string {
-  if (!value) return false;
-  const match = /^(\d{4})-(\d{2})$/.exec(value);
-  if (!match) return false;
-  const numericMonth = Number(match[2]);
-  return Number(match[1]) > 0 && numericMonth >= 1 && numericMonth <= 12;
 }
 
 function flowForCategory(category: string): "INCOME" | "EXPENSE" {

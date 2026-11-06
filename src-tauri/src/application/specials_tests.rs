@@ -75,6 +75,8 @@ fn actual(
         exchange_rate: "1.00000000".to_owned(),
         exchange_rate_source: "BASE_CURRENCY".to_owned(),
         exchange_rate_observed_on: format!("{month}-10"),
+        exchange_rate_rebased_from_currency: None,
+        exchange_rate_rebased_on: None,
         note: None,
         detail_group: group.map(str::to_owned),
     }
@@ -628,6 +630,8 @@ async fn preserves_foreign_exchange_snapshots_and_allows_group_edits_without_rep
             exchange_rate: "99.00".to_owned(),
             exchange_rate_source: "MANUAL".to_owned(),
             exchange_rate_observed_on: "2026-06-11".to_owned(),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: Some("修正金额".to_owned()),
             detail_group: Some("住宿".to_owned()),
         })

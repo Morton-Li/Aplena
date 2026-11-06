@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection, sqlite::SqliteRow};
 use uuid::Uuid;
 
-use crate::infrastructure::{ActualEntryExchangeSnapshot, Store, StoreError};
+use crate::infrastructure::{
+    ActualEntryExchangeSnapshot, ExchangeRateDerivation, Store, StoreError, StoredPlanItem,
+};
 
 use super::{
     error::AppError,
@@ -177,55 +179,48 @@ impl FinanceService {
         Ok(result)
     }
 
-    pub(crate) async fn refresh_automatic_policy_version_unlocked(
+    pub(crate) async fn update_plan_and_automatic_policy_at_unlocked(
         &self,
-        plan_item_id: Uuid,
-    ) -> Result<(), AppError> {
-        self.refresh_automatic_policy_version_at_unlocked(plan_item_id, current_natural_date()?)
-            .await
-    }
-
-    pub(crate) async fn refresh_automatic_policy_version_at_unlocked(
-        &self,
-        plan_item_id: Uuid,
+        plan: &PlanItem,
         today: CalendarDate,
-    ) -> Result<(), AppError> {
+    ) -> Result<StoredPlanItem, AppError> {
         let store = self.current_store().await;
         let mut transaction = store
             .pool()
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(database_error)?;
-        if !policy_on(&mut transaction, plan_item_id)
+        let stored = Store::update_plan_item_on(&mut transaction, plan, &timestamp()).await?;
+        let plan = &stored.value;
+        if policy_on(&mut transaction, plan.id())
             .await?
             .is_some_and(|(enabled, _)| enabled)
         {
-            transaction.commit().await.map_err(database_error)?;
-            return Ok(());
+            let prior = latest_version_on(&mut transaction, plan.id(), None)
+                .await?
+                .ok_or_else(|| {
+                    AppError::business(
+                        "AUTOMATIC_POLICY_VERSION_MISSING",
+                        "error.automatic_policy_version_missing",
+                    )
+                })?;
+            let first_date = if plan.recognition_mode() == RecognitionMode::Payment {
+                plan.start_date()
+            } else {
+                prior.first_date
+            };
+            let next_month = today.year_month().next_month().map_err(domain_error)?;
+            save_version_on(
+                &mut transaction,
+                plan,
+                first_date,
+                next_month,
+                today.year_month(),
+            )
+            .await?;
         }
-        let plan = live_plan_on(&mut transaction, plan_item_id).await?;
-        let prior = latest_version_on(&mut transaction, plan_item_id, None)
-            .await?
-            .ok_or_else(|| {
-                AppError::business(
-                    "AUTOMATIC_POLICY_VERSION_MISSING",
-                    "error.automatic_policy_version_missing",
-                )
-            })?;
-        // Keep the cash anchor independent of recognition. An ended rule may have
-        // no remaining occurrence; recording its next version still preserves audit.
-        let first_date = prior.first_date.max(plan.start_date());
-        let next_month = today.year_month().next_month().map_err(domain_error)?;
-        save_version_on(
-            &mut transaction,
-            &plan,
-            first_date,
-            next_month,
-            today.year_month(),
-        )
-        .await?;
         transaction.commit().await.map_err(database_error)?;
-        Ok(())
+        Ok(stored)
     }
 
     pub async fn check_automatic_entries(&self) -> Result<AutomaticCheckDto, AppError> {
@@ -546,18 +541,38 @@ async fn post_due_occurrence(
 }
 
 fn due_date(version: &PolicyVersion, month: YearMonth) -> Option<CalendarDate> {
-    if month < version.effective_month {
-        return None;
-    }
-    let elapsed = month.months_since(version.first_date.year_month())?;
-    if !elapsed.is_multiple_of(version.plan.period_months()) {
-        return None;
-    }
-    let date = month.date_clamped_to_day(version.first_date.day());
-    (date >= version.first_date
-        && date >= version.plan.start_date()
-        && version.plan.end_date().is_none_or(|end| date <= end))
-    .then_some(date)
+    next_automatic_date(
+        &version.plan,
+        version.first_date,
+        month.max(version.effective_month),
+    )
+    .filter(|date| date.year_month() == month)
+}
+
+pub(crate) fn next_automatic_date(
+    plan: &PlanItem,
+    anchor: CalendarDate,
+    from_month: YearMonth,
+) -> Option<CalendarDate> {
+    let earliest = from_month.first_date().max(plan.start_date()).max(anchor);
+    let month = earliest.year_month();
+    let period = plan.period_months();
+    let elapsed = month.months_since(anchor.year_month())?;
+    let remainder = elapsed % period;
+    let offset = if remainder != 0 {
+        period - remainder
+    } else if month.date_clamped_to_day(anchor.day()) < earliest {
+        period
+    } else {
+        0
+    };
+    let due_on = month
+        .add_months(i32::try_from(offset).ok()?)
+        .ok()?
+        .date_clamped_to_day(anchor.day());
+    plan.end_date()
+        .is_none_or(|end| due_on <= end)
+        .then_some(due_on)
 }
 
 fn select_first_date(
@@ -567,32 +582,45 @@ fn select_first_date(
     effective_month: YearMonth,
 ) -> Result<CalendarDate, AppError> {
     let date = if let Some(value) = explicit {
-        parse_date(value, "firstDate")?
-    } else if let Some(prior) = prior {
-        prior.first_date.max(plan.start_date())
+        parse_automatic_first_date(plan, value, "firstDate")?
     } else if plan.recognition_mode() == RecognitionMode::Payment {
         plan.start_date()
+    } else if let Some(prior) = prior {
+        prior.first_date
     } else if plan.period_months() > 1 {
         return Err(AppError::validation(
             "AUTOMATIC_FIRST_DATE_REQUIRED",
             "firstDate",
             "error.automatic_first_date_required",
         ));
-    } else if effective_month.first_date() >= plan.start_date() {
-        effective_month.first_date()
     } else {
-        let month = plan.start_date().year_month();
-        if plan.start_date().day() == 1 {
-            month.first_date()
-        } else {
-            month.next_month().map_err(domain_error)?.first_date()
-        }
+        effective_month.first_date().max(plan.start_date())
     };
-    if date < plan.start_date() || plan.end_date().is_some_and(|end| date > end) {
+    let retained_anchor = plan.recognition_mode() == RecognitionMode::Amortized
+        && prior.is_some_and(|prior| prior.first_date == date);
+    if !retained_anchor
+        && (date < plan.start_date() || plan.end_date().is_some_and(|end| date > end))
+    {
         return Err(AppError::validation(
             "AUTOMATIC_FIRST_DATE_OUTSIDE_RULE",
             "firstDate",
             "error.automatic_first_date_outside_rule",
+        ));
+    }
+    Ok(date)
+}
+
+pub(crate) fn parse_automatic_first_date(
+    plan: &PlanItem,
+    value: &str,
+    field: &str,
+) -> Result<CalendarDate, AppError> {
+    let date = parse_date(value, field)?;
+    if plan.recognition_mode() == RecognitionMode::Payment && date != plan.start_date() {
+        return Err(AppError::validation(
+            "AUTOMATIC_PAYMENT_ANCHOR_MISMATCH",
+            field,
+            "error.automatic_payment_anchor_mismatch",
         ));
     }
     Ok(date)
@@ -836,15 +864,17 @@ async fn exchange_snapshot_on(
     base: &CurrencyCode,
     today: CalendarDate,
 ) -> Result<(Amount, ActualEntryExchangeSnapshot), AppError> {
-    let (rate, source, observed_on) = if plan.currency() == base {
+    let (rate, source, snapshot_date, derivation) = if plan.currency() == base {
         (
             ExchangeRate::from_str(base.clone(), base.clone(), "1").map_err(domain_error)?,
             "BASE_CURRENCY".to_owned(),
             today,
+            None,
         )
     } else {
         let row = sqlx::query(
-            "SELECT rate_scaled, source, observed_on FROM exchange_rates WHERE currency_code = ?",
+            "SELECT rate_scaled, source, observed_on, rebased_from_currency, rebased_on \
+             FROM exchange_rates WHERE currency_code = ?",
         )
         .bind(plan.currency().as_str())
         .fetch_optional(&mut *connection)
@@ -859,18 +889,25 @@ async fn exchange_snapshot_on(
             row.try_get("rate_scaled").map_err(database_error)?,
         )
         .map_err(domain_error)?;
+        let derivation = ExchangeRateDerivation::from_parts(
+            row.try_get("rebased_from_currency")
+                .map_err(database_error)?,
+            row.try_get("rebased_on").map_err(database_error)?,
+        )
+        .map_err(domain_error)?;
         let date: Option<String> = row.try_get("observed_on").map_err(database_error)?;
-        let observed_on = date
+        let snapshot_date = date
             .as_deref()
             .map(|date| parse_date(date, "exchangeRateObservedOn"))
             .transpose()?
+            .or_else(|| derivation.as_ref().map(|derived| derived.rebased_on))
             .ok_or_else(|| {
                 AppError::business(
                     "AUTOMATIC_EXCHANGE_RATE_DATE_REQUIRED",
                     "error.automatic_exchange_rate_date_required",
                 )
             })?;
-        if observed_on > today {
+        if snapshot_date > today {
             return Err(AppError::business(
                 "AUTOMATIC_EXCHANGE_RATE_DATE_IN_FUTURE",
                 "error.automatic_exchange_rate_date_in_future",
@@ -879,7 +916,8 @@ async fn exchange_snapshot_on(
         (
             rate,
             row.try_get("source").map_err(database_error)?,
-            observed_on,
+            snapshot_date,
+            derivation,
         )
     };
     let converted = plan
@@ -901,7 +939,8 @@ async fn exchange_snapshot_on(
             source_currency: plan.currency().clone(),
             exchange_rate: rate,
             source,
-            observed_on,
+            observed_on: snapshot_date,
+            derivation,
         },
     ))
 }

@@ -1,6 +1,6 @@
 use pfcm_domain::{
     Amount, CalendarDate, Category, CurrencyCode, ExchangeRate, MonthlyItem, PlanItem,
-    RecognitionMode, YearMonth,
+    RecognitionMode, Settings, YearMonth,
 };
 use uuid::Uuid;
 
@@ -9,9 +9,10 @@ use crate::infrastructure::{Store, open_database, open_memory_database};
 use super::{
     automatic::{AutomaticPolicyInputDto, ResolveAutomaticEntryConflictInputDto},
     dto::{
-        ActualEntryInputDto, EnsureActualOnlyInputDto, InitializeMonthInputDto, SettingsInputDto,
+        ActualEntryInputDto, EnsureActualOnlyInputDto, InitializeMonthInputDto, PlanItemInputDto,
+        SettingsInputDto,
     },
-    service::FinanceService,
+    service::{FinanceService, current_natural_date},
 };
 
 const FIXTURE_TIMESTAMP: &str = "2026-10-07T00:00:00Z";
@@ -131,6 +132,8 @@ fn actual_input(container: &str, occurred_on: &str, value: &str) -> ActualEntryI
         exchange_rate: "1".to_owned(),
         exchange_rate_source: "BASE_CURRENCY".to_owned(),
         exchange_rate_observed_on: occurred_on.to_owned(),
+        exchange_rate_rebased_from_currency: None,
+        exchange_rate_rebased_on: None,
         note: Some("manual note".to_owned()),
         detail_group: None,
     }
@@ -337,6 +340,79 @@ async fn full_cash_period_is_distinct_from_amortized_monthly_plan() {
         .await,
         0
     );
+}
+
+#[tokio::test]
+async fn changing_an_amortized_rule_start_keeps_its_cash_cycle_and_day() {
+    let service = service().await;
+    let rule = plan(
+        "Quarterly fee",
+        "300.00",
+        "CNY",
+        3,
+        RecognitionMode::Amortized,
+        "2026-10-01",
+        None,
+    );
+    insert_plan(&service, &rule).await;
+    save_policy(&service, &rule, true, Some("2026-10-31"), "2026-10-07").await;
+
+    // Moving the budget start into November must not move the cash cycle
+    // from October/January to November/February.
+    let revised = PlanItem::new(
+        rule.id(),
+        rule.name(),
+        rule.category(),
+        rule.amount(),
+        rule.currency().clone(),
+        rule.period_months(),
+        date("2026-11-01"),
+        None,
+        rule.recognition_mode(),
+        None,
+    )
+    .unwrap();
+    service
+        .update_plan_and_automatic_policy_at_unlocked(&revised, date("2026-11-06"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service.list_automatic_entry_policies().await.unwrap()[0]
+            .first_date
+            .as_deref(),
+        Some("2026-10-31")
+    );
+    save_policy(&service, &revised, true, Some("2026-10-31"), "2026-11-06").await;
+
+    for day in ["2026-12-31", "2027-01-30", "2027-02-28", "2027-04-29"] {
+        assert_eq!(
+            service
+                .check_automatic_entries_at(date(day))
+                .await
+                .unwrap()
+                .created_count,
+            0,
+            "{day}"
+        );
+    }
+    for day in ["2027-01-31", "2027-04-30", "2027-07-31"] {
+        let posted = service.check_automatic_entries_at(date(day)).await.unwrap();
+        assert_eq!(posted.created_count, 1, "{day}");
+        assert_eq!(posted.occurrences[0].occurred_on, day);
+        let entries = service
+            .list_actual_entries(posted.occurrences[0].monthly_item_id.clone().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(entries[0].source_amount, "300.00");
+        assert_eq!(
+            service
+                .check_automatic_entries_at(date(day))
+                .await
+                .unwrap()
+                .created_count,
+            0
+        );
+    }
 }
 
 #[tokio::test]
@@ -576,13 +652,7 @@ async fn rule_edits_freeze_current_version_and_replace_only_future_version() {
     )
     .unwrap();
     service
-        .current_store()
-        .await
-        .update_plan_item(&revised, FIXTURE_TIMESTAMP)
-        .await
-        .unwrap();
-    service
-        .refresh_automatic_policy_version_at_unlocked(rule.id(), date("2026-11-10"))
+        .update_plan_and_automatic_policy_at_unlocked(&revised, date("2026-11-10"))
         .await
         .unwrap();
     let november = service
@@ -625,6 +695,178 @@ async fn rule_edits_freeze_current_version_and_replace_only_future_version() {
         count(&service, "SELECT COUNT(*) FROM automatic_policy_versions").await,
         2
     );
+}
+
+#[tokio::test]
+async fn rule_edit_rolls_back_when_refreshing_its_automatic_policy_fails() {
+    let service = service().await;
+    let today = current_natural_date().unwrap().to_string();
+    let rule = plan(
+        "Versioned fee",
+        "100.00",
+        "CNY",
+        1,
+        RecognitionMode::Amortized,
+        "2026-01-01",
+        None,
+    );
+    insert_plan(&service, &rule).await;
+    let policy_before = save_policy(&service, &rule, true, None, &today).await;
+    let plan_before = service.list_plan_items().await.unwrap();
+    let store = service.current_store().await;
+    sqlx::query(
+        "CREATE TRIGGER reject_policy_refresh BEFORE INSERT ON automatic_policy_versions \
+         WHEN NEW.snapshot_name = 'Revised fee' \
+         BEGIN SELECT RAISE(ABORT, 'synthetic policy write failure'); END",
+    )
+    .execute(store.pool())
+    .await
+    .unwrap();
+    let error = service
+        .update_plan_item(PlanItemInputDto {
+            id: Some(rule.id().to_string()),
+            name: "Revised fee".to_owned(),
+            category: rule.category().code().to_owned(),
+            planned_amount: "200.00".to_owned(),
+            currency: rule.currency().to_string(),
+            period_months: rule.period_months(),
+            start_date: rule.start_date().to_string(),
+            end_date: None,
+            recognition_mode: rule.recognition_mode().code().to_owned(),
+            note: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.error_code, "DATABASE_CONSTRAINT_FAILED");
+    assert_eq!(service.list_plan_items().await.unwrap(), plan_before);
+    assert_eq!(
+        service.list_automatic_entry_policies().await.unwrap(),
+        vec![policy_before]
+    );
+}
+
+#[tokio::test]
+async fn rebased_saved_rate_posts_a_future_automatic_rule_with_frozen_derivation() {
+    let service = service().await;
+    let today = date("2026-10-07");
+    let due = today.year_month().next_month().unwrap().first_date();
+    let rebase_date = today.to_string();
+    let due_date = due.to_string();
+    set_rate(&service, "USD", "7.20", Some(&rebase_date)).await;
+    set_rate(&service, "EUR", "8.00", Some(&rebase_date)).await;
+    let rule = plan(
+        "Future subscription",
+        "9.00",
+        "EUR",
+        1,
+        RecognitionMode::Amortized,
+        &due_date,
+        None,
+    );
+    insert_plan(&service, &rule).await;
+    save_policy(&service, &rule, true, None, &rebase_date).await;
+    service
+        .current_store()
+        .await
+        .update_settings(
+            &Settings::new(currency("USD")).unwrap(),
+            FIXTURE_TIMESTAMP,
+            today,
+        )
+        .await
+        .unwrap();
+    let rates = service.list_exchange_rates().await.unwrap();
+    let euro = rates.iter().find(|rate| rate.currency == "EUR").unwrap();
+    assert_eq!(euro.observed_on, None);
+    assert_eq!(euro.rebased_from_currency.as_deref(), Some("CNY"));
+    assert_eq!(euro.rebased_on.as_deref(), Some(rebase_date.as_str()));
+
+    let check = service.check_automatic_entries_at(due).await.unwrap();
+    assert_eq!(check.created_count, 1, "{:?}", check.occurrences);
+    let container = check.occurrences[0].monthly_item_id.clone().unwrap();
+    let entry = service
+        .list_actual_entries(container.clone())
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(entry.amount, "10.00");
+    assert_eq!(entry.source_currency, "EUR");
+    assert_eq!(entry.exchange_rate_source, "MANUAL");
+    assert_eq!(
+        entry.exchange_rate_rebased_from_currency.as_deref(),
+        Some("CNY")
+    );
+    assert_eq!(
+        entry.exchange_rate_rebased_on.as_deref(),
+        Some(rebase_date.as_str())
+    );
+    set_rate(&service, "EUR", "2", Some(&due_date)).await;
+    let rates = service.list_exchange_rates().await.unwrap();
+    let euro = rates.iter().find(|rate| rate.currency == "EUR").unwrap();
+    assert_eq!(euro.rebased_from_currency, None);
+    assert_eq!(euro.rebased_on, None);
+
+    let edited = service
+        .update_actual_entry(ActualEntryInputDto {
+            id: Some(entry.id),
+            ..actual_input(&container, &due_date, "18.00")
+        })
+        .await
+        .unwrap();
+    assert_eq!(edited.amount, "20.00");
+    assert_eq!(edited.exchange_rate, entry.exchange_rate);
+    assert_eq!(
+        edited.exchange_rate_rebased_from_currency,
+        entry.exchange_rate_rebased_from_currency
+    );
+    assert_eq!(
+        edited.exchange_rate_rebased_on,
+        entry.exchange_rate_rebased_on
+    );
+}
+
+#[tokio::test]
+async fn payment_automatic_policy_rejects_a_different_anchor_without_enabling() {
+    let service = service().await;
+    let rule = plan(
+        "Quarterly payment",
+        "90.00",
+        "CNY",
+        3,
+        RecognitionMode::Payment,
+        "2026-11-20",
+        None,
+    );
+    insert_plan(&service, &rule).await;
+    let error = service
+        .save_automatic_entry_policy_at_unlocked(
+            AutomaticPolicyInputDto {
+                plan_item_id: rule.id().to_string(),
+                enabled: true,
+                first_date: Some("2026-12-01".to_owned()),
+            },
+            date("2026-10-07"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.error_code, "AUTOMATIC_PAYMENT_ANCHOR_MISMATCH");
+    assert_eq!(error.field.as_deref(), Some("firstDate"));
+    assert_eq!(
+        count(&service, "SELECT COUNT(*) FROM automatic_entry_policies").await,
+        0
+    );
+    assert_eq!(
+        count(&service, "SELECT COUNT(*) FROM automatic_policy_versions").await,
+        0
+    );
+    let policy = save_policy(&service, &rule, true, Some("2026-11-20"), "2026-10-07").await;
+    assert_eq!(policy.first_date.as_deref(), Some("2026-11-20"));
+    let check = service
+        .check_automatic_entries_at(date("2026-11-20"))
+        .await
+        .unwrap();
+    assert_eq!(check.created_count, 1);
+    assert_eq!(check.occurrences[0].occurred_on, "2026-11-20");
 }
 
 #[tokio::test]
@@ -690,6 +932,8 @@ async fn missing_rate_observation_retries_then_auto_edits_keep_frozen_exchange_m
             exchange_rate: "9".to_owned(),
             exchange_rate_source: "ECB_REFERENCE".to_owned(),
             exchange_rate_observed_on: "2026-11-12".to_owned(),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: Some("adjusted by user".to_owned()),
             detail_group: Some("membership".to_owned()),
         })

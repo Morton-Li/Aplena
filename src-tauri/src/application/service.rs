@@ -15,8 +15,8 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::infrastructure::{
-    ActualEntryExchangeSnapshot, DeletePlanResult, Store, StoredActualEntry, StoredExchangeRate,
-    StoredMonthlyItem, StoredPlanItem, StoredSettings,
+    ActualEntryExchangeSnapshot, DeletePlanResult, ExchangeRateDerivation, Store,
+    StoredActualEntry, StoredExchangeRate, StoredMonthlyItem, StoredPlanItem, StoredSettings,
 };
 
 use super::{
@@ -213,7 +213,7 @@ impl FinanceService {
         {
             self.current_store()
                 .await
-                .update_settings(&settings, &timestamp)
+                .update_settings(&settings, &timestamp, current_natural_date()?)
                 .await
         } else {
             self.current_store()
@@ -413,8 +413,6 @@ impl FinanceService {
             .insert_plan_item(&plan_item, &timestamp())
             .await
             .map_err(AppError::from)?;
-        self.refresh_automatic_policy_version_unlocked(plan_item.id())
-            .await?;
         Ok(plan_item_dto(stored))
     }
 
@@ -423,15 +421,9 @@ impl FinanceService {
         self.require_settings().await?;
         let plan_item = parse_plan_item(input, true)?;
         self.require_currency_rate(plan_item.currency()).await?;
-        let stored = self
-            .current_store()
+        self.update_plan_and_automatic_policy_at_unlocked(&plan_item, current_natural_date()?)
             .await
-            .update_plan_item(&plan_item, &timestamp())
-            .await
-            .map_err(AppError::from)?;
-        self.refresh_automatic_policy_version_unlocked(plan_item.id())
-            .await?;
-        Ok(plan_item_dto(stored))
+            .map(plan_item_dto)
     }
 
     pub async fn stop_plan_item(
@@ -461,15 +453,9 @@ impl FinanceService {
             value.note().map(str::to_owned),
         )
         .map_err(|error| AppError::from_domain(error, Some("endMonth")))?;
-        let stored = self
-            .current_store()
+        self.update_plan_and_automatic_policy_at_unlocked(&stopped, current_natural_date()?)
             .await
-            .update_plan_item(&stopped, &timestamp())
-            .await
-            .map_err(AppError::from)?;
-        self.refresh_automatic_policy_version_unlocked(stopped.id())
-            .await?;
-        Ok(plan_item_dto(stored))
+            .map(plan_item_dto)
     }
 
     pub async fn delete_plan_item(&self, id: String) -> Result<DeletePlanItemDto, AppError> {
@@ -668,6 +654,8 @@ impl FinanceService {
             exchange_rate: preserved_snapshot.exchange_rate.decimal_string(),
             exchange_rate_source: preserved_snapshot.source.clone(),
             exchange_rate_observed_on: preserved_snapshot.observed_on.to_string(),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             ..input
         };
         let (entry, mut exchange_snapshot) =
@@ -834,7 +822,8 @@ impl FinanceService {
             return Err(AppError::business(
                 "LOAN_PLAN_REVIEW_REQUIRED",
                 "error.loan_plan_review_required",
-            ));
+            )
+            .with_param("targetMonth", target_month.to_string()));
         }
         let loan_expense: Amount = loans
             .planned_borrow_charges
@@ -1295,6 +1284,25 @@ pub(crate) fn parse_actual_entry(
         }
     };
     let observed_on = parse_date(&input.exchange_rate_observed_on, "exchangeRateObservedOn")?;
+    let invalid_derivation = || {
+        AppError::validation(
+            "INVALID_EXCHANGE_RATE_DERIVATION",
+            "exchangeRateRebasedOn",
+            "error.invalid_exchange_rate_derivation",
+        )
+    };
+    let derivation = ExchangeRateDerivation::from_parts(
+        input.exchange_rate_rebased_from_currency,
+        input.exchange_rate_rebased_on,
+    )
+    .map_err(|_| invalid_derivation())?;
+    if derivation.as_ref().is_some_and(|derived| {
+        exchange_rate_source != "MANUAL"
+            || &derived.from_base_currency == base_currency
+            || derived.rebased_on != observed_on
+    }) {
+        return Err(invalid_derivation());
+    }
     let converted = source_amount
         .as_decimal()
         .checked_mul(exchange_rate.value())
@@ -1322,6 +1330,7 @@ pub(crate) fn parse_actual_entry(
             exchange_rate,
             source: exchange_rate_source,
             observed_on,
+            derivation,
         },
     ))
 }
@@ -1423,6 +1432,13 @@ fn exchange_rate_dto(stored: StoredExchangeRate, base: &CurrencyCode) -> Exchang
         is_base_currency: &stored.currency == base,
         source: stored.source,
         observed_on: stored.observed_on.map(|date| date.to_string()),
+        rebased_from_currency: stored
+            .derivation
+            .as_ref()
+            .map(|derived| derived.from_base_currency.to_string()),
+        rebased_on: stored
+            .derivation
+            .map(|derived| derived.rebased_on.to_string()),
         plan_reference_count: stored.plan_reference_count,
         updated_at: stored.updated_at,
     }
@@ -1536,6 +1552,13 @@ pub(crate) fn actual_entry_dto(stored: StoredActualEntry) -> ActualEntryDto {
         exchange_rate: snapshot.exchange_rate.decimal_string(),
         exchange_rate_source: snapshot.source,
         exchange_rate_observed_on: snapshot.observed_on.to_string(),
+        exchange_rate_rebased_from_currency: snapshot
+            .derivation
+            .as_ref()
+            .map(|derived| derived.from_base_currency.to_string()),
+        exchange_rate_rebased_on: snapshot
+            .derivation
+            .map(|derived| derived.rebased_on.to_string()),
         origin: value.origin().code().to_owned(),
         detail_group: value.detail_group().map(str::to_owned),
         note: value.note().map(str::to_owned),

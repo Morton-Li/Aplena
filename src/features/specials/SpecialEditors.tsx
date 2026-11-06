@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
+import { entryRateInput, entryRateSnapshot, type EntryRateSnapshot } from "../../shared/api/entryRateSnapshot";
 import { importReferenceRates, queryKeys, updateActualEntry, type ExchangeRate } from "../../shared/api/finance";
 import { deriveReferenceRate, fetchEcbReferenceRates, isReferenceRateStale, SUPPORTED_CURRENCIES } from "../../shared/api/referenceRates";
 import {
@@ -17,19 +18,17 @@ import {
 import { Dialog } from "../../shared/components/Dialog";
 import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
-import { currencyName, formatExchangeRate, formatMoney } from "../../shared/formatting/finance";
+import { currencyName, formatEntryRateSource, formatExchangeRate, formatMoney } from "../../shared/formatting/finance";
 import { categoryLabel } from "../../shared/formatting/labels";
 import { evaluateAmountExpression } from "../monthly/amountExpression";
 import { defaultActualEntryDate } from "../monthly/monthlyWorkspace";
 import {
   nextSpecialMonth,
   specialActualInput,
-  specialEntryRateSnapshot,
   specialEntryValidation,
   specialMonthLastDate,
   validSpecialBudget,
   validSpecialMonth,
-  type EntryRateSnapshot,
   type SpecialEntryValues,
 } from "./specialForms";
 
@@ -131,9 +130,9 @@ export function SpecialActualEditor({ project, currentMonth, rates, existing, de
     retry: false,
     staleTime: 0,
   });
-  const cachedSnapshot = specialEntryRateSnapshot(values.currency, project.currency, values.occurredOn, rates, existing);
+  const cachedSnapshot = entryRateSnapshot(values.currency, project.currency, values.occurredOn, rates, existing);
   const officialRate = deriveReferenceRate(referenceQuery.data ?? [], values.currency, project.currency);
-  const preview: EntryRateSnapshot | null = !existing && values.currency !== project.currency && officialRate
+  const preview: EntryRateSnapshot | null = !existing && values.currency !== project.currency && officialRate && !referenceQuery.isError
     ? { rate: officialRate.rate, observedOn: officialRate.observedOn, source: "ECB_REFERENCE" }
     : cachedSnapshot;
   const currencyOptions = useMemo(() => Array.from(new Set([
@@ -153,9 +152,9 @@ export function SpecialActualEditor({ project, currentMonth, rates, existing, de
           const observations = fresh.data ?? await fetchEcbReferenceRates();
           const updatedRates = await importReferenceRates({ observations, currencies: [values.currency] });
           queryClient.setQueryData(queryKeys.rates, updatedRates);
-          snapshot = specialEntryRateSnapshot(values.currency, project.currency, values.occurredOn, updatedRates);
+          snapshot = entryRateSnapshot(values.currency, project.currency, values.occurredOn, updatedRates) ?? snapshot;
         } catch (error) {
-          if (!cachedSnapshot) throw error;
+          if (!snapshot) throw error;
         }
       }
       if (!snapshot) throw new Error(`缺少 ${values.currency} 可用汇率，请在设置中补充汇率后重试。`);
@@ -167,9 +166,7 @@ export function SpecialActualEditor({ project, currentMonth, rates, existing, de
         effect: input.effect,
         amount: input.amount,
         currency: input.currency,
-        exchangeRate: input.exchangeRate,
-        exchangeRateSource: input.exchangeRateSource,
-        exchangeRateObservedOn: input.exchangeRateObservedOn,
+        ...entryRateInput(snapshot),
         note: input.note,
         detailGroup: input.detailGroup,
       }) : createSpecialActualEntry(input);
@@ -209,7 +206,14 @@ export function SpecialActualEditor({ project, currentMonth, rates, existing, de
       </div>
       <div className="entry-rate-snapshot" aria-live="polite">
         <span>本次汇率快照</span>
-        {preview ? <><strong>1 {values.currency} = {formatExchangeRate(preview.rate)} {project.currency}</strong><small>{preview.source === "ECB_REFERENCE" ? "欧洲央行每日参考汇率" : preview.source === "MANUAL" ? "备用手动汇率" : "本位币"} · {preview.observedOn}{preview.source === "ECB_REFERENCE" && isReferenceRateStale(preview.observedOn) ? " · 数据日期较早" : ""}{existing ? " · 编辑沿用原快照" : " · 保存后固定"}</small></> : <><strong>{referenceQuery.isFetching ? "正在读取官方汇率…" : "暂无可用汇率"}</strong><small>可到<Link to="/settings">设置</Link>补充备用汇率，再保存条目。</small></>}
+        {preview ? <>
+          <strong>1 {values.currency} = {formatExchangeRate(preview.rate)} {project.currency}</strong>
+          <small>
+            {formatEntryRateSource(preview.source, preview.observedOn, preview.rebasedFromCurrency, preview.rebasedOn)}
+            {preview.source === "ECB_REFERENCE" && isReferenceRateStale(preview.observedOn) && " · 数据日期较早"}
+            {existing ? " · 编辑沿用原快照" : " · 保存后固定"}
+          </small>
+        </> : <><strong>{referenceQuery.isFetching ? "正在读取官方汇率…" : "暂无可用汇率"}</strong><small>可到<Link to="/settings">设置</Link>补充备用汇率，再保存条目。</small></>}
       </div>
       <label>明细组（可选）<input disabled={mutation.isPending} list={groupListId} maxLength={200} onChange={(event) => update("detailGroup", event.target.value)} placeholder="例如 住宿、材料、施工" value={values.detailGroup} /><small>同一专项可复用明细组；清空后归为未分组。</small></label>
       <datalist id={groupListId}>{detailGroups.map((group) => <option key={group} value={group} />)}</datalist>

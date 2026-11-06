@@ -122,6 +122,18 @@ impl AppError {
 
     pub fn from_store(error: StoreError) -> Self {
         match error {
+            StoreError::BaseCurrencyLocked => {
+                Self::business("BASE_CURRENCY_LOCKED", "error.base_currency_locked")
+            }
+            StoreError::MissingExchangeRate(currency) => {
+                Self::business("MISSING_EXCHANGE_RATE", "error.missing_exchange_rate")
+                    .with_param("currency", currency.to_string())
+            }
+            StoreError::LegacyBaseRateRequiresUpdate(currency) => Self::business(
+                "LEGACY_BASE_RATE_REQUIRES_UPDATE",
+                "error.legacy_base_rate_requires_update",
+            )
+            .with_param("currency", currency.to_string()),
             StoreError::Domain(error) => Self::from_domain(error, None),
             StoreError::InvalidUuid => {
                 Self::business("INVALID_PERSISTED_UUID", "error.invalid_persisted_uuid")
@@ -155,6 +167,11 @@ impl AppError {
                         "LOAN_PRINCIPAL_OVERPAYMENT",
                         "error.loan_principal_overpayment",
                     )
+                } else if message.contains("APLENA_LOAN_ADVANCE_HAS_REPAYMENTS") {
+                    Self::business(
+                        "LOAN_ADVANCE_HAS_REPAYMENTS",
+                        "error.loan_advance_has_repayments",
+                    )
                 } else if message.contains("APLENA_LOAN_ALLOCATION_MISMATCH") {
                     Self::business("LOAN_ALLOCATION_MISMATCH", "error.loan_allocation_mismatch")
                 } else if message.contains("APLENA_BASE_CURRENCY_LOCKED") {
@@ -164,6 +181,11 @@ impl AppError {
                         "INVALID_BASE_CURRENCY_RATE",
                         "rate",
                         "error.invalid_base_currency_rate",
+                    )
+                } else if message.contains("APLENA_REBASED_EXCHANGE_RATE_CHANGED") {
+                    Self::business(
+                        "REBASED_EXCHANGE_RATE_CHANGED",
+                        "error.rebased_exchange_rate_changed",
                     )
                 } else if message.contains("APLENA_SPECIAL_SNAPSHOT_FROZEN") {
                     Self::business(

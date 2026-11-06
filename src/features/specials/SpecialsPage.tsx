@@ -19,6 +19,7 @@ import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
 import { formatMoney } from "../../shared/formatting/finance";
 import { categoryLabel } from "../../shared/formatting/labels";
+import { refreshFinancialQueries } from "../automatic/refreshFinancialQueries";
 import { SpecialActualEditor, SpecialAllocationEditor, SpecialProjectEditor } from "./SpecialEditors";
 import { SpecialProjectDetail } from "./SpecialProjectDetail";
 
@@ -61,19 +62,7 @@ export function SpecialsPage() {
       (!needle || `${project.name} ${project.note ?? ""}`.toLocaleLowerCase().includes(needle));
   });
 
-  const refresh = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: specialQueryKeys.projects }),
-      queryClient.invalidateQueries({ queryKey: ["special-project"] }),
-      queryClient.invalidateQueries({ queryKey: ["monthly-items"] }),
-      queryClient.invalidateQueries({ queryKey: ["actual-entries"] }),
-      queryClient.invalidateQueries({ queryKey: ["month-analytics"] }),
-      queryClient.invalidateQueries({ queryKey: ["month-preview"] }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.historyAnalytics }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.existingMonths }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.budgetProjection }),
-    ]);
-  };
+  const refresh = () => refreshFinancialQueries(queryClient);
   const selectProject = (id: string) => {
     const next = new URLSearchParams(searchParams);
     next.set("id", id);
