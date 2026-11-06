@@ -8,7 +8,8 @@ pub use database::open_database;
 pub use database::open_memory_database;
 pub use error::StoreError;
 pub use models::{
-    ActualEntryExchangeSnapshot, DeletePlanResult, StoredActualEntry, StoredExchangeRate,
-    StoredMonthlyItem, StoredPlanItem, StoredSettings, StoredSoftwareUpdatePreferences,
+    ActualEntryExchangeSnapshot, DeletePlanResult, ExchangeRateDerivation, StoredActualEntry,
+    StoredExchangeRate, StoredMonthlyItem, StoredPlanItem, StoredSettings,
+    StoredSoftwareUpdatePreferences,
 };
 pub use store::Store;

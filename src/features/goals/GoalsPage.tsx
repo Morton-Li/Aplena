@@ -11,12 +11,13 @@ import {
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
 import { ChartDataFlip } from "../../shared/components/ChartDataFlip";
 import { PieAnalyticsChart } from "../../shared/components/PieAnalyticsChart";
-import { describeError } from "../../shared/formatting/errors";
+import { describeError, isAppError } from "../../shared/formatting/errors";
 import {
   compactMoney,
   decimalValue,
   formatMoney,
   formatPercent,
+  isValidMonth,
   monthLabel,
 } from "../../shared/formatting/finance";
 import { categoryLabel } from "../../shared/formatting/labels";
@@ -34,8 +35,12 @@ export function GoalsPage() {
   }
   if (projectionQuery.isError || plansQuery.isError) {
     const error = projectionQuery.error ?? plansQuery.error;
-    const reviewLoanPlan = typeof error === "object" && error !== null && "error_code" in error && error.error_code === "LOAN_PLAN_REVIEW_REQUIRED";
-    return <section className="state-card state-card-error"><span role="alert">{describeError(error)}</span>{reviewLoanPlan && <Link className="button button-secondary" to="/loans">核对借贷计划</Link>}</section>;
+    const reviewLoanPlan = isAppError(error) && error.error_code === "LOAN_PLAN_REVIEW_REQUIRED";
+    const targetMonth = reviewLoanPlan ? error.params?.targetMonth : undefined;
+    return <>
+      <section className="state-card state-card-error"><span role="alert">{describeError(error)}</span>{reviewLoanPlan && <Link className="button button-secondary" to="/loans">核对借贷计划</Link>}</section>
+      {isValidMonth(targetMonth) && <RecurringRulesPanel key="rules" targetMonth={targetMonth} />}
+    </>;
   }
 
   const projection = projectionQuery.data;
@@ -72,7 +77,7 @@ export function GoalsPage() {
       </section>}
 
       <BudgetSourcesSummary projection={projection} />
-      <RecurringRulesPanel targetMonth={projection.target_month} />
+      <RecurringRulesPanel key="rules" targetMonth={projection.target_month} />
     </>
   );
 }

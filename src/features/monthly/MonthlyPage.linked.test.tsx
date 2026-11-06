@@ -23,12 +23,18 @@ const canonical: MonthlyItem = {
   variance_amount: null, completion_rate_percent: null, variance_effect: "UNKNOWN", currency: "CNY", note: null, created_at: "", updated_at: "",
 };
 
-function setup({ existing = false, deletedOnConfirm = false, link }: { existing?: boolean; deletedOnConfirm?: boolean; link?: () => Promise<MonthlyItem> } = {}) {
+function setup({ existing = false, deletedOnConfirm = false, link, currentMonth = () => "2026-11", route = "/monthly?month=2026-02" }: {
+  existing?: boolean;
+  deletedOnConfirm?: boolean;
+  link?: () => Promise<MonthlyItem>;
+  currentMonth?: () => string;
+  route?: string;
+} = {}) {
   let items: MonthlyItem[] = existing ? [canonical] : [];
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     switch (command) {
-      case "get_startup_status": return { current_month: "2026-11", initialization: null, error: null } as never;
-      case "list_monthly_items": return items as never;
+      case "get_startup_status": return { current_month: currentMonth(), initialization: null, error: null } as never;
+      case "list_monthly_items": return items.filter((item) => item.month === (args as { month: string }).month) as never;
       case "list_actual_entries": case "list_automatic_occurrences": return [] as never;
       case "list_plan_items": return [rule, ended] as never;
       case "list_exchange_rates": return [{ currency: "CNY", base_currency: "CNY", rate: "1.00000000", is_base_currency: true, source: "BASE_CURRENCY", observed_on: null, plan_reference_count: 0, updated_at: "" }] as never;
@@ -51,7 +57,7 @@ function setup({ existing = false, deletedOnConfirm = false, link }: { existing?
     }
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/monthly?month=2026-02"]}><MonthlyPage /></MemoryRouter></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}><MonthlyPage /></MemoryRouter></QueryClientProvider>);
   return client;
 }
 
@@ -119,6 +125,42 @@ describe("linked actual-only monthly entry flow", () => {
     await act(async () => { complete(canonical); });
     await screen.findByRole("dialog", { name: "添加支出或退款" });
     expect(calls("create_actual_entry")).toHaveLength(0);
+  });
+
+  it("keeps keyboard focus on the actual editor opened by linking", async () => {
+    setup();
+    await openRule();
+    fireEvent.click(screen.getByRole("button", { name: "关联并录入实际" }));
+
+    const editor = await screen.findByRole("dialog", { name: "添加支出或退款" });
+    expect(within(editor).getByLabelText("原币金额")).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+
+    expect(editor).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "关闭项目详情" })).toHaveFocus();
+  });
+
+  it("keeps a pending association and its entry in the selected month across a rollover", async () => {
+    let month = canonical.month;
+    let complete!: (item: MonthlyItem) => void;
+    const client = setup({ route: "/monthly", currentMonth: () => month, link: () => new Promise((resolve) => { complete = resolve; }) });
+    await openRule();
+    fireEvent.click(screen.getByRole("button", { name: "关联并录入实际" }));
+    await waitFor(() => expect(calls("ensure_actual_only_monthly_item")).toHaveLength(1));
+
+    month = "2026-03";
+    await act(async () => { await client.invalidateQueries({ queryKey: queryKeys.startup }); });
+    await screen.findByRole("heading", { name: "2026 年 3 月" });
+    const pickerText = screen.getByRole("dialog", { name: "关联规则录入实际" }).textContent;
+    await act(async () => { complete(canonical); });
+
+    const editor = await screen.findByRole("dialog", { name: "添加支出或退款" });
+    expect(within(editor).getByLabelText("日期")).toHaveValue("2026-02-01");
+    expect(pickerText).toContain("为 2026-02 选择");
+    expect(client.getQueryData<MonthlyItem[]>(queryKeys.monthly("2026-03"))).toEqual([]);
+    fireEvent.change(within(editor).getByLabelText("原币金额"), { target: { value: "25.00" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "保存条目" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("create_actual_entry", { input: expect.objectContaining({ monthlyItemId: canonical.id, occurredOn: "2026-02-01" }) }));
   });
 
   it("browses and cancels the picker without creating containers or actuals", async () => {

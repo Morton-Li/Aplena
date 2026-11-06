@@ -13,7 +13,7 @@ use tauri::State;
 use super::{
     automatic::{
         AutomaticCheckDto, AutomaticOccurrenceDto, AutomaticPolicyDto, AutomaticPolicyInputDto,
-        ResolveAutomaticEntryConflictInputDto, next_automatic_date,
+        ResolveAutomaticEntryConflictInputDto, next_automatic_date, parse_automatic_first_date,
     },
     dto::{
         ActualEntryDto, ActualEntryInputDto, BudgetProjectionDto, BudgetProjectionRequestDto,
@@ -384,7 +384,7 @@ pub fn preview_plan_item(request: PlanPreviewRequestDto) -> Result<PlanPreviewDt
     let automatic_date = request
         .automatic_first_date
         .as_deref()
-        .map(|value| parse_date(value, "automaticFirstDate"))
+        .map(|value| parse_automatic_first_date(&plan_item, value, "automaticFirstDate"))
         .transpose()?
         .and_then(|anchor| next_automatic_date(&plan_item, anchor, target_month));
 
@@ -634,6 +634,25 @@ mod tests {
             preview_plan_item(request).unwrap().next_automatic_date,
             None
         );
+    }
+
+    #[test]
+    fn payment_preview_rejects_an_anchor_outside_the_payment_schedule() {
+        let mut request = PlanPreviewRequestDto {
+            target_month: "2026-11".to_owned(),
+            plan_item: plan_input("季度支付", "ESSENTIAL_EXPENSE", "300", 3, "PAYMENT"),
+            exchange_rate: cny_rate(),
+            automatic_first_date: Some("2026-12-01".to_owned()),
+        };
+        request.plan_item.start_date = "2026-11-20".to_owned();
+        let error = preview_plan_item(request.clone()).unwrap_err();
+        assert_eq!(error.error_code, "AUTOMATIC_PAYMENT_ANCHOR_MISMATCH");
+        assert_eq!(error.field.as_deref(), Some("automaticFirstDate"));
+
+        request.automatic_first_date = Some("2026-11-20".to_owned());
+        let preview = preview_plan_item(request).unwrap();
+        assert_eq!(preview.scheduled_date.as_deref(), Some("2026-11-20"));
+        assert_eq!(preview.next_automatic_date, preview.scheduled_date);
     }
 
     #[test]

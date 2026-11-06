@@ -20,7 +20,7 @@ import {
 import { syncOfficialReferenceRates } from "../../shared/api/referenceRateSync";
 import { Select } from "../../shared/components/Select";
 import { describeError } from "../../shared/formatting/errors";
-import { currencyName } from "../../shared/formatting/finance";
+import { currencyName, formatEntryRateSource } from "../../shared/formatting/finance";
 import { SoftwareUpdateCard } from "../software-updates/SoftwareUpdateCard";
 
 const settingsSchema = z.object({
@@ -33,6 +33,8 @@ const rateSchema = z.object({
   rate: z.string().trim().regex(/^\d+(\.\d{1,8})?$/, "汇率最多保留八位小数"),
 });
 type RateValues = z.infer<typeof rateSchema>;
+
+const settingsWriteScope = { id: "finance-settings" };
 
 export function SettingsPage() {
   const settingsQuery = useQuery({ queryKey: queryKeys.settings, queryFn: () => getSettings() });
@@ -70,10 +72,11 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
   });
   const selectedBaseCurrency = useWatch({ control: form.control, name: "baseCurrency" });
   const mutation = useMutation({
+    scope: settingsWriteScope,
     mutationFn: (values: SettingsValues) =>
       saveSettings({
         baseCurrency: values.baseCurrency,
-        autoUpdateExchangeRates: settings.auto_update_exchange_rates,
+        autoUpdateExchangeRates: (queryClient.getQueryData<Settings>(queryKeys.settings) ?? settings).auto_update_exchange_rates,
       }),
     onSuccess: async (updated) => {
       queryClient.setQueryData(queryKeys.settings, updated);
@@ -101,7 +104,7 @@ function GeneralSettings({ settings, currencies }: { settings: Settings; currenc
         </label>
         <button className="button button-secondary" disabled={mutation.isPending || !form.formState.isDirty} type="submit">{mutation.isPending ? "保存中…" : "保存"}</button>
       </div>
-      {selectedBaseCurrency !== settings.base_currency && <p className="base-currency-feedback">切换前，请先在“当前汇率”中保存目标币相对于 {settings.base_currency} 的有效汇率（1 单位目标币 = N {settings.base_currency}）。现有汇率将按比例换算为备用手动汇率，参考日期清空；需要最新报价时可再更新官方汇率。</p>}
+      {selectedBaseCurrency !== settings.base_currency && <p className="base-currency-feedback">切换前，请先在“当前汇率”中保存目标币相对于 {settings.base_currency} 的有效汇率（1 单位目标币 = N {settings.base_currency}）。现有汇率将按比例折算为备用汇率，记录原本位币和折算日。需要最新报价时可再更新官方汇率。</p>}
       {mutation.isError && <div className="base-currency-feedback inline-error" role="alert">{describeError(mutation.error)}</div>}
       {mutation.isSuccess && <div className="base-currency-feedback inline-success" role="status">本位币已保存。</div>}
     </form>
@@ -112,6 +115,9 @@ function RateSettings({ settings }: { settings: Settings }) {
   const queryClient = useQueryClient();
   const ratesQuery = useQuery({ queryKey: queryKeys.rates, queryFn: () => listExchangeRates() });
   const [editing, setEditing] = useState<string | null>(null);
+  const [draftBase, setDraftBase] = useState<string | null>(null);
+  const rateBase = draftBase ?? settings.base_currency;
+  const draftBaseChanged = rateBase !== settings.base_currency;
   const form = useForm<RateValues>({
     resolver: zodResolver(rateSchema),
     defaultValues: { currency: "", rate: "" },
@@ -123,11 +129,22 @@ function RateSettings({ settings }: { settings: Settings }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.budgetProjection }),
     ]);
   };
+  const resetRate = () => {
+    form.reset();
+    setEditing(null);
+    setDraftBase(null);
+  };
   const saveMutation = useMutation({
-    mutationFn: (input: RateValues) => upsertExchangeRate(input),
+    scope: settingsWriteScope,
+    mutationFn: ({ input, baseCurrency }: { input: RateValues; baseCurrency: string }) => {
+      const currentBase = (queryClient.getQueryData<Settings>(queryKeys.settings) ?? settings).base_currency;
+      if (baseCurrency !== currentBase) {
+        throw new Error("本位币已更改，请按新的本位币重新输入汇率。");
+      }
+      return upsertExchangeRate(input);
+    },
     onSuccess: async () => {
-      form.reset({ currency: "", rate: "" });
-      setEditing(null);
+      resetRate();
       await refresh();
     },
   });
@@ -140,17 +157,19 @@ function RateSettings({ settings }: { settings: Settings }) {
     },
   });
   const autoUpdateMutation = useMutation({
+    scope: settingsWriteScope,
     mutationFn: (enabled: boolean) => saveSettings({
-      baseCurrency: settings.base_currency,
+      baseCurrency: (queryClient.getQueryData<Settings>(queryKeys.settings) ?? settings).base_currency,
       autoUpdateExchangeRates: enabled,
     }),
     onSuccess: (updated) => {
       queryClient.setQueryData(queryKeys.settings, updated);
     },
   });
-  const startEdit = (currency: string, rate: string) => {
+  const startEdit = (currency: string, rate: string, baseCurrency: string) => {
     setEditing(currency);
-    form.reset({ currency, rate });
+    setDraftBase(baseCurrency);
+    form.reset({ currency, rate }, { keepDefaultValues: true });
   };
 
   return (
@@ -177,22 +196,30 @@ function RateSettings({ settings }: { settings: Settings }) {
       <div className="rate-list">
         {ratesQuery.data?.map((rate) => (
           <div className="rate-row" key={rate.currency}>
-            <div><strong>{rate.currency}</strong><small>{rate.is_base_currency ? "本位币 · 固定" : `${rate.source === "ECB_REFERENCE" ? `欧洲央行每日参考汇率 · ${rate.observed_on ?? "日期未知"}${rate.observed_on && isReferenceRateStale(rate.observed_on) ? " · 数据日期较早" : ""}` : `备用手动汇率 · ${rate.observed_on ?? "日期未知"}`} · ${rate.plan_reference_count} 个计划引用`}</small></div>
+            <div>
+              <strong>{rate.currency}</strong>
+              <small>{rate.is_base_currency ? "本位币 · 固定" : <>
+                {formatEntryRateSource(rate.source, rate.observed_on ?? "日期未知", rate.rebased_from_currency, rate.rebased_on)}
+                {rate.source === "ECB_REFERENCE" && rate.observed_on && isReferenceRateStale(rate.observed_on) && " · 数据日期较早"}
+                {" · "}{rate.plan_reference_count} 个计划引用
+              </>}</small>
+            </div>
             <code>{rate.rate}</code>
             <div>
-              <button className="text-button" disabled={rate.is_base_currency} type="button" onClick={() => startEdit(rate.currency, rate.rate)}>编辑</button>
+              <button className="text-button" disabled={rate.is_base_currency || saveMutation.isPending} type="button" onClick={() => startEdit(rate.currency, rate.rate, rate.base_currency)}>编辑</button>
               <button className="text-button danger-text" disabled={rate.is_base_currency || deleteMutation.isPending} type="button" onClick={() => deleteMutation.mutate(rate.currency)}>删除</button>
             </div>
           </div>
         ))}
       </div>
       {syncMutation.isSuccess && <div className="inline-success" role="status">已更新 {syncMutation.data.updatedCount} 个币种的欧洲央行每日参考汇率{syncMutation.data.observedOn ? `（参考日期 ${syncMutation.data.observedOn}）` : ""}，既有费用的汇率快照未作修改。</div>}
-      <form className="rate-form" onSubmit={form.handleSubmit((values) => saveMutation.mutate({ currency: values.currency.toUpperCase(), rate: values.rate }))}>
+      <form className="rate-form" onSubmit={form.handleSubmit((values) => saveMutation.mutate({ input: { currency: values.currency.toUpperCase(), rate: values.rate }, baseCurrency: rateBase }))}>
         <label>币种<input aria-label="汇率币种" disabled={editing !== null} placeholder="USD" maxLength={3} {...form.register("currency")} />{form.formState.errors.currency && <em>{form.formState.errors.currency.message}</em>}</label>
-        <label>汇率<input aria-label="汇率值" inputMode="decimal" placeholder="7.25000000" {...form.register("rate")} />{form.formState.errors.rate && <em>{form.formState.errors.rate.message}</em>}</label>
-        <button className="button button-secondary" disabled={saveMutation.isPending} type="submit">{editing ? "更新汇率" : "添加汇率"}</button>
-        {editing && <button className="button button-quiet" type="button" onClick={() => { setEditing(null); form.reset(); }}>取消编辑</button>}
+        <label>汇率（{rateBase}）<input aria-label="汇率值" inputMode="decimal" placeholder="7.25000000" {...form.register("rate", { onChange: () => setDraftBase((base) => base ?? settings.base_currency) })} />{form.formState.errors.rate && <em>{form.formState.errors.rate.message}</em>}</label>
+        <button className="button button-secondary" disabled={saveMutation.isPending || draftBaseChanged} type="submit">{editing ? "更新汇率" : "添加汇率"}</button>
+        {(editing || draftBaseChanged) && <button className="button button-quiet" disabled={saveMutation.isPending} type="button" onClick={() => { resetRate(); saveMutation.reset(); }}>取消编辑</button>}
       </form>
+      {draftBaseChanged && <p className="settings-rate-fallback">当前草稿以 {rateBase} 报价。请取消编辑后按 {settings.base_currency} 重新输入汇率。</p>}
       <small className="settings-rate-fallback">汇率表示 1 单位所选币种可兑换多少 {settings.base_currency}。手动输入可用于补充切换本位币的兑换依据，或作为官方接口暂不可用时的备用方式。</small>
       {(saveMutation.isError || deleteMutation.isError || syncMutation.isError || autoUpdateMutation.isError) && <div className="inline-error" role="alert">{describeError(saveMutation.error ?? deleteMutation.error ?? syncMutation.error ?? autoUpdateMutation.error)}</div>}
     </section>

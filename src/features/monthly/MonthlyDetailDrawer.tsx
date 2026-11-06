@@ -13,13 +13,14 @@ import {
   type MonthlyItem,
 } from "../../shared/api/finance";
 import { describeError } from "../../shared/formatting/errors";
-import { formatMoney, formatPercent } from "../../shared/formatting/finance";
+import { formatEntryRateSource, formatMoney, formatPercent } from "../../shared/formatting/finance";
 import { categoryLabel, flowLabel, recognitionLabel } from "../../shared/formatting/labels";
 import { Dialog } from "../../shared/components/Dialog";
 import { isActualOnly, isTemporaryItem } from "./monthlyWorkspace";
 
 interface MonthlyDetailDrawerProps {
   item: MonthlyItem;
+  entryDialogOpen?: boolean;
   onClose: () => void;
   onDeleted: () => Promise<void>;
   onSaved: () => Promise<void>;
@@ -35,7 +36,7 @@ const focusableSelector = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEntry, onEditEntry }: MonthlyDetailDrawerProps) {
+export function MonthlyDetailDrawer({ item, entryDialogOpen = false, onClose, onDeleted, onSaved, onAddEntry, onEditEntry }: MonthlyDetailDrawerProps) {
   const titleId = useId();
   const drawerRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null);
@@ -67,12 +68,17 @@ export function MonthlyDetailDrawer({ item, onClose, onDeleted, onSaved, onAddEn
 
   useEffect(() => {
     const previousFocus = previousFocusRef.current;
-    const initial = drawerRef.current?.querySelector<HTMLElement>("[data-drawer-initial-focus]");
-    (initial ?? drawerRef.current)?.focus();
     return () => {
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, []);
+
+  useEffect(() => {
+    const drawer = drawerRef.current;
+    if (!drawer || entryDialogOpen || drawer.contains(document.activeElement)) return;
+    const initial = drawer.querySelector<HTMLElement>("[data-drawer-initial-focus]");
+    (initial ?? drawer).focus();
+  }, [entryDialogOpen]);
 
   const closeDrawer = () => { if (!deletingEntry.current) onClose(); };
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -241,7 +247,9 @@ function ActualEntryList({ item, entries, pending, error, onEdit, onDelete }: {
   return <div className="monthly-drawer-entry-list">{entries.map((entry) => (
     <article className="monthly-drawer-entry" key={entry.id}>
       <div><time dateTime={entry.occurred_on}>{entry.occurred_on}</time><strong>{formatMoney(`${entry.effect === "INCREASE" ? "+" : "-"}${entry.source_amount}`, entry.source_currency)}</strong></div>
-      {entry.source_currency !== item.currency && <small className="monthly-entry-conversion">折合 {formatMoney(entry.amount, item.currency)} · 1 {entry.source_currency} = {entry.exchange_rate} {item.currency} · {entry.exchange_rate_source === "ECB_REFERENCE" ? "欧洲央行每日参考汇率" : "备用手动汇率"} · {entry.exchange_rate_observed_on}</small>}
+      {entry.source_currency !== item.currency && <small className="monthly-entry-conversion">
+        折合 {formatMoney(entry.amount, item.currency)} · 1 {entry.source_currency} = {entry.exchange_rate} {item.currency} · {formatEntryRateSource(entry.exchange_rate_source, entry.exchange_rate_observed_on, entry.exchange_rate_rebased_from_currency, entry.exchange_rate_rebased_on)}
+      </small>}
       <p>{entry.note ?? (entry.origin === "MIGRATED_AGGREGATE" ? "旧版实际总额迁移" : "无备注")}</p>
       {entry.origin === "AUTOMATIC" && <span className="automatic-entry-badge">自动入账</span>}
       {entry.detail_group && <small className="special-entry-group">分组：{entry.detail_group}</small>}

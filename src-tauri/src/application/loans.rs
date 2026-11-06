@@ -7,6 +7,7 @@ use pfcm_domain::{
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection};
 use tauri::State;
 use uuid::Uuid;
@@ -172,13 +173,23 @@ pub struct LoanScheduleInput {
     pub period_rate_percent: String,
     pub note: Option<String>,
     pub rows: Vec<LoanScheduleRow>,
+    #[serde(default)]
+    pub correct_past_installments: bool,
+    pub expected_correction_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LoanSchedulePreview {
     pub principal_to_schedule: String,
     pub preserved_count: usize,
+    pub corrected_past_count: usize,
+    pub correction_revision: Option<String>,
     pub rows: Vec<LoanScheduleRow>,
+}
+
+struct PreparedLoanSchedule {
+    preview: LoanSchedulePreview,
+    corrected_past_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -351,7 +362,7 @@ impl FinanceService {
         let mut tx = store.pool().begin().await.map_err(db)?;
         let result = schedule_on(&mut tx, &input, current_natural_date()?).await?;
         tx.commit().await.map_err(db)?;
-        Ok(result)
+        Ok(result.preview)
     }
 
     pub async fn save_loan_schedule(&self, input: LoanScheduleInput) -> Result<(), AppError> {
@@ -367,11 +378,26 @@ impl FinanceService {
         let _operation = self.operation_gate.write().await;
         let store = self.current_store().await;
         let mut tx = store.pool().begin().await.map_err(db)?;
-        let preview = schedule_on(&mut tx, &input, today).await?;
+        let PreparedLoanSchedule {
+            preview,
+            corrected_past_ids,
+        } = schedule_on(&mut tx, &input, today).await?;
+        if input.correct_past_installments
+            && preview.correction_revision != input.expected_correction_revision
+        {
+            return Err(invalid("LOAN_STALE_RECORD"));
+        }
         let now = timestamp();
         let version = Uuid::new_v4().to_string();
         sqlx::query("UPDATE loan_installments SET superseded=1 WHERE loan_id=? AND superseded=0 AND due_on>=?")
             .bind(&input.loan_id).bind(today.to_string()).execute(&mut *tx).await.map_err(db)?;
+        for id in corrected_past_ids {
+            sqlx::query("UPDATE loan_installments SET superseded=1 WHERE id=?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
         sqlx::query("INSERT INTO loan_schedule_versions (id,loan_id,frequency,interval_count,method,period_rate_percent,note,created_at) VALUES (?,?,?,?,?,?,?,?)")
             .bind(&version).bind(&input.loan_id).bind(frequency_code(input.frequency)).bind(i64::from(input.interval_count))
             .bind(&input.method).bind(&input.period_rate_percent).bind(normalized(input.note)).bind(&now).execute(&mut *tx).await.map_err(db)?;
@@ -909,7 +935,7 @@ async fn schedule_on(
     connection: &mut SqliteConnection,
     input: &LoanScheduleInput,
     today: CalendarDate,
-) -> Result<LoanSchedulePreview, AppError> {
+) -> Result<PreparedLoanSchedule, AppError> {
     let rate = Decimal::from_str_exact(&input.period_rate_percent)
         .map_err(|_| invalid("INVALID_RATIO"))?;
     if rate < Decimal::ZERO || rate > Decimal::ONE_HUNDRED || rate.scale() > 8 {
@@ -923,28 +949,34 @@ async fn schedule_on(
         return Err(invalid("INVALID_PERIOD"));
     }
     let has_existing = !detail.versions.is_empty();
-    let mut preserved_principal = 0;
+    let today_text = today.to_string();
+    let remaining = amount(&detail.loan.remaining_principal)?.scaled_i64();
+    let mut past_principal = 0;
     let mut preserved_count = 0;
-    for row in &detail.installments {
-        if !row.superseded && has_existing && row.due_on < today.to_string() {
-            preserved_count += 1;
-            preserved_principal =
-                sum([preserved_principal, amount(&row.principal)?.scaled_i64()].into_iter())?;
-        } else {
-            // Future plan replacements retain payments against the original version.
-            preserved_principal = sum([
-                preserved_principal,
-                amount(&row.paid_principal)?.scaled_i64(),
-            ]
-            .into_iter())?;
+    let mut correctable = Vec::new();
+    for row in detail
+        .installments
+        .iter()
+        .filter(|row| !row.superseded && row.due_on < today_text)
+    {
+        preserved_count += 1;
+        let unpaid = amount(&row.remaining_principal)?.scaled_i64();
+        if unpaid > 0 {
+            past_principal = sum([past_principal, unpaid].into_iter())?;
+            correctable.push(row);
         }
     }
-    let unallocated_paid: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(a.principal_scaled),0) FROM loan_payment_allocations a JOIN loan_payments p ON p.id=a.payment_id WHERE p.loan_id=? AND a.installment_id IS NULL").bind(&input.loan_id).fetch_one(&mut *connection).await.map_err(db)?;
-    let available =
-        amount(&detail.loan.total_principal)?.scaled_i64() - preserved_principal - unallocated_paid;
-    if available < 0 {
-        return Err(invalid("LOAN_SCHEDULE_PRINCIPAL_MISMATCH"));
-    }
+    // Remaining principal already excludes all paid principal, including amounts
+    // allocated to superseded installments and unassigned payments.
+    let available = match (past_principal > remaining, input.correct_past_installments) {
+        (true, false) => return Err(invalid("LOAN_PAST_INSTALLMENTS_CORRECTION_REQUIRED")),
+        (false, true) => return Err(invalid("LOAN_STALE_RECORD")),
+        (true, true) => remaining,
+        (false, false) => {
+            correctable.clear();
+            remaining - past_principal
+        }
+    };
     let rows = match input.method.as_str() {
         "MANUAL" => input.rows.clone(),
         "EQUAL_PRINCIPAL" | "ANNUITY" => {
@@ -970,10 +1002,13 @@ async fn schedule_on(
     if rows.len() > 10_000 {
         return Err(invalid("INVALID_PERIOD"));
     }
-    let earliest = if has_existing {
-        today.max(date(&detail.loan.started_on)?)
+    let started = date(&detail.loan.started_on)?;
+    let earliest = if let Some(first) = correctable.first() {
+        date(&first.due_on)?.max(started)
+    } else if has_existing {
+        today.max(started)
     } else {
-        date(&detail.loan.started_on)?
+        started
     };
     let mut total = 0;
     let mut previous = None;
@@ -995,10 +1030,29 @@ async fn schedule_on(
     if total != available {
         return Err(invalid("LOAN_SCHEDULE_PRINCIPAL_MISMATCH"));
     }
-    Ok(LoanSchedulePreview {
-        principal_to_schedule: money(available)?,
-        preserved_count,
-        rows,
+    let correction_revision = if correctable.is_empty() {
+        None
+    } else {
+        // Include all installments being replaced so a payment between preview
+        // and save cannot put newly paid amounts back into the plan.
+        let future = detail
+            .installments
+            .iter()
+            .filter(|row| !row.superseded && row.due_on >= today_text)
+            .collect::<Vec<_>>();
+        let reviewed = serde_json::to_vec(&(&correctable, &future, &rows))
+            .map_err(|_| invalid("LOAN_STALE_RECORD"))?;
+        Some(format!("{:x}", Sha256::digest(reviewed)))
+    };
+    Ok(PreparedLoanSchedule {
+        preview: LoanSchedulePreview {
+            principal_to_schedule: money(available)?,
+            preserved_count: preserved_count - correctable.len(),
+            corrected_past_count: correctable.len(),
+            correction_revision,
+            rows,
+        },
+        corrected_past_ids: correctable.iter().map(|row| row.id.clone()).collect(),
     })
 }
 
@@ -1374,6 +1428,7 @@ async fn post_charges_on(
             .map_err(|e| AppError::from_domain(e, None))?,
         source: "BASE_CURRENCY".to_owned(),
         observed_on: occurred,
+        derivation: None,
     };
     Store::insert_actual_entry_on(connection, &entry, &snapshot, now)
         .await

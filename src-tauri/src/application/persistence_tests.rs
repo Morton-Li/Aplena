@@ -188,6 +188,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             (6, "budget specials".to_owned(), 1),
             (7, "loans".to_owned(), 1),
             (8, "loan advances".to_owned(), 1),
+            (9, "exchange rate derivations".to_owned(), 1),
         ]
     );
 
@@ -335,6 +336,12 @@ async fn current_schema_matches_the_frozen_pre_release_schema_after_public_migra
         .execute(&pre_release)
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../migrations/0009_exchange_rate_derivations.sql"
+    ))
+    .execute(&pre_release)
+    .await
+    .unwrap();
 
     assert_eq!(
         schema_snapshot(baseline.pool()).await,
@@ -529,6 +536,18 @@ async fn budget_specials_migration_preserves_schema_five_facts_and_defaults_auto
             .is_empty()
     );
 
+    for migration in [
+        include_str!("../../migrations/0007_loans.sql"),
+        include_str!("../../migrations/0008_loan_advances.sql"),
+        include_str!("../../migrations/0009_exchange_rate_derivations.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+    }
+    for (index, query) in financial_queries.into_iter().enumerate() {
+        let after: Vec<String> = sqlx::query_scalar(query).fetch_all(&pool).await.unwrap();
+        assert_eq!(before[index], after);
+    }
+
     let store = crate::infrastructure::Store::new(pool);
     let january = YearMonth::new(2026, 1).unwrap();
     let monthly = store.list_monthly_items(january).await.unwrap();
@@ -542,6 +561,11 @@ async fn budget_specials_migration_preserves_schema_five_facts_and_defaults_auto
         entries
             .iter()
             .all(|entry| entry.value.detail_group().is_none())
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.exchange_snapshot.derivation.is_none())
     );
     assert_eq!(
         monthly
@@ -1243,6 +1267,59 @@ async fn base_currency_change_rebases_rates_and_future_rule_projection_without_d
 }
 
 #[tokio::test]
+async fn manual_actual_requires_matching_saved_derivation_and_keeps_the_snapshot() {
+    let service = test_service().await;
+    saved_rate(&service, "USD", "7.2").await;
+    saved_rate(&service, "EUR", "8").await;
+    service
+        .save_settings(settings_input("USD", false))
+        .await
+        .unwrap();
+    let rates = service.list_exchange_rates().await.unwrap();
+    let rate = rates.iter().find(|rate| rate.currency == "EUR").unwrap();
+    let month = current_month();
+    let item = service
+        .create_manual_monthly_item(ManualMonthlyItemInputDto {
+            month: month.to_string(),
+            category: "ESSENTIAL_EXPENSE".to_owned(),
+            name: "Foreign purchase".to_owned(),
+            note: None,
+        })
+        .await
+        .unwrap();
+    let input = ActualEntryInputDto {
+        id: None,
+        monthly_item_id: item.id.clone(),
+        occurred_on: month.first_date().to_string(),
+        effect: "INCREASE".to_owned(),
+        amount: "9.00".to_owned(),
+        currency: "EUR".to_owned(),
+        exchange_rate: rate.rate.clone(),
+        exchange_rate_source: "MANUAL".to_owned(),
+        exchange_rate_observed_on: rate.rebased_on.clone().unwrap(),
+        exchange_rate_rebased_from_currency: rate.rebased_from_currency.clone(),
+        exchange_rate_rebased_on: rate.rebased_on.clone(),
+        note: None,
+        detail_group: None,
+    };
+    let entry = service.create_actual_entry(input.clone()).await.unwrap();
+    assert_eq!(entry.amount, "10.00");
+    assert_eq!(
+        entry.exchange_rate_rebased_from_currency,
+        rate.rebased_from_currency
+    );
+    assert_eq!(entry.exchange_rate_rebased_on, rate.rebased_on);
+
+    saved_rate(&service, "EUR", "2").await;
+    let error = service.create_actual_entry(input).await.unwrap_err();
+    assert_eq!(error.error_code, "REBASED_EXCHANGE_RATE_CHANGED");
+    assert_eq!(
+        service.list_actual_entries(item.id).await.unwrap(),
+        vec![entry]
+    );
+}
+
+#[tokio::test]
 async fn base_currency_change_requires_a_rate_even_in_an_empty_ledger_then_allows_the_switch() {
     let service = test_service().await;
     let settings_before = service.get_settings().await.unwrap();
@@ -1277,6 +1354,49 @@ async fn base_currency_change_requires_a_rate_even_in_an_empty_ledger_then_allow
         service.get_settings().await.unwrap().unwrap().base_currency,
         "EUR"
     );
+}
+
+#[tokio::test]
+async fn base_currency_change_requires_replacing_a_legacy_base_rate() {
+    let service = test_service().await;
+    let store = service.test_store().await;
+    // v1.2.3 inserted the new base at one and left the former base row untouched.
+    sqlx::raw_sql(
+        "INSERT INTO exchange_rates (currency_code, rate_scaled, source, observed_on, updated_at) \
+         VALUES ('USD', 100000000, 'BASE_CURRENCY', '2026-10-08', '2026-10-08T00:00:00Z'); \
+         UPDATE settings SET base_currency_code = 'USD' WHERE id = 1;",
+    )
+    .execute(store.pool())
+    .await
+    .unwrap();
+    saved_rate(&service, "EUR", "1.10").await;
+    let settings_before = service.get_settings().await.unwrap();
+    let rates_before = service.list_exchange_rates().await.unwrap();
+
+    for target in ["CNY", "EUR"] {
+        let error = service
+            .save_settings(settings_input(target, true))
+            .await
+            .unwrap_err();
+        assert_eq!(error.error_code, "LEGACY_BASE_RATE_REQUIRES_UPDATE");
+        assert_eq!(
+            error.params.get("currency").map(String::as_str),
+            Some("CNY")
+        );
+        assert_eq!(service.get_settings().await.unwrap(), settings_before);
+        assert_eq!(service.list_exchange_rates().await.unwrap(), rates_before);
+    }
+
+    saved_rate(&service, "CNY", "0.14").await;
+    let settings = service
+        .save_settings(settings_input("CNY", true))
+        .await
+        .unwrap();
+    assert_eq!(settings.base_currency, "CNY");
+    let rates = service.list_exchange_rates().await.unwrap();
+    let euro = rates.iter().find(|rate| rate.currency == "EUR").unwrap();
+    assert_eq!(euro.rate, "7.85714286");
+    assert_eq!(euro.rebased_from_currency.as_deref(), Some("USD"));
 }
 
 #[tokio::test]
@@ -1625,6 +1745,8 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
             exchange_rate: "1.00000000".to_owned(),
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{next}-01"),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: Some("迟到退款".to_owned()),
             detail_group: None,
         })
@@ -1682,6 +1804,8 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
             exchange_rate: "1.00000000".to_owned(),
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{next}-02"),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: None,
             detail_group: None,
         })
@@ -1710,6 +1834,8 @@ fn linked_refund(
         }
         .to_owned(),
         exchange_rate_observed_on: format!("{}-01", item.month),
+        exchange_rate_rebased_from_currency: None,
+        exchange_rate_rebased_on: None,
         note: Some("迟到退款".to_owned()),
         detail_group: None,
     }
@@ -1954,6 +2080,8 @@ async fn manual_monthly_item_accepts_actual_entries_without_a_plan() {
             exchange_rate: "1.00000000".to_owned(),
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{current}-02"),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: Some("月租".to_owned()),
             detail_group: None,
         })
@@ -2051,6 +2179,8 @@ async fn official_cross_rates_and_actual_entry_snapshots_stay_fixed_and_atomic()
             exchange_rate: usd.rate.clone(),
             exchange_rate_source: usd.source.clone(),
             exchange_rate_observed_on: usd.observed_on.clone().unwrap(),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: None,
             detail_group: None,
         })
@@ -2100,6 +2230,8 @@ async fn official_cross_rates_and_actual_entry_snapshots_stay_fixed_and_atomic()
             exchange_rate: "99".to_owned(),
             exchange_rate_source: "MANUAL".to_owned(),
             exchange_rate_observed_on: "2026-08-29".to_owned(),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: Some("编辑金额但保留基准".to_owned()),
             detail_group: None,
         })
@@ -2496,6 +2628,8 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
             exchange_rate: "1.00000000".to_owned(),
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{current}-15"),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: None,
             detail_group: None,
         })
@@ -2518,6 +2652,8 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
             exchange_rate: "1.00000000".to_owned(),
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{current}-16"),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: Some("退款超过本月支出".to_owned()),
             detail_group: None,
         })
@@ -2541,6 +2677,8 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
             exchange_rate: "1.00000000".to_owned(),
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{wrong_month}-01"),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: Some("调整退款".to_owned()),
             detail_group: None,
         })
@@ -2559,6 +2697,8 @@ async fn actual_entries_aggregate_without_status_and_base_currency_lock_remains_
             exchange_rate: "1.00000000".to_owned(),
             exchange_rate_source: "BASE_CURRENCY".to_owned(),
             exchange_rate_observed_on: format!("{current}-17"),
+            exchange_rate_rebased_from_currency: None,
+            exchange_rate_rebased_on: None,
             note: Some("调整退款".to_owned()),
             detail_group: None,
         })

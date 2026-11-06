@@ -39,6 +39,8 @@ fn schedule(loan: &LoanDto, frequency: LoanFrequency) -> LoanScheduleInput {
         period_rate_percent: "1".into(),
         note: None,
         rows: vec![],
+        correct_past_installments: false,
+        expected_correction_revision: None,
     }
 }
 fn payment(loan: &LoanDto, principal: &str, interest: &str, fees: &str) -> LoanPaymentInput {
@@ -233,6 +235,160 @@ async fn advances_require_plan_review_and_cannot_fund_earlier_payments() {
     let unchanged = service.get_loan(loan.id).await.unwrap();
     assert_eq!(unchanged.advances[0].occurred_on, "2000-02-12");
     assert_eq!(unchanged.loan.remaining_principal, "0.00");
+}
+
+#[tokio::test]
+async fn explicit_past_installment_correction_keeps_original_rows_and_payments() {
+    let service = service().await;
+    let loan = service
+        .create_loan(creation("BORROWED", true))
+        .await
+        .unwrap();
+    service
+        .save_loan_advance(advance(&loan, "250"))
+        .await
+        .unwrap();
+    let next_month = current_natural_date()
+        .unwrap()
+        .year_month()
+        .next_month()
+        .unwrap();
+    let mut plan = schedule(&loan, LoanFrequency::Month);
+    plan.method = "MANUAL".into();
+    plan.rows = [
+        "2000-03-01",
+        "2000-04-01",
+        "2000-05-01",
+        "2000-06-01",
+        "2000-07-01",
+    ]
+    .into_iter()
+    .map(|due_on| LoanScheduleRow {
+        due_on: due_on.parse().unwrap(),
+        principal: "250".parse().unwrap(),
+        interest: "10".parse().unwrap(),
+        fees: "0".parse().unwrap(),
+    })
+    .collect();
+    plan.rows.push(LoanScheduleRow {
+        due_on: next_month.first_date(),
+        principal: "0".parse().unwrap(),
+        interest: "5".parse().unwrap(),
+        fees: "0".parse().unwrap(),
+    });
+    service.save_loan_schedule(plan.clone()).await.unwrap();
+    let mut repayment = payment(&loan, "300", "1", "0");
+    repayment.occurred_on = "2000-03-10".into();
+    service.save_loan_payment(repayment).await.unwrap();
+    let original = service.get_loan(loan.id.clone()).await.unwrap();
+    service
+        .delete_loan_advance(DeleteLoanActualInput {
+            id: original.advances[0].id.clone(),
+            expected_updated_at: original.advances[0].updated_at.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        service.budget_projection().await.unwrap_err().error_code,
+        "LOAN_PLAN_REVIEW_REQUIRED"
+    );
+    assert_eq!(
+        service
+            .preview_loan_schedule(plan.clone())
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_PAST_INSTALLMENTS_CORRECTION_REQUIRED"
+    );
+
+    plan.correct_past_installments = true;
+    plan.rows = vec![
+        LoanScheduleRow {
+            due_on: "2000-04-01".parse().unwrap(),
+            principal: "200".parse().unwrap(),
+            interest: "3".parse().unwrap(),
+            fees: "0".parse().unwrap(),
+        },
+        LoanScheduleRow {
+            due_on: next_month.first_date(),
+            principal: "500".parse().unwrap(),
+            interest: "5".parse().unwrap(),
+            fees: "0".parse().unwrap(),
+        },
+    ];
+    let preview = service.preview_loan_schedule(plan.clone()).await.unwrap();
+    assert_eq!(preview.principal_to_schedule, "700.00");
+    assert_eq!(preview.preserved_count, 1);
+    assert_eq!(preview.corrected_past_count, 4);
+    assert_eq!(preview.rows, plan.rows);
+    assert_eq!(
+        service
+            .save_loan_schedule(plan.clone())
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_STALE_RECORD"
+    );
+    plan.expected_correction_revision = Some(preview.correction_revision.unwrap());
+    let mut interest_payment = payment(&loan, "0", "1", "0");
+    interest_payment.occurred_on = "2000-03-11".into();
+    interest_payment.allocations = vec![LoanAllocation {
+        installment_id: Some(original.installments.last().unwrap().id.clone()),
+        principal: "0".into(),
+        interest: "1".into(),
+        fees: "0".into(),
+    }];
+    service.save_loan_payment(interest_payment).await.unwrap();
+    assert_eq!(
+        service
+            .save_loan_schedule(plan.clone())
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_STALE_RECORD"
+    );
+    let original = service.get_loan(loan.id.clone()).await.unwrap();
+    assert_eq!(original.versions.len(), 1);
+
+    plan.rows[1].interest = "4".parse().unwrap();
+    let preview = service.preview_loan_schedule(plan.clone()).await.unwrap();
+    plan.expected_correction_revision = preview.correction_revision;
+    service.save_loan_schedule(plan).await.unwrap();
+    let detail = service.get_loan(loan.id.clone()).await.unwrap();
+    assert_eq!(detail.versions.len(), 2);
+    assert!(!detail.loan.plan_review_required);
+    assert_eq!(detail.loan.remaining_principal, "700.00");
+    assert_eq!(detail.loan.scheduled_remaining_principal, "700.00");
+    for (index, old) in original.installments.iter().enumerate() {
+        let retained = detail
+            .installments
+            .iter()
+            .find(|row| row.id == old.id)
+            .unwrap();
+        assert_eq!(retained.due_on, old.due_on);
+        assert_eq!(retained.principal, old.principal);
+        assert_eq!(retained.paid_principal, old.paid_principal);
+        assert_eq!(retained.remaining_interest, old.remaining_interest);
+        assert_eq!(retained.superseded, index != 0);
+    }
+    assert_eq!(detail.payments.len(), original.payments.len());
+    for (current, original) in detail.payments.iter().zip(original.payments.iter()) {
+        assert_eq!(current.id, original.id);
+        assert_eq!(current.allocations, original.allocations);
+    }
+    assert_eq!(
+        service
+            .month_analytics("2000-03".into())
+            .await
+            .unwrap()
+            .expense
+            .actual_to_date
+            .as_deref(),
+        Some("2.00")
+    );
+    let projection = service.budget_projection().await.unwrap();
+    assert_eq!(projection.loan_principal_due, "500.00");
+    assert_eq!(projection.loan_interest_expenses, "4.00");
 }
 
 #[tokio::test]
@@ -734,6 +890,8 @@ async fn rejects_overpayments_wrong_contract_allocations_and_partial_linked_edit
         exchange_rate: "1".into(),
         exchange_rate_source: "BASE_CURRENCY".into(),
         exchange_rate_observed_on: "2000-02-11".into(),
+        exchange_rate_rebased_from_currency: None,
+        exchange_rate_rebased_on: None,
         note: None,
         detail_group: None,
     };

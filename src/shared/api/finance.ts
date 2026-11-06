@@ -21,6 +21,8 @@ export interface ExchangeRate {
   is_base_currency: boolean;
   source: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL";
   observed_on: string | null;
+  rebased_from_currency?: string | null;
+  rebased_on?: string | null;
   plan_reference_count: number;
   updated_at: string;
 }
@@ -101,6 +103,8 @@ export interface ActualEntryInput {
   exchangeRate: string;
   exchangeRateSource: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL";
   exchangeRateObservedOn: string;
+  exchangeRateRebasedFromCurrency?: string;
+  exchangeRateRebasedOn?: string;
   note?: string;
   detailGroup?: string;
 }
@@ -116,6 +120,8 @@ export interface ActualEntry {
   exchange_rate: string;
   exchange_rate_source: "BASE_CURRENCY" | "ECB_REFERENCE" | "MANUAL" | "MIGRATED_BASE";
   exchange_rate_observed_on: string;
+  exchange_rate_rebased_from_currency?: string | null;
+  exchange_rate_rebased_on?: string | null;
   origin: "USER" | "MIGRATED_AGGREGATE" | "AUTOMATIC";
   note: string | null;
   detail_group?: string | null;

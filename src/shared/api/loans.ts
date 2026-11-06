@@ -40,8 +40,12 @@ export interface LoanScheduleRow { due_on: string; principal: string; interest: 
 export interface LoanScheduleInput {
   loanId: string; frequency: LoanFrequency; intervalCount: number; firstDate: string; count: number;
   method: "MANUAL" | "EQUAL_PRINCIPAL" | "ANNUITY"; periodRatePercent: string; note?: string; rows: LoanScheduleRow[];
+  correctPastInstallments?: boolean; expectedCorrectionRevision?: string;
 }
-export interface LoanSchedulePreview { principal_to_schedule: string; preserved_count: number; rows: LoanScheduleRow[] }
+export interface LoanSchedulePreview {
+  principal_to_schedule: string; preserved_count: number; rows: LoanScheduleRow[];
+  corrected_past_count: number; correction_revision: string | null;
+}
 export interface LoanDetail {
   loan: Loan; installments: LoanInstallment[]; payments: LoanPayment[]; advances: LoanAdvance[];
   versions: Array<{ id: string; frequency: LoanFrequency; interval_count: number; method: string; period_rate_percent: string; note: string | null; created_at: string }>;

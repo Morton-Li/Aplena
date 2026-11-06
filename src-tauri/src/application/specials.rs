@@ -91,6 +91,8 @@ pub struct SpecialActualEntryInputDto {
     pub exchange_rate: String,
     pub exchange_rate_source: String,
     pub exchange_rate_observed_on: String,
+    pub exchange_rate_rebased_from_currency: Option<String>,
+    pub exchange_rate_rebased_on: Option<String>,
     pub note: Option<String>,
     pub detail_group: Option<String>,
 }
@@ -511,6 +513,8 @@ impl FinanceService {
                 exchange_rate: input.exchange_rate,
                 exchange_rate_source: input.exchange_rate_source,
                 exchange_rate_observed_on: input.exchange_rate_observed_on,
+                exchange_rate_rebased_from_currency: input.exchange_rate_rebased_from_currency,
+                exchange_rate_rebased_on: input.exchange_rate_rebased_on,
                 note: input.note,
                 detail_group: normalized_optional(input.detail_group),
             },
