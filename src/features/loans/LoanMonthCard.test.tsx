@@ -33,6 +33,6 @@ it("provides a repair path when a loan plan prevents a reliable budget forecast"
     throw { error_code: "LOAN_PLAN_REVIEW_REQUIRED", message_key: "error.loan_plan_review_required" };
   });
   wrap(<GoalsPage />);
-  expect(await screen.findByRole("alert")).toHaveTextContent("先核对还款分配或调整后续计划");
+  expect(await screen.findByRole("alert")).toHaveTextContent("先核对本金往来或调整后续计划");
   expect(screen.getByRole("link", { name: "核对借贷计划" })).toHaveAttribute("href", "/loans");
 });

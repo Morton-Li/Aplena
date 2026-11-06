@@ -340,6 +340,85 @@ async fn full_cash_period_is_distinct_from_amortized_monthly_plan() {
 }
 
 #[tokio::test]
+async fn changing_an_amortized_rule_start_keeps_its_cash_cycle_and_day() {
+    let service = service().await;
+    let rule = plan(
+        "Quarterly fee",
+        "300.00",
+        "CNY",
+        3,
+        RecognitionMode::Amortized,
+        "2026-10-01",
+        None,
+    );
+    insert_plan(&service, &rule).await;
+    save_policy(&service, &rule, true, Some("2026-10-31"), "2026-10-07").await;
+
+    // Moving the budget start into November must not move the cash cycle
+    // from October/January to November/February.
+    let revised = PlanItem::new(
+        rule.id(),
+        rule.name(),
+        rule.category(),
+        rule.amount(),
+        rule.currency().clone(),
+        rule.period_months(),
+        date("2026-11-01"),
+        None,
+        rule.recognition_mode(),
+        None,
+    )
+    .unwrap();
+    service
+        .current_store()
+        .await
+        .update_plan_item(&revised, FIXTURE_TIMESTAMP)
+        .await
+        .unwrap();
+    service
+        .refresh_automatic_policy_version_at_unlocked(rule.id(), date("2026-11-06"))
+        .await
+        .unwrap();
+    assert_eq!(
+        service.list_automatic_entry_policies().await.unwrap()[0]
+            .first_date
+            .as_deref(),
+        Some("2026-10-31")
+    );
+    save_policy(&service, &revised, true, Some("2026-10-31"), "2026-11-06").await;
+
+    for day in ["2026-12-31", "2027-01-30", "2027-02-28", "2027-04-29"] {
+        assert_eq!(
+            service
+                .check_automatic_entries_at(date(day))
+                .await
+                .unwrap()
+                .created_count,
+            0,
+            "{day}"
+        );
+    }
+    for day in ["2027-01-31", "2027-04-30", "2027-07-31"] {
+        let posted = service.check_automatic_entries_at(date(day)).await.unwrap();
+        assert_eq!(posted.created_count, 1, "{day}");
+        assert_eq!(posted.occurrences[0].occurred_on, day);
+        let entries = service
+            .list_actual_entries(posted.occurrences[0].monthly_item_id.clone().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(entries[0].source_amount, "300.00");
+        assert_eq!(
+            service
+                .check_automatic_entries_at(date(day))
+                .await
+                .unwrap()
+                .created_count,
+            0
+        );
+    }
+}
+
+#[tokio::test]
 async fn payment_cash_date_clamps_at_month_end_and_leap_day() {
     let service = service().await;
     let rule = plan(

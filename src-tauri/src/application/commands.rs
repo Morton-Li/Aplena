@@ -13,7 +13,7 @@ use tauri::State;
 use super::{
     automatic::{
         AutomaticCheckDto, AutomaticOccurrenceDto, AutomaticPolicyDto, AutomaticPolicyInputDto,
-        ResolveAutomaticEntryConflictInputDto,
+        ResolveAutomaticEntryConflictInputDto, next_automatic_date,
     },
     dto::{
         ActualEntryDto, ActualEntryInputDto, BudgetProjectionDto, BudgetProjectionRequestDto,
@@ -381,6 +381,12 @@ pub fn preview_plan_item(request: PlanPreviewRequestDto) -> Result<PlanPreviewDt
         .map_err(|error| AppError::from_domain(error, None))?;
     let recognized = recognized_amount(&plan_item, target_month, &exchange_rate, &base_currency)
         .map_err(|error| AppError::from_domain(error, None))?;
+    let automatic_date = request
+        .automatic_first_date
+        .as_deref()
+        .map(|value| parse_date(value, "automaticFirstDate"))
+        .transpose()?
+        .and_then(|anchor| next_automatic_date(&plan_item, anchor, target_month));
 
     Ok(PlanPreviewDto {
         effective: is_effective_in(&plan_item, target_month),
@@ -389,6 +395,7 @@ pub fn preview_plan_item(request: PlanPreviewRequestDto) -> Result<PlanPreviewDt
         recognized_amount: recognized.map(Amount::decimal_string),
         scheduled_date: scheduled_date_for_month(&plan_item, target_month)
             .map(|date| date.to_string()),
+        next_automatic_date: automatic_date.map(|date| date.to_string()),
         base_currency: base_currency.to_string(),
     })
 }
@@ -598,6 +605,7 @@ mod tests {
             target_month: "2026-02".to_owned(),
             plan_item: plan_input("年度保险", "ESSENTIAL_EXPENSE", "1200", 12, "PAYMENT"),
             exchange_rate: cny_rate(),
+            automatic_first_date: None,
         };
 
         let preview = preview_plan_item(request).unwrap();
@@ -606,6 +614,26 @@ mod tests {
         assert_eq!(preview.recognized_amount, None);
         assert_eq!(preview.monthly_equivalent.as_deref(), Some("100.00"));
         assert_eq!(preview.base_currency, "CNY");
+    }
+
+    #[test]
+    fn amortized_preview_separates_next_cash_date_from_monthly_budget() {
+        let mut request = PlanPreviewRequestDto {
+            target_month: "2026-11".to_owned(),
+            plan_item: plan_input("季度订阅", "ESSENTIAL_EXPENSE", "300", 3, "AMORTIZED"),
+            exchange_rate: cny_rate(),
+            automatic_first_date: Some("2026-10-31".to_owned()),
+        };
+        request.plan_item.start_date = "2026-11-01".to_owned();
+        let preview = preview_plan_item(request.clone()).unwrap();
+        assert_eq!(preview.recognized_amount.as_deref(), Some("100.00"));
+        assert_eq!(preview.scheduled_date, None);
+        assert_eq!(preview.next_automatic_date.as_deref(), Some("2027-01-31"));
+        request.plan_item.end_date = Some("2027-01-30".to_owned());
+        assert_eq!(
+            preview_plan_item(request).unwrap().next_automatic_date,
+            None
+        );
     }
 
     #[test]
@@ -647,6 +675,7 @@ mod tests {
             target_month: "2026-02".to_owned(),
             plan_item: plan_input("未知", "CUSTOM", "1", 1, "AMORTIZED"),
             exchange_rate: cny_rate(),
+            automatic_first_date: None,
         };
 
         let error = preview_plan_item(request).unwrap_err();

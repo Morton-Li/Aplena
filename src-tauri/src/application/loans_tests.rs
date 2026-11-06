@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     application::dto::{ActualEntryInputDto, DeleteManualMonthlyItemInputDto, SettingsInputDto},
-    infrastructure::open_memory_database,
+    infrastructure::{Store, open_memory_database},
 };
 
 async fn service() -> FinanceService {
@@ -53,6 +53,186 @@ fn payment(loan: &LoanDto, principal: &str, interest: &str, fees: &str) -> LoanP
         note: None,
         allocations: vec![],
     }
+}
+
+fn advance(loan: &LoanDto, principal: &str) -> LoanAdvanceInput {
+    LoanAdvanceInput {
+        id: Uuid::new_v4().to_string(),
+        loan_id: loan.id.clone(),
+        expected_updated_at: None,
+        occurred_on: "2000-02-12".into(),
+        principal: principal.into(),
+        note: Some("追加本金".into()),
+    }
+}
+
+#[tokio::test]
+async fn advances_update_principal_and_cash_months_in_both_directions() {
+    for direction in ["BORROWED", "LENT"] {
+        let service = service().await;
+        let loan = service
+            .create_loan(creation(direction, true))
+            .await
+            .unwrap();
+        let mut input = advance(&loan, "200");
+        service.save_loan_advance(input.clone()).await.unwrap();
+        service.save_loan_advance(input.clone()).await.unwrap();
+        let detail = service.get_loan(loan.id.clone()).await.unwrap();
+        assert_eq!(detail.advances.len(), 1);
+        assert_eq!(detail.loan.principal, "1000.00");
+        assert_eq!(detail.loan.total_principal, "1200.00");
+        assert_eq!(detail.loan.remaining_principal, "1200.00");
+        let february = service.loan_month_summary("2000-02".into()).await.unwrap();
+        let (inflow, outflow) = if direction == "BORROWED" {
+            ("200.00", "0.00")
+        } else {
+            ("0.00", "200.00")
+        };
+        assert_eq!(february.actual_principal_in, inflow);
+        assert_eq!(february.actual_principal_out, outflow);
+        let report = service.month_analytics("2000-02".into()).await.unwrap();
+        assert_eq!(report.income.actual_to_date, None);
+        assert_eq!(report.expense.actual_to_date, None);
+        assert_eq!(service.list_existing_months().await.unwrap(), ["2000-02"]);
+
+        input.expected_updated_at = Some(detail.advances[0].updated_at.clone());
+        input.occurred_on = "2000-03-05".into();
+        input.principal = "250".into();
+        service.save_loan_advance(input.clone()).await.unwrap();
+        assert_eq!(
+            service
+                .save_loan_advance(input)
+                .await
+                .unwrap_err()
+                .error_code,
+            "LOAN_STALE_RECORD"
+        );
+        let detail = service.get_loan(loan.id.clone()).await.unwrap();
+        assert_eq!(detail.loan.remaining_principal, "1250.00");
+        assert_eq!(detail.advances[0].occurred_on, "2000-03-05");
+        assert_eq!(service.list_existing_months().await.unwrap(), ["2000-03"]);
+        let march = service.loan_month_summary("2000-03".into()).await.unwrap();
+        assert_eq!(
+            march.actual_cash_net.as_deref(),
+            Some(if direction == "BORROWED" {
+                "250.00"
+            } else {
+                "-250.00"
+            })
+        );
+
+        service
+            .delete_loan_advance(DeleteLoanActualInput {
+                id: detail.advances[0].id.clone(),
+                expected_updated_at: detail.advances[0].updated_at.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .get_loan(loan.id)
+                .await
+                .unwrap()
+                .loan
+                .remaining_principal,
+            "1000.00"
+        );
+        assert!(service.list_existing_months().await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn advances_require_plan_review_and_cannot_fund_earlier_payments() {
+    let service = service().await;
+    let loan = service
+        .create_loan(creation("BORROWED", true))
+        .await
+        .unwrap();
+    let next_month = current_natural_date()
+        .unwrap()
+        .year_month()
+        .next_month()
+        .unwrap();
+    let mut plan = schedule(&loan, LoanFrequency::Month);
+    plan.first_date = next_month.first_date().to_string();
+    plan.count = 1;
+    plan.period_rate_percent = "0".into();
+    service.save_loan_schedule(plan.clone()).await.unwrap();
+    let mut input = advance(&loan, "250");
+    service.save_loan_advance(input.clone()).await.unwrap();
+
+    let detail = service.get_loan(loan.id.clone()).await.unwrap();
+    assert!(detail.loan.plan_review_required);
+    assert_eq!(detail.installments[0].principal, "1000.00");
+    assert_eq!(
+        service.budget_projection().await.unwrap_err().error_code,
+        "LOAN_PLAN_REVIEW_REQUIRED"
+    );
+    let mut repayment = payment(&loan, "1250", "0", "0");
+    assert_eq!(
+        service
+            .preview_loan_payment(repayment.clone())
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_PRINCIPAL_OVERPAYMENT"
+    );
+    assert_eq!(
+        service
+            .save_loan_payment(repayment.clone())
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_PRINCIPAL_OVERPAYMENT"
+    );
+
+    assert_eq!(
+        service
+            .preview_loan_schedule(plan.clone())
+            .await
+            .unwrap()
+            .principal_to_schedule,
+        "1250.00"
+    );
+    service.save_loan_schedule(plan).await.unwrap();
+    assert_eq!(
+        service
+            .budget_projection()
+            .await
+            .unwrap()
+            .loan_principal_due,
+        "1250.00"
+    );
+    repayment.occurred_on = input.occurred_on.clone();
+    service.save_loan_payment(repayment).await.unwrap();
+    let detail = service.get_loan(loan.id.clone()).await.unwrap();
+    assert_eq!(detail.loan.status, "SETTLED");
+
+    let revision = detail.advances[0].updated_at.clone();
+    input.expected_updated_at = Some(revision.clone());
+    input.occurred_on = "2000-03-01".into();
+    assert_eq!(
+        service
+            .save_loan_advance(input.clone())
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_ADVANCE_HAS_REPAYMENTS"
+    );
+    assert_eq!(
+        service
+            .delete_loan_advance(DeleteLoanActualInput {
+                id: input.id,
+                expected_updated_at: revision,
+            })
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_ADVANCE_HAS_REPAYMENTS"
+    );
+    let unchanged = service.get_loan(loan.id).await.unwrap();
+    assert_eq!(unchanged.advances[0].occurred_on, "2000-02-12");
+    assert_eq!(unchanged.loan.remaining_principal, "0.00");
 }
 
 #[tokio::test]
@@ -160,7 +340,7 @@ async fn correcting_a_payment_used_by_a_replacement_plan_requires_plan_review_be
         .payments
         .remove(0);
     service
-        .delete_loan_payment(DeleteLoanPaymentInput {
+        .delete_loan_payment(DeleteLoanActualInput {
             id: input.id,
             expected_updated_at: recorded.updated_at,
         })
@@ -220,7 +400,7 @@ async fn full_principal_payment_can_be_corrected_without_bypassing_the_database_
 }
 
 #[tokio::test]
-async fn schema_seven_preserves_existing_schema_six_financial_rows() {
+async fn loan_migrations_preserve_existing_financial_rows() {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -252,6 +432,29 @@ async fn schema_seven_preserves_existing_schema_six_financial_rows() {
         .execute(&pool)
         .await
         .unwrap();
+    let loan_id = Uuid::new_v4().to_string();
+    let payment_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO loans (id,name,counterparty,direction,currency_code,principal_scaled,started_on,opening_only,created_at,updated_at)
+         VALUES (?,'旧合同','对方','BORROWED','CNY',100000,'2000-01-01',1,'2000-01-01','2000-01-01')",
+    )
+    .bind(&loan_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO loan_payments (id,loan_id,occurred_on,principal_scaled,interest_scaled,fees_scaled,created_at,updated_at)
+         VALUES (?,?,'2000-02-10',20000,0,0,'2000-02-10','2000-02-10')",
+    )
+    .bind(&payment_id)
+    .bind(&loan_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!("../../migrations/0008_loan_advances.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let after: Vec<(String, i64, i64, i64, String)> = sqlx::query_as("SELECT id,amount_scaled,source_amount_scaled,exchange_rate_scaled,note FROM actual_entries ORDER BY id").fetch_all(&pool).await.unwrap();
     assert_eq!(before, after);
     assert_eq!(
@@ -263,13 +466,11 @@ async fn schema_seven_preserves_existing_schema_six_financial_rows() {
         .await
         .unwrap()
     );
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM loans")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
-    );
+    let service = FinanceService::new(Store::new(pool.clone())).unwrap();
+    let detail = service.get_loan(loan_id).await.unwrap();
+    assert!(detail.advances.is_empty());
+    assert_eq!(detail.loan.remaining_principal, "800.00");
+    assert_eq!(detail.payments[0].id, payment_id);
     assert!(
         sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&pool)
@@ -425,7 +626,7 @@ async fn opening_balance_and_partial_repayments_keep_absence_and_cross_month_cor
     );
     let updated = service.get_loan(loan.id.clone()).await.unwrap().payments[0].clone();
     service
-        .delete_loan_payment(DeleteLoanPaymentInput {
+        .delete_loan_payment(DeleteLoanActualInput {
             id: first.id,
             expected_updated_at: updated.updated_at,
         })

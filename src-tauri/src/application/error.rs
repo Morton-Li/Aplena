@@ -162,6 +162,11 @@ impl AppError {
                         "LOAN_PRINCIPAL_OVERPAYMENT",
                         "error.loan_principal_overpayment",
                     )
+                } else if message.contains("APLENA_LOAN_ADVANCE_HAS_REPAYMENTS") {
+                    Self::business(
+                        "LOAN_ADVANCE_HAS_REPAYMENTS",
+                        "error.loan_advance_has_repayments",
+                    )
                 } else if message.contains("APLENA_LOAN_ALLOCATION_MISMATCH") {
                     Self::business("LOAN_ALLOCATION_MISMATCH", "error.loan_allocation_mismatch")
                 } else if message.contains("APLENA_BASE_CURRENCY_LOCKED") {

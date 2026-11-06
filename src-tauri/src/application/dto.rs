@@ -362,6 +362,7 @@ pub struct PlanPreviewRequestDto {
     pub target_month: String,
     pub plan_item: PlanItemInputDto,
     pub exchange_rate: ExchangeRateInputDto,
+    pub automatic_first_date: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -371,6 +372,7 @@ pub struct PlanPreviewDto {
     pub monthly_equivalent: Option<String>,
     pub recognized_amount: Option<String>,
     pub scheduled_date: Option<String>,
+    pub next_automatic_date: Option<String>,
     pub base_currency: String,
 }
 

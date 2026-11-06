@@ -48,7 +48,7 @@ beforeEach(() => {
   vi.mocked(listAutomaticEntryPolicies).mockReset().mockResolvedValue([]);
   vi.mocked(createPlanItem).mockReset().mockResolvedValue(plan);
   vi.mocked(updatePlanItem).mockReset().mockResolvedValue(plan);
-  vi.mocked(previewPlanItem).mockReset().mockResolvedValue({ effective: true, recognized_in_target_month: true, monthly_equivalent: "100.00", recognized_amount: "100.00", scheduled_date: null, base_currency: "CNY" });
+  vi.mocked(previewPlanItem).mockReset().mockResolvedValue({ effective: true, recognized_in_target_month: true, monthly_equivalent: "100.00", recognized_amount: "100.00", scheduled_date: null, next_automatic_date: null, base_currency: "CNY" });
   vi.mocked(saveAutomaticEntryPolicy).mockReset().mockResolvedValue({ plan_item_id: plan.id, enabled: true, first_date: "2026-11-01", effective_month: "2026-11", period_months: 1, amount: "1200.00", currency: "CNY" });
 });
 afterEach(cleanup);
@@ -77,6 +77,30 @@ describe("automatic recording rule configuration", () => {
     await user.click(await screen.findByRole("button", { name: "确认保存" }));
     await waitFor(() => expect(saveAutomaticEntryPolicy).toHaveBeenCalledWith({ planItemId: plan.id, enabled: true, firstDate: "2026-12-01" }));
     expect(createPlanItem).toHaveBeenCalledWith(expect.objectContaining({ periodMonths: 12, plannedAmount: "1200.00", recognitionMode: "AMORTIZED" }));
+  });
+
+  it("preserves an amortized rule's original payment date through start-date and period edits", async () => {
+    vi.mocked(listPlanItems).mockResolvedValue([{ ...plan, period_months: 3, start_date: "2026-10-01" }]);
+    vi.mocked(listAutomaticEntryPolicies).mockResolvedValue([{ plan_item_id: plan.id, enabled: true, first_date: "2026-10-31", effective_month: "2026-11", period_months: 3, amount: "1200.00", currency: "CNY" }]);
+    vi.mocked(previewPlanItem).mockResolvedValueOnce({
+      effective: true, recognized_in_target_month: true, monthly_equivalent: "200.00", recognized_amount: "200.00",
+      scheduled_date: null, next_automatic_date: "2027-04-30", base_currency: "CNY",
+    });
+    const user = userEvent.setup();
+    setup();
+    const edit = await screen.findByRole("button", { name: "编辑" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    await user.click(edit);
+    fireEvent.change(screen.getByLabelText("开始日期"), { target: { value: "2026-11-15" } });
+    fireEvent.change(screen.getByLabelText("周期（月）"), { target: { value: "6" } });
+    expect(screen.getByLabelText("首次实际收支日")).toHaveValue("2026-10-31");
+    await user.click(screen.getByRole("button", { name: "预览并检查" }));
+    expect((await screen.findByText("下次自动入账")).parentElement).toHaveTextContent("2027-04-30");
+    expect(previewPlanItem).toHaveBeenCalledWith(contract, settings, expect.any(Array), "2026-11", expect.objectContaining({
+      automaticFirstDate: "2026-10-31", startDate: "2026-11-15", periodMonths: 6,
+    }));
+    await user.click(screen.getByRole("button", { name: "确认保存" }));
+    await waitFor(() => expect(saveAutomaticEntryPolicy).toHaveBeenCalledWith({ planItemId: plan.id, enabled: true, firstDate: "2026-10-31" }));
   });
 
   it("retries a failed policy save without creating the rule twice", async () => {
