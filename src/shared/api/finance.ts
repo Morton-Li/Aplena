@@ -87,6 +87,7 @@ export interface PlanPreview {
   monthly_equivalent: string | null;
   recognized_amount: string | null;
   scheduled_date: string | null;
+  next_automatic_date: string | null;
   base_currency: string;
 }
 
@@ -345,7 +346,7 @@ export function previewPlanItem(
   settings: Settings,
   rates: ExchangeRate[],
   targetMonth: string,
-  planItem: PlanItemInput,
+  { automaticFirstDate, ...planItem }: PlanItemInput & { automaticFirstDate?: string },
   invokeCommand: Invoke = invoke,
 ): Promise<PlanPreview> {
   const rate = rates.find((candidate) => candidate.currency === planItem.currency);
@@ -368,6 +369,7 @@ export function previewPlanItem(
     request: {
       targetMonth,
       planItem,
+      automaticFirstDate,
       exchangeRate: {
         sourceCurrency: rate.currency,
         baseCurrency: settings.base_currency,

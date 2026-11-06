@@ -48,6 +48,7 @@ pub struct LoanDto {
     pub direction: String,
     pub currency: String,
     pub principal: String,
+    pub total_principal: String,
     pub started_on: String,
     pub opening_only: bool,
     pub archived: bool,
@@ -119,6 +120,26 @@ pub struct LoanPaymentDto {
     pub allocations: Vec<LoanAllocation>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoanAdvanceInput {
+    pub id: String,
+    pub loan_id: String,
+    pub expected_updated_at: Option<String>,
+    pub occurred_on: String,
+    pub principal: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoanAdvanceDto {
+    pub id: String,
+    pub occurred_on: String,
+    pub principal: String,
+    pub note: Option<String>,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LoanScheduleVersionDto {
     pub id: String,
@@ -135,6 +156,7 @@ pub struct LoanDetailDto {
     pub loan: LoanDto,
     pub installments: Vec<LoanInstallmentDto>,
     pub payments: Vec<LoanPaymentDto>,
+    pub advances: Vec<LoanAdvanceDto>,
     pub versions: Vec<LoanScheduleVersionDto>,
 }
 
@@ -161,7 +183,7 @@ pub struct LoanSchedulePreview {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeleteLoanPaymentInput {
+pub struct DeleteLoanActualInput {
     pub id: String,
     pub expected_updated_at: String,
 }
@@ -449,7 +471,7 @@ impl FinanceService {
         Ok(())
     }
 
-    pub async fn delete_loan_payment(&self, input: DeleteLoanPaymentInput) -> Result<(), AppError> {
+    pub async fn delete_loan_payment(&self, input: DeleteLoanActualInput) -> Result<(), AppError> {
         let _operation = self.operation_gate.write().await;
         let store = self.current_store().await;
         let mut tx = store.pool().begin().await.map_err(db)?;
@@ -470,6 +492,111 @@ impl FinanceService {
         sqlx::query("UPDATE loans SET archived=0,updated_at=? WHERE id=?")
             .bind(timestamp())
             .bind(row.get::<String, _>("loan_id"))
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(())
+    }
+
+    pub async fn save_loan_advance(&self, input: LoanAdvanceInput) -> Result<(), AppError> {
+        let _operation = self.operation_gate.write().await;
+        let id = parse_uuid(&input.id, "id")?.to_string();
+        let loan_id = parse_uuid(&input.loan_id, "loanId")?.to_string();
+        let occurred_on = date(&input.occurred_on)?;
+        let principal = amount(&input.principal)?.scaled_i64();
+        let note = normalized(input.note);
+        let store = self.current_store().await;
+        let mut tx = store
+            .pool()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(db)?;
+        let loan = sqlx::query("SELECT started_on,principal_scaled FROM loans WHERE id=?")
+            .bind(&loan_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+        if principal == 0
+            || occurred_on < date(&loan.get::<String, _>("started_on"))?
+            || occurred_on > current_natural_date()?
+        {
+            return Err(invalid("LOAN_ADVANCE_DATE_OR_AMOUNT_INVALID"));
+        }
+        let occurred_on = occurred_on.to_string();
+        let existing = sqlx::query("SELECT * FROM loan_advances WHERE id=?")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?;
+        if let Some(row) = existing {
+            if row.get::<String, _>("loan_id") != loan_id {
+                return Err(invalid("LOAN_DUPLICATE_REQUEST"));
+            }
+            if let Some(revision) = &input.expected_updated_at {
+                if *revision != row.get::<String, _>("updated_at") {
+                    return Err(invalid("LOAN_STALE_RECORD"));
+                }
+            } else {
+                if row.get::<String, _>("occurred_on") != occurred_on
+                    || row.get::<i64, _>("principal_scaled") != principal
+                    || row.get::<Option<String>, _>("note") != note
+                {
+                    return Err(invalid("LOAN_DUPLICATE_REQUEST"));
+                }
+                return Ok(());
+            }
+        } else if input.expected_updated_at.is_some() {
+            return Err(invalid("LOAN_STALE_RECORD"));
+        }
+        let other_advances: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(principal_scaled),0) FROM loan_advances WHERE loan_id=? AND id!=?",
+        )
+        .bind(&loan_id)
+        .bind(&id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        sum([loan.get("principal_scaled"), other_advances, principal].into_iter())?;
+        let now = timestamp();
+        sqlx::query(
+            "INSERT INTO loan_advances (id,loan_id,occurred_on,principal_scaled,note,created_at,updated_at)
+             VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET occurred_on=excluded.occurred_on,
+             principal_scaled=excluded.principal_scaled,note=excluded.note,updated_at=excluded.updated_at",
+        )
+        .bind(&id).bind(&loan_id).bind(occurred_on).bind(principal).bind(note).bind(&now).bind(&now)
+        .execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("UPDATE loans SET archived=0,updated_at=? WHERE id=?")
+            .bind(now)
+            .bind(loan_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(())
+    }
+
+    pub async fn delete_loan_advance(&self, input: DeleteLoanActualInput) -> Result<(), AppError> {
+        let _operation = self.operation_gate.write().await;
+        let id = parse_uuid(&input.id, "id")?.to_string();
+        let store = self.current_store().await;
+        let mut tx = store
+            .pool()
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(db)?;
+        let loan_id: Option<String> = sqlx::query_scalar(
+            "DELETE FROM loan_advances WHERE id=? AND updated_at=? RETURNING loan_id",
+        )
+        .bind(id)
+        .bind(input.expected_updated_at)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
+        let loan_id = loan_id.ok_or_else(|| invalid("LOAN_STALE_RECORD"))?;
+        sqlx::query("UPDATE loans SET archived=0,updated_at=? WHERE id=?")
+            .bind(timestamp())
+            .bind(loan_id)
             .execute(&mut *tx)
             .await
             .map_err(db)?;
@@ -502,30 +629,28 @@ impl FinanceService {
             .map_err(db)?;
         let plan_review_required_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM loans l WHERE EXISTS (SELECT 1 FROM loan_schedule_versions v WHERE v.loan_id=l.id) AND
-             l.principal_scaled - (SELECT COALESCE(SUM(p.principal_scaled),0) FROM loan_payments p WHERE p.loan_id=l.id)
+             (SELECT SUM(m.delta_scaled) FROM loan_principal_movements m WHERE m.loan_id=l.id)
              != (SELECT COALESCE(SUM(i.principal_scaled),0) FROM loan_installments i WHERE i.loan_id=l.id AND i.superseded=0)
                 - (SELECT COALESCE(SUM(a.principal_scaled),0) FROM loan_payment_allocations a JOIN loan_installments i ON i.id=a.installment_id WHERE i.loan_id=l.id AND i.superseded=0)"
         ).fetch_one(&mut *tx).await.map_err(db)?;
         let mut principal_in = 0;
         let mut principal_out = 0;
         let mut cash_count = 0_i64;
-        let rows = sqlx::query("SELECT l.direction,p.principal_scaled FROM loan_payments p JOIN loans l ON l.id=p.loan_id WHERE substr(p.occurred_on,1,7)=?").bind(month.to_string()).fetch_all(&mut *tx).await.map_err(db)?;
+        let rows = sqlx::query(
+            "SELECT l.direction,m.delta_scaled FROM loan_principal_movements m
+             JOIN loans l ON l.id=m.loan_id WHERE m.is_cash=1 AND substr(m.occurred_on,1,7)=?",
+        )
+        .bind(month.to_string())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db)?;
         for row in rows {
-            let value: i64 = row.get("principal_scaled");
-            if row.get::<String, _>("direction") == "LENT" {
-                principal_in = sum([principal_in, value].into_iter())?;
+            let delta: i64 = row.get("delta_scaled");
+            let borrowed = row.get::<String, _>("direction") == "BORROWED";
+            if (borrowed && delta > 0) || (!borrowed && delta < 0) {
+                principal_in = sum([principal_in, delta.abs()].into_iter())?;
             } else {
-                principal_out = sum([principal_out, value].into_iter())?;
-            }
-            cash_count += 1;
-        }
-        let rows = sqlx::query("SELECT direction,principal_scaled FROM loans WHERE opening_only=0 AND substr(started_on,1,7)=?").bind(month.to_string()).fetch_all(&mut *tx).await.map_err(db)?;
-        for row in rows {
-            let value = row.get("principal_scaled");
-            if row.get::<String, _>("direction") == "BORROWED" {
-                principal_in = sum([principal_in, value].into_iter())?;
-            } else {
-                principal_out = sum([principal_out, value].into_iter())?;
+                principal_out = sum([principal_out, delta.abs()].into_iter())?;
             }
             cash_count += 1;
         }
@@ -706,7 +831,27 @@ async fn detail_on(
         });
     }
     let principal: i64 = loan.get("principal_scaled");
-    let remaining = principal - repaid;
+    let mut total_principal = principal;
+    let mut advances = Vec::new();
+    let rows = sqlx::query(
+        "SELECT * FROM loan_advances WHERE loan_id=? ORDER BY occurred_on DESC,created_at DESC,id",
+    )
+    .bind(id)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(db)?;
+    for row in rows {
+        let advance = row.get("principal_scaled");
+        total_principal = sum([total_principal, advance].into_iter())?;
+        advances.push(LoanAdvanceDto {
+            id: row.get("id"),
+            occurred_on: row.get("occurred_on"),
+            principal: money(advance)?,
+            note: row.get("note"),
+            updated_at: row.get("updated_at"),
+        });
+    }
+    let remaining = total_principal - repaid;
     let versions: Vec<_> = sqlx::query(
         "SELECT * FROM loan_schedule_versions WHERE loan_id=? ORDER BY created_at DESC,id",
     )
@@ -734,6 +879,7 @@ async fn detail_on(
             direction: loan.get("direction"),
             currency: loan.get("currency_code"),
             principal: money(principal)?,
+            total_principal: money(total_principal)?,
             started_on: loan.get("started_on"),
             opening_only: loan.get::<i64, _>("opening_only") != 0,
             archived: loan.get::<i64, _>("archived") != 0,
@@ -754,6 +900,7 @@ async fn detail_on(
         },
         installments,
         payments,
+        advances,
         versions,
     })
 }
@@ -794,7 +941,7 @@ async fn schedule_on(
     }
     let unallocated_paid: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(a.principal_scaled),0) FROM loan_payment_allocations a JOIN loan_payments p ON p.id=a.payment_id WHERE p.loan_id=? AND a.installment_id IS NULL").bind(&input.loan_id).fetch_one(&mut *connection).await.map_err(db)?;
     let available =
-        amount(&detail.loan.principal)?.scaled_i64() - preserved_principal - unallocated_paid;
+        amount(&detail.loan.total_principal)?.scaled_i64() - preserved_principal - unallocated_paid;
     if available < 0 {
         return Err(invalid("LOAN_SCHEDULE_PRINCIPAL_MISMATCH"));
     }
@@ -998,6 +1145,29 @@ async fn payment_allocations_on(
             .map_err(db)?;
     if parts[0] > amount(&detail.loan.remaining_principal)?.scaled_i64() + previous.unwrap_or(0) {
         return Err(invalid("LOAN_PRINCIPAL_OVERPAYMENT"));
+    }
+    if parts[0] > 0 {
+        let overpaid: bool = sqlx::query_scalar(
+            "WITH movements AS (
+               SELECT occurred_on,delta_scaled FROM loan_principal_movements
+               WHERE loan_id=? AND (payment_id IS NULL OR payment_id!=?)
+               UNION ALL SELECT ?,?
+             ), balances AS (
+               SELECT SUM(SUM(delta_scaled)) OVER (ORDER BY occurred_on) AS balance_scaled
+               FROM movements GROUP BY occurred_on
+             )
+             SELECT EXISTS(SELECT 1 FROM balances WHERE balance_scaled<0)",
+        )
+        .bind(&input.loan_id)
+        .bind(&input.id)
+        .bind(occurred.to_string())
+        .bind(-parts[0])
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(db)?;
+        if overpaid {
+            return Err(invalid("LOAN_PRINCIPAL_OVERPAYMENT"));
+        }
     }
     let mut allocations = input.allocations.clone();
     if allocations.is_empty() {
@@ -1280,9 +1450,25 @@ pub async fn save_loan_payment(
 #[tauri::command]
 pub async fn delete_loan_payment(
     service: State<'_, FinanceService>,
-    input: DeleteLoanPaymentInput,
+    input: DeleteLoanActualInput,
 ) -> Result<(), AppError> {
     service.delete_loan_payment(input).await
+}
+
+#[tauri::command]
+pub async fn save_loan_advance(
+    service: State<'_, FinanceService>,
+    input: LoanAdvanceInput,
+) -> Result<(), AppError> {
+    service.save_loan_advance(input).await
+}
+
+#[tauri::command]
+pub async fn delete_loan_advance(
+    service: State<'_, FinanceService>,
+    input: DeleteLoanActualInput,
+) -> Result<(), AppError> {
+    service.delete_loan_advance(input).await
 }
 #[tauri::command]
 pub async fn get_loan_month_summary(

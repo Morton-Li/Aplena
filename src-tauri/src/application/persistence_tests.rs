@@ -187,6 +187,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             (5, "add software update preferences".to_owned(), 1),
             (6, "budget specials".to_owned(), 1),
             (7, "loans".to_owned(), 1),
+            (8, "loan advances".to_owned(), 1),
         ]
     );
 
@@ -327,6 +328,10 @@ async fn current_schema_matches_the_frozen_pre_release_schema_after_public_migra
         .unwrap();
 
     sqlx::raw_sql(include_str!("../../migrations/0007_loans.sql"))
+        .execute(&pre_release)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!("../../migrations/0008_loan_advances.sql"))
         .execute(&pre_release)
         .await
         .unwrap();

@@ -1,8 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 import { useId, useRef, useState, type FormEvent } from "react";
 import {
-  createLoan, loanFrequencyLabels, previewLoanPayment, previewLoanSchedule, saveLoanPayment, saveLoanSchedule, updateLoanMetadata,
-  type Loan, type LoanAllocation, type LoanDetail, type LoanDirection, type LoanFrequency, type LoanPayment,
+  createLoan, loanFrequencyLabels, previewLoanPayment, previewLoanSchedule, saveLoanAdvance, saveLoanPayment, saveLoanSchedule, updateLoanMetadata,
+  type Loan, type LoanAdvance, type LoanAllocation, type LoanDetail, type LoanDirection, type LoanFrequency, type LoanPayment,
   type LoanPaymentInput, type LoanScheduleInput, type LoanSchedulePreview, type LoanScheduleRow,
 } from "../../shared/api/loans";
 import { Dialog } from "../../shared/components/Dialog";
@@ -55,7 +55,43 @@ export function LoanEditor({ loan, direction, currency, onClose, onSaved }: {
         <p className="dialog-intro">{openingOnly ? "只建立期初余额，不计入当月现金流。之后录入的还款从该余额继续计算。" : "借款本金计入发生月的借贷现金流，不计入收入或支出。"}</p>
       </>}
       <label>备注（可选）<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
-      {loan && <p className="dialog-intro">本金、方向与起始日期保留为建档事实。还款和后续分期请在详情中调整。</p>}
+      {loan && <p className="dialog-intro">本金、方向与起始日期保留为建档事实。追加本金、还款和后续分期可在详情中调整。</p>}
+    </fieldset></form>
+    <ErrorMessage error={mutation.error} />
+  </Dialog>;
+}
+
+export function LoanAdvanceEditor({ loan, advance, onClose, onSaved }: {
+  loan: Loan; advance?: LoanAdvance; onClose: () => void; onSaved: () => Promise<void>;
+}) {
+  const form = useId();
+  const [id] = useState(() => advance?.id ?? crypto.randomUUID());
+  const lock = useRef(false);
+  const [occurredOn, setOccurredOn] = useState(() => advance?.occurred_on ?? localToday());
+  const [principal, setPrincipal] = useState(advance?.principal ?? "");
+  const [note, setNote] = useState(advance?.note ?? "");
+  const mutation = useMutation({
+    mutationFn: () => saveLoanAdvance({ id, loanId: loan.id, expectedUpdatedAt: advance?.updated_at, occurredOn, principal, note: note || undefined }),
+    onSuccess: onSaved,
+    onSettled: () => { lock.current = false; },
+  });
+  const close = () => { if (!lock.current) onClose(); };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (lock.current) return;
+    lock.current = true;
+    mutation.mutate();
+  };
+  const action = loan.direction === "BORROWED" ? "追加借入" : "追加借出";
+  return <Dialog title={advance ? `编辑${action}` : action} onClose={close} footer={<>
+    <button className="button button-quiet" disabled={mutation.isPending} onClick={close} type="button">取消</button>
+    <button className="button button-primary" disabled={mutation.isPending} form={form} type="submit">{mutation.isPending ? "保存中…" : "保存"}</button>
+  </>}>
+    <p className="dialog-intro">追加款增加合同本金，并记入发生月的本金现金{loan.direction === "BORROWED" ? "流入" : "流出"}。如已安排分期，请核对后续计划。</p>
+    <form id={form} className="loan-form" onSubmit={submit}><fieldset disabled={mutation.isPending}>
+      <label>追加本金（{loan.currency}）<input autoFocus data-dialog-initial-focus required inputMode="decimal" pattern={amountPattern} value={principal} onChange={(event) => setPrincipal(event.target.value)} /></label>
+      <label>发生日期<input required type="date" min={loan.started_on} max={localToday()} value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label>
+      <label>备注（可选）<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
     </fieldset></form>
     <ErrorMessage error={mutation.error} />
   </Dialog>;

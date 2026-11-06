@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
@@ -37,7 +37,7 @@ import {
   recognitionLabel,
 } from "../../shared/formatting/labels";
 
-const planSchema = z
+const planFields = z
   .object({
     name: z.string().trim().min(1, "请输入项目名称"),
     category: z.string().min(1, "请选择类别"),
@@ -53,8 +53,22 @@ const planSchema = z
     automaticEnabled: z.boolean(),
     automaticFirstDate: z.string(),
     note: z.string(),
-  })
-  .superRefine((values, context) => {
+  });
+
+type PlanValues = z.infer<typeof planFields>;
+
+function defaultAutomaticDate(targetMonth: string, startDate = "") {
+  const firstOfMonth = targetMonth + "-01";
+  return startDate > firstOfMonth ? startDate : firstOfMonth;
+}
+
+function automaticDate(values: PlanValues, targetMonth: string) {
+  if (values.recognitionMode === "PAYMENT") return values.startDate;
+  return values.automaticFirstDate || (values.periodMonths === 1 ? defaultAutomaticDate(targetMonth, values.startDate) : "");
+}
+
+function planSchema(targetMonth: string, retainedAnchor?: string | null) {
+  return planFields.superRefine((values, context) => {
     if (values.endDate && values.endDate < values.startDate) {
       context.addIssue({
         code: "custom",
@@ -66,15 +80,15 @@ const planSchema = z
       context.addIssue({ code: "custom", path: ["plannedAmount"], message: "自动记录实际需要大于 0 的金额。" });
     }
     if (values.automaticEnabled && values.recognitionMode === "AMORTIZED") {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(values.automaticFirstDate)) {
+      const date = automaticDate(values, targetMonth);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         context.addIssue({ code: "custom", path: ["automaticFirstDate"], message: "请选择首次实际收支日。" });
-      } else if (values.automaticFirstDate < values.startDate || (values.endDate && values.automaticFirstDate > values.endDate)) {
+      } else if (date !== retainedAnchor && (date < values.startDate || (values.endDate && date > values.endDate))) {
         context.addIssue({ code: "custom", path: ["automaticFirstDate"], message: "实际收支日必须位于规则有效期间内。" });
       }
     }
   });
-
-type PlanValues = z.infer<typeof planSchema>;
+}
 
 export function RecurringRulesPanel({ targetMonth }: { targetMonth: string }) {
   const queryClient = useQueryClient();
@@ -281,7 +295,7 @@ function PlanEditor({
         endDate: existing.end_date ?? "",
         recognitionMode: existing.recognition_mode as "AMORTIZED" | "PAYMENT",
         automaticEnabled: policy?.enabled ?? false,
-        automaticFirstDate: policy?.first_date ?? (existing.period_months === 1 ? laterDate(targetMonth + "-01", existing.start_date) : ""),
+        automaticFirstDate: policy?.first_date ?? "",
         note: existing.note ?? "",
       }
     : {
@@ -294,28 +308,17 @@ function PlanEditor({
         endDate: "",
         recognitionMode: "AMORTIZED",
         automaticEnabled: false,
-        automaticFirstDate: targetMonth + "-01",
+        automaticFirstDate: "",
         note: "",
       };
-  const form = useForm<PlanValues>({ resolver: zodResolver(planSchema), defaultValues: defaults });
+  const form = useForm<PlanValues>({ resolver: zodResolver(planSchema(targetMonth, policy?.first_date)), defaultValues: defaults });
   const values = useWatch({ control: form.control });
-  const signature = JSON.stringify(values);
+  const signature = JSON.stringify([targetMonth, values]);
   const [preview, setPreview] = useState<{ signature: string; data: PlanPreview } | null>(null);
   const savedRule = useRef<PlanItem | null>(existing);
   const saveGuard = useRef(false);
   const previewGuard = useRef(false);
-  const previousSchedule = useRef({ mode: defaults.recognitionMode, period: defaults.periodMonths });
   const [policySaveError, setPolicySaveError] = useState<unknown>(null);
-
-  useEffect(() => {
-    const previous = previousSchedule.current;
-    if (previous.mode !== values.recognitionMode || previous.period !== values.periodMonths) {
-      if (values.recognitionMode === "AMORTIZED") {
-        form.setValue("automaticFirstDate", values.periodMonths === 1 ? laterDate(targetMonth + "-01", values.startDate ?? "") : "");
-      }
-      previousSchedule.current = { mode: values.recognitionMode ?? defaults.recognitionMode, period: values.periodMonths ?? defaults.periodMonths };
-    }
-  }, [defaults.periodMonths, defaults.recognitionMode, form, targetMonth, values.periodMonths, values.recognitionMode, values.startDate]);
 
   const toInput = (value: PlanValues): PlanItemInput => ({
     id: savedRule.current?.id,
@@ -335,7 +338,10 @@ function PlanEditor({
     { value: PlanValues; signature: string }
   >({
     mutationFn: ({ value }) =>
-      previewPlanItem(contract, settings, rates, targetMonth, toInput(value)),
+      previewPlanItem(contract, settings, rates, targetMonth, {
+        ...toInput(value),
+        automaticFirstDate: value.automaticEnabled ? automaticDate(value, targetMonth) : undefined,
+      }),
     onSuccess: (data, variables) => setPreview({ signature: variables.signature, data }),
     onSettled: () => { previewGuard.current = false; },
   });
@@ -349,7 +355,7 @@ function PlanEditor({
           await saveAutomaticEntryPolicy({
             planItemId: item.id,
             enabled: value.automaticEnabled,
-            firstDate: value.automaticEnabled ? value.recognitionMode === "PAYMENT" ? value.startDate : value.automaticFirstDate : undefined,
+            firstDate: value.automaticEnabled ? automaticDate(value, targetMonth) : undefined,
           });
         } catch (caught) {
           setPolicySaveError(caught);
@@ -374,7 +380,7 @@ function PlanEditor({
     void form.handleSubmit((value) => {
       if (previewGuard.current || saveGuard.current) return;
       previewGuard.current = true;
-      previewMutation.mutate({ value, signature: JSON.stringify(form.getValues()) });
+      previewMutation.mutate({ value, signature: JSON.stringify([targetMonth, form.getValues()]) });
     })();
   };
   const saveCurrentValues = (event: FormEvent<HTMLFormElement>) => {
@@ -441,7 +447,13 @@ function PlanEditor({
             {values.automaticEnabled && <>
               {values.recognitionMode === "PAYMENT"
                 ? <label>首次实际收支日<input aria-label="首次实际收支日" type="date" readOnly value={values.startDate ?? ""} /><small>沿用规则开始日期作为支付锚点，每隔 {values.periodMonths} 个月按同一日入账；短月取月末，随后恢复原日期。</small></label>
-                : <label>首次实际收支日<input aria-label="首次实际收支日" type="date" min={values.startDate} max={values.endDate || undefined} {...form.register("automaticFirstDate")} />{form.formState.errors.automaticFirstDate && <em>{form.formState.errors.automaticFirstDate.message}</em>}<small>{values.periodMonths === 1 ? "默认新月份第一日，可以修改收支日。" : "请明确选择实际付款或收款日期；月均预算没有隐含收支日。"}</small></label>}
+                : <label>首次实际收支日
+                    <Controller control={form.control} name="automaticFirstDate" render={({ field }) => (
+                      <input aria-label="首次实际收支日" type="date" {...field} value={field.value || (values.periodMonths === 1 ? defaultAutomaticDate(targetMonth, values.startDate) : "")} />
+                    )} />
+                    {form.formState.errors.automaticFirstDate && <em>{form.formState.errors.automaticFirstDate.message}</em>}
+                    <small>{values.periodMonths === 1 ? "默认新月份第一日，或更晚的规则开始日。可以修改收支日。" : "以此日为周期起点，每隔设定月数入账。短月取月末，后续恢复原日期。"}</small>
+                  </label>}
               <p>每隔 {values.periodMonths} 个月自动记录一次完整原币金额 {formatMoney(values.plannedAmount || "0.00", values.currency ?? settings.base_currency)}，不会把月均预算重复记作实际。修改后从下月生效；关闭立即停止后续自动入账，已记录的实际保留。</p>
               <p>应用打开或重新回到前台时检查已到期收支；不会补记历史月份。已有手动实际会提示核对，不自动追加重复记录。</p>
             </>}
@@ -456,6 +468,7 @@ function PlanEditor({
               <div><span>月度等价金额</span><strong>{formatMoney(preview.data.monthly_equivalent, preview.data.base_currency)}</strong></div>
               <div><span>当月计划金额</span><strong>{formatMoney(preview.data.recognized_amount, preview.data.base_currency)}</strong></div>
               <div><span>计划支付日</span><strong>{preview.data.scheduled_date ?? "—"}</strong></div>
+              {values.automaticEnabled && <div><span>下次自动入账</span><strong>{preview.data.next_automatic_date ?? "有效期内无到期日"}</strong></div>}
             </div>
           )}
           {(previewMutation.isError || saveMutation.isError) && (
@@ -465,10 +478,6 @@ function PlanEditor({
         </form>
       </Dialog>
   );
-}
-
-function laterDate(first: string, second: string) {
-  return first > second ? first : second;
 }
 
 function DeleteDialog({ item, onClose, onDeleted }: { item: PlanItem; onClose: () => void; onDeleted: () => Promise<void> }) {

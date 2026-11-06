@@ -10,9 +10,9 @@ mod service;
 mod specials;
 
 pub use loans::{
-    create_loan, delete_loan_payment, get_loan, get_loan_month_summary, list_loans,
-    preview_loan_payment, preview_loan_schedule, save_loan_payment, save_loan_schedule,
-    update_loan_metadata,
+    create_loan, delete_loan_advance, delete_loan_payment, get_loan, get_loan_month_summary,
+    list_loans, preview_loan_payment, preview_loan_schedule, save_loan_advance, save_loan_payment,
+    save_loan_schedule, update_loan_metadata,
 };
 
 #[cfg(test)]

@@ -212,9 +212,11 @@ impl FinanceService {
                     "error.automatic_policy_version_missing",
                 )
             })?;
-        // Keep the cash anchor independent of recognition. An ended rule may have
-        // no remaining occurrence; recording its next version still preserves audit.
-        let first_date = prior.first_date.max(plan.start_date());
+        let first_date = if plan.recognition_mode() == RecognitionMode::Payment {
+            plan.start_date()
+        } else {
+            prior.first_date
+        };
         let next_month = today.year_month().next_month().map_err(domain_error)?;
         save_version_on(
             &mut transaction,
@@ -546,18 +548,38 @@ async fn post_due_occurrence(
 }
 
 fn due_date(version: &PolicyVersion, month: YearMonth) -> Option<CalendarDate> {
-    if month < version.effective_month {
-        return None;
-    }
-    let elapsed = month.months_since(version.first_date.year_month())?;
-    if !elapsed.is_multiple_of(version.plan.period_months()) {
-        return None;
-    }
-    let date = month.date_clamped_to_day(version.first_date.day());
-    (date >= version.first_date
-        && date >= version.plan.start_date()
-        && version.plan.end_date().is_none_or(|end| date <= end))
-    .then_some(date)
+    next_automatic_date(
+        &version.plan,
+        version.first_date,
+        month.max(version.effective_month),
+    )
+    .filter(|date| date.year_month() == month)
+}
+
+pub(crate) fn next_automatic_date(
+    plan: &PlanItem,
+    anchor: CalendarDate,
+    from_month: YearMonth,
+) -> Option<CalendarDate> {
+    let earliest = from_month.first_date().max(plan.start_date()).max(anchor);
+    let month = earliest.year_month();
+    let period = plan.period_months();
+    let elapsed = month.months_since(anchor.year_month())?;
+    let remainder = elapsed % period;
+    let offset = if remainder != 0 {
+        period - remainder
+    } else if month.date_clamped_to_day(anchor.day()) < earliest {
+        period
+    } else {
+        0
+    };
+    let due_on = month
+        .add_months(i32::try_from(offset).ok()?)
+        .ok()?
+        .date_clamped_to_day(anchor.day());
+    plan.end_date()
+        .is_none_or(|end| due_on <= end)
+        .then_some(due_on)
 }
 
 fn select_first_date(
@@ -568,27 +590,24 @@ fn select_first_date(
 ) -> Result<CalendarDate, AppError> {
     let date = if let Some(value) = explicit {
         parse_date(value, "firstDate")?
-    } else if let Some(prior) = prior {
-        prior.first_date.max(plan.start_date())
     } else if plan.recognition_mode() == RecognitionMode::Payment {
         plan.start_date()
+    } else if let Some(prior) = prior {
+        prior.first_date
     } else if plan.period_months() > 1 {
         return Err(AppError::validation(
             "AUTOMATIC_FIRST_DATE_REQUIRED",
             "firstDate",
             "error.automatic_first_date_required",
         ));
-    } else if effective_month.first_date() >= plan.start_date() {
-        effective_month.first_date()
     } else {
-        let month = plan.start_date().year_month();
-        if plan.start_date().day() == 1 {
-            month.first_date()
-        } else {
-            month.next_month().map_err(domain_error)?.first_date()
-        }
+        effective_month.first_date().max(plan.start_date())
     };
-    if date < plan.start_date() || plan.end_date().is_some_and(|end| date > end) {
+    let retained_anchor = plan.recognition_mode() == RecognitionMode::Amortized
+        && prior.is_some_and(|prior| prior.first_date == date);
+    if !retained_anchor
+        && (date < plan.start_date() || plan.end_date().is_some_and(|end| date > end))
+    {
         return Err(AppError::validation(
             "AUTOMATIC_FIRST_DATE_OUTSIDE_RULE",
             "firstDate",
