@@ -9,6 +9,8 @@ pub enum StoreError {
     BaseCurrencyLocked,
     #[error("missing exchange rate for {0}")]
     MissingExchangeRate(CurrencyCode),
+    #[error("exchange rate for former base currency {0} requires replacement")]
+    LegacyBaseRateRequiresUpdate(CurrencyCode),
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
     #[error("database migration failed")]

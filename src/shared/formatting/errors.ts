@@ -1,6 +1,6 @@
 import type { AppError } from "../api/domain";
 
-function isAppError(value: unknown): value is AppError {
+export function isAppError(value: unknown): value is AppError {
   if (typeof value !== "object" || value === null) {
     return false;
   }
@@ -24,6 +24,7 @@ export function describeError(value: unknown): string {
       LOAN_ALLOCATION_OVERPAYMENT: "分配金额超过对应期次尚未归还的金额。",
       LOAN_ALLOCATION_MISMATCH: "还款分配的期次或金额不一致，请核对分配合计。",
       LOAN_SCHEDULE_PRINCIPAL_MISMATCH: "后续计划本金合计与可安排本金不一致，请重新预览或调整。",
+      LOAN_PAST_INSTALLMENTS_CORRECTION_REQUIRED: "逾期未还本金超过剩余本金。请勾选更正逾期期次，按实际余额重新安排。",
       LOAN_SCHEDULE_DATE_INVALID: "计划日期须递增且不早于允许日期，各期合计须大于零。",
       LOAN_SCHEDULE_METHOD_INVALID: "请选择有效的计划生成方式。",
       LOAN_DUPLICATE_REQUEST: "该请求已保存，但内容不同，请刷新详情后编辑已有记录。",
@@ -33,6 +34,7 @@ export function describeError(value: unknown): string {
       DUPLICATE_PLAN_ITEM_NAME: "已有同名周期规则，请使用不同名称。",
       DELETED_PLAN_CANNOT_ACCEPT_ENTRY: "原规则已删除，已有条目继续保留；新增实际请关联仍存在的规则或添加临时类目。",
       MISSING_EXCHANGE_RATE: currency ? `缺少 ${currency} 汇率，请先到设置中补充。` : "缺少必要汇率。",
+      LEGACY_BASE_RATE_REQUIRES_UPDATE: `请先在“当前汇率”中补录${currency ? ` ${currency} ` : "旧本位币"}相对当前本位币的有效汇率，再切换本位币。`,
       INVALID_REFERENCE_RATE: "欧洲央行返回了无法识别的参考汇率。",
       REFERENCE_RATES_EMPTY: "欧洲央行未返回可用的每日参考汇率。",
       REFERENCE_BASE_UNAVAILABLE: "欧洲央行未覆盖当前本位币，请保留或使用备用手动汇率。",
@@ -40,6 +42,8 @@ export function describeError(value: unknown): string {
       REFERENCE_CURRENCY_UNAVAILABLE: "欧洲央行未覆盖所选币种，请使用备用手动汇率。",
       REFERENCE_CURRENCY_STALE: "所选币种参考日期与最新观察日期不一致，本次更新未写入。",
       INVALID_EXCHANGE_RATE_SOURCE: "汇率来源无效，本次费用未保存。",
+      INVALID_EXCHANGE_RATE_DERIVATION: "折算汇率来源或日期无效，本次实际未保存。",
+      REBASED_EXCHANGE_RATE_CHANGED: "备用折算汇率已变更，请刷新汇率后重新保存。",
       MONTH_INITIALIZATION_CONFIRMATION_REQUIRED: "该月份需要明确确认后才能初始化。",
       EMPTY_SPECIAL_PROJECT_NAME: "请输入专项名称。",
       SPECIAL_ALLOCATION_REPARENT_FORBIDDEN: "月分配不能改挂到其他专项。",
@@ -56,6 +60,7 @@ export function describeError(value: unknown): string {
       DATABASE_CONSTRAINT_FAILED: "本次操作不符合记录约束，未保存。",
       AUTOMATIC_FIRST_DATE_REQUIRED: "请明确这项规则的首次自动支付日期。",
       AUTOMATIC_FIRST_DATE_OUTSIDE_RULE: "首次自动支付日期必须在规则有效日期内。",
+      AUTOMATIC_PAYMENT_ANCHOR_MISMATCH: "支付月规则的首次自动入账日期必须等于规则开始日期。",
       AUTOMATIC_POLICY_VERSION_MISSING: "缺少可用的自动规则版本，请重新保存自动设置。",
       AUTOMATIC_POLICY_VERSION_FROZEN: "已经生效的自动规则保持冻结，请配置下月规则。",
       INVALID_AUTOMATIC_CONFLICT_ACTION: "请选择关联、跳过或另建一笔。",
@@ -66,8 +71,8 @@ export function describeError(value: unknown): string {
       AUTOMATIC_OCCURRENCE_NOT_DUE: "这次自动记录尚未到期，不能提前处理。",
       AUTOMATIC_RULE_SNAPSHOT_MISMATCH: "本月冻结分类与自动规则不同，不能另建自动实际。请跳过本次，再在合适类目中手动记录。",
       AUTOMATIC_MANUAL_ENTRY_CONFLICT: "该类目已有手动实际，请明确关联、跳过或另建一笔。",
-      AUTOMATIC_EXCHANGE_RATE_DATE_REQUIRED: "自动入账需要带观察日期的有效汇率，请先补充汇率。",
-      AUTOMATIC_EXCHANGE_RATE_DATE_IN_FUTURE: "汇率观察日晚于当前日期，请先修正汇率。",
+      AUTOMATIC_EXCHANGE_RATE_DATE_REQUIRED: "自动入账需要带有效观察日或折算日的汇率，请先补充汇率。",
+      AUTOMATIC_EXCHANGE_RATE_DATE_IN_FUTURE: "汇率日期晚于当前日期，请先修正汇率。",
       ZERO_ACTUAL_ENTRY_AMOUNT: "实际金额必须大于零，零预算不会生成实际条目。",
       RECORD_IS_REFERENCED: "该汇率仍被设置、计划或历史快照引用，不能删除。",
       SETUP_REQUIRED: "请先完成首次设置。",

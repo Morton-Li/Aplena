@@ -55,6 +55,17 @@ describe("automatic actual records in monthly details", () => {
     expect(onEditEntry).toHaveBeenCalledWith(item, automatic);
   });
 
+  it("displays stored rate derivation for a foreign-currency actual", async () => {
+    vi.mocked(listActualEntries).mockResolvedValue([{
+      ...automatic, source_currency: "USD", source_amount: "100.00", exchange_rate: "7.20000000",
+      exchange_rate_source: "MANUAL", exchange_rate_observed_on: "2026-11-04",
+      exchange_rate_rebased_from_currency: "EUR", exchange_rate_rebased_on: "2026-11-04",
+    }]);
+    setup();
+    expect(await screen.findByText(/本位币切换换算 · 原本位币 EUR · 换算日 2026-11-04/)).toBeInTheDocument();
+    expect(screen.queryByText(/备用手动汇率|欧洲央行每日参考汇率/)).not.toBeInTheDocument();
+  });
+
   it("guards repeated deletion and keeps its confirmation open until the operation finishes", async () => {
     let complete!: () => void;
     vi.mocked(deleteActualEntry).mockReturnValue(new Promise<void>((resolve) => { complete = resolve; }));

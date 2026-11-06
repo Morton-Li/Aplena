@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 import type { SpecialActualEntry, SpecialAllocation, SpecialProjectDetail as ProjectDetail } from "../../shared/api/specials";
 import { Select } from "../../shared/components/Select";
-import { formatExchangeRate, formatMoney, monthLabel } from "../../shared/formatting/finance";
+import { formatExchangeRate, formatMoney, formatRebasedRateSource, monthLabel } from "../../shared/formatting/finance";
 import { categoryLabel } from "../../shared/formatting/labels";
 import { canEditSpecialAllocation } from "./specialForms";
 
@@ -104,7 +104,10 @@ export function SpecialProjectDetail({ detail, currentMonth, archiving, onEditPr
             <td><span>{entry.detail_group || "未分组"}</span>{entry.note && <small className="special-entry-note">{entry.note}</small>}</td>
             <td>{entry.effect === "INCREASE" ? "支出" : "退款"}</td>
             <td>{formatMoney(entry.source_amount, entry.source_currency)}</td>
-            <td><strong>{formatMoney(entry.amount, project.currency)}</strong><small>1 {entry.source_currency} = {formatExchangeRate(entry.exchange_rate)} {project.currency} · {entry.exchange_rate_observed_on}</small></td>
+            <td>
+              <strong>{formatMoney(entry.amount, project.currency)}</strong>
+              <small>1 {entry.source_currency} = {formatExchangeRate(entry.exchange_rate)} {project.currency} · {formatRebasedRateSource(entry.exchange_rate_rebased_from_currency, entry.exchange_rate_rebased_on) ?? entry.exchange_rate_observed_on}</small>
+            </td>
             <td><div className="special-actions"><button className="button button-quiet" onClick={() => onEditEntry(entry)} type="button">编辑条目</button><button className="button button-danger-quiet" onClick={() => onDeleteEntry(entry)} type="button">删除条目</button></div></td>
           </tr>)}</tbody>
         </table>

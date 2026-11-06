@@ -48,7 +48,7 @@ docs/                 产品、领域、架构、数据库和发行决策
 
 ### 2.2 数据库
 
-首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1。当前应用依次执行迁移至 `0008_loan_advances.sql`，支持 schema 8。已发布迁移不可修改，只能追加。各版本的数据模型见 [数据库结构](04-database-schema.md)，预发布数据库的换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
+首个正式版从 `src-tauri/migrations/0001_initial_release.sql` 建立 schema 1。当前应用依次执行迁移至 `0009_exchange_rate_derivations.sql`，支持 schema 9。已发布迁移不可修改，只能追加。各版本的数据模型见 [数据库结构](04-database-schema.md)，预发布数据库的换轨方案见 [预发布数据库换轨](08-pre-release-database-transition.md)。
 
 本地 SQLite 使用外键、STRICT 表和 WAL，并将数据目录限制为 `0700`、数据库及 WAL/SHM 限制为 `0600`。数据库文件未静态加密，具体决策见 [ADR 0006](adr/0006-database-encryption-release-gate.md)。
 

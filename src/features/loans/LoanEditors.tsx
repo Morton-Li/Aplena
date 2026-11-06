@@ -1,13 +1,13 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState, type FormEvent } from "react";
 import {
-  createLoan, loanFrequencyLabels, previewLoanPayment, previewLoanSchedule, saveLoanAdvance, saveLoanPayment, saveLoanSchedule, updateLoanMetadata,
-  type Loan, type LoanAdvance, type LoanAllocation, type LoanDetail, type LoanDirection, type LoanFrequency, type LoanPayment,
+  createLoan, loanFrequencyLabels, loanQueryKeys, previewLoanPayment, previewLoanSchedule, saveLoanAdvance, saveLoanPayment, saveLoanSchedule, updateLoanMetadata,
+  type Loan, type LoanAdvance, type LoanAllocation, type LoanDetail, type LoanDirection, type LoanFrequency, type LoanInstallment, type LoanPayment,
   type LoanPaymentInput, type LoanScheduleInput, type LoanSchedulePreview, type LoanScheduleRow,
 } from "../../shared/api/loans";
 import { Dialog } from "../../shared/components/Dialog";
 import { Select } from "../../shared/components/Select";
-import { describeError } from "../../shared/formatting/errors";
+import { describeError, isAppError } from "../../shared/formatting/errors";
 import { formatMoney } from "../../shared/formatting/finance";
 
 function localToday() {
@@ -97,39 +97,85 @@ export function LoanAdvanceEditor({ loan, advance, onClose, onSaved }: {
   </Dialog>;
 }
 
+function unpaidInstallment(row: LoanInstallment): LoanScheduleRow {
+  return { due_on: row.due_on, principal: row.remaining_principal, interest: row.remaining_interest, fees: row.remaining_fees };
+}
+
 export function LoanScheduleEditor({ detail, onClose, onSaved }: { detail: LoanDetail; onClose: () => void; onSaved: () => Promise<void> }) {
   const form = useId();
+  const queryClient = useQueryClient();
   const lock = useRef(false);
   const today = localToday();
   const [frequency, setFrequency] = useState<LoanFrequency>(detail.versions[0]?.frequency ?? "MONTH");
   const [interval, setInterval] = useState(String(detail.versions[0]?.interval_count ?? 1));
   const [first, setFirst] = useState(today > detail.loan.started_on ? today : detail.loan.started_on);
   const [count, setCount] = useState("12");
-  const [method, setMethod] = useState<LoanScheduleInput["method"]>("EQUAL_PRINCIPAL");
+  const [regularMethod, setMethod] = useState<LoanScheduleInput["method"]>("EQUAL_PRINCIPAL");
   const [rate, setRate] = useState("0");
   const [note, setNote] = useState("");
-  const [rows, setRows] = useState<LoanScheduleRow[]>(() => detail.installments.filter((row) => !row.superseded && row.due_on >= today && row.remaining_total !== "0.00").map((row) => ({ due_on: row.due_on, principal: row.remaining_principal, interest: row.remaining_interest, fees: row.remaining_fees })));
+  const [futureRows, setFutureRows] = useState<LoanScheduleRow[]>(() => detail.installments.filter((row) => !row.superseded && row.due_on >= today && row.remaining_total !== "0.00").map(unpaidInstallment));
+  const [correctionAvailable, setCorrectionAvailable] = useState(false);
+  const [correctPastInstallments, setCorrectPastInstallments] = useState(false);
+  const [correctionStale, setCorrectionStale] = useState(false);
+  const [correctionRows, setCorrectionRows] = useState<LoanScheduleRow[]>([]);
   const [preview, setPreview] = useState<LoanSchedulePreview | null>(null);
   const [page, setPage] = useState(0);
-  const input = (): LoanScheduleInput => ({ loanId: detail.loan.id, frequency, intervalCount: Number(interval), firstDate: first, count: Number(count), method, periodRatePercent: method === "MANUAL" ? "0" : rate, note: note || undefined, rows });
-  const mutation = useMutation({ mutationFn: () => saveLoanSchedule(input()), onSuccess: onSaved, onSettled: () => { lock.current = false; } });
-  const checking = useMutation({ mutationFn: () => previewLoanSchedule(input()), onSuccess: (value) => { setPreview(value); setPage(0); } });
+  const method = correctPastInstallments ? "MANUAL" : regularMethod;
+  const [rows, setRows] = correctPastInstallments ? [correctionRows, setCorrectionRows] : [futureRows, setFutureRows];
+  const input = (): LoanScheduleInput => ({
+    loanId: detail.loan.id, frequency, intervalCount: Number(interval), firstDate: first, count: Number(count),
+    method, periodRatePercent: method === "MANUAL" ? "0" : rate, note: note || undefined, rows,
+    correctPastInstallments: correctPastInstallments || undefined,
+  });
+  const checkStaleCorrection = (error: unknown) => {
+    if (correctPastInstallments && isAppError(error) && error.error_code === "LOAN_STALE_RECORD") {
+      setPreview(null);
+      setCorrectionStale(true);
+      void queryClient.invalidateQueries({ queryKey: loanQueryKeys.detail(detail.loan.id) });
+    }
+  };
+  const mutation = useMutation({
+    mutationFn: (reviewed: LoanSchedulePreview) => saveLoanSchedule({ ...input(), expectedCorrectionRevision: reviewed.correction_revision ?? undefined }),
+    onSuccess: onSaved,
+    onError: checkStaleCorrection,
+    onSettled: () => { lock.current = false; },
+  });
+  const checking = useMutation({
+    mutationFn: () => previewLoanSchedule(input()),
+    onSuccess: (value) => { setPreview(value); setPage(0); },
+    onError: (error) => {
+      setPreview(null);
+      checkStaleCorrection(error);
+      if (isAppError(error) && error.error_code === "LOAN_PAST_INSTALLMENTS_CORRECTION_REQUIRED") {
+        if (!correctionAvailable) {
+          const pastRows = detail.installments.filter((row) => !row.superseded && row.due_on < today && row.remaining_principal !== "0.00");
+          setCorrectionRows([...pastRows.map(unpaidInstallment), ...futureRows]);
+        }
+        setCorrectionAvailable(true);
+      }
+    },
+  });
   const busy = mutation.isPending || checking.isPending;
   const close = () => { if (!busy && !lock.current) onClose(); };
   const invalidate = () => { setPreview(null); checking.reset(); mutation.reset(); };
   const changeRow = (index: number, field: keyof LoanScheduleRow, value: string) => { setRows((current) => current.map((row, position) => position === index ? { ...row, [field]: value } : row)); invalidate(); };
-  const submit = (event: FormEvent) => { event.preventDefault(); if (!busy) checking.mutate(); };
-  const save = () => { if (!preview || lock.current) return; lock.current = true; mutation.mutate(); };
+  const submit = (event: FormEvent) => { event.preventDefault(); if (!busy && !correctionStale) checking.mutate(); };
+  const save = () => { if (!preview || lock.current) return; lock.current = true; mutation.mutate(preview); };
   const visibleRows = method === "MANUAL" ? rows : preview?.rows ?? [];
   const pages = Math.max(1, Math.ceil(visibleRows.length / 40));
   const currentPage = Math.min(page, pages - 1);
-  return <Dialog title={detail.versions.length ? "调整后续还款计划" : "建立还款计划"} size="wide" className="loan-plan-dialog" onClose={close} footer={<><button className="button button-quiet" disabled={busy} onClick={close} type="button">取消</button><button className="button button-secondary" disabled={busy} form={form} type="submit">{checking.isPending ? "核对中…" : "预览并核对"}</button><button className="button button-primary" disabled={busy || !preview} onClick={save} type="button">{mutation.isPending ? "保存中…" : "保存计划"}</button></>}>
-    <p className="dialog-intro">支持日、月、季度、年。短月取月末，后续恢复原始日；不自动顺延节假日。已过去的期次保留，未来计划按新版本接续，实际收付不会删除。</p>
+  return <Dialog title={detail.versions.length ? "调整后续还款计划" : "建立还款计划"} size="wide" className="loan-plan-dialog" onClose={close} footer={<><button className="button button-quiet" disabled={busy} onClick={close} type="button">取消</button><button className="button button-secondary" disabled={busy || correctionStale} form={form} type="submit">{checking.isPending ? "核对中…" : "预览并核对"}</button><button className="button button-primary" disabled={busy || !preview} onClick={save} type="button">{mutation.isPending ? "保存中…" : "保存计划"}</button></>}>
+    <p className="dialog-intro">支持日、月、季度、年。短月取月末，后续恢复原始日；不自动顺延节假日。默认保留已过去的期次，未来计划按新版本接续。</p>
     <form id={form} className="loan-form" onSubmit={submit}><fieldset disabled={busy}>
+      {correctionAvailable && <label className="loan-checkbox">
+        <input type="checkbox" checked={correctPastInstallments} onChange={(event) => { setCorrectPastInstallments(event.target.checked); setPage(0); invalidate(); }} />
+        更正逾期未清偿期次
+      </label>}
+      {correctPastInstallments && <p className="dialog-intro">请逐期核对更正后的未付本金、利息及费用。本次替换仍有未还本金的逾期期次及待调整的未来期次，保留旧版计划和已记录的实际收付。待安排本金 {formatMoney(detail.loan.remaining_principal, detail.loan.currency)}。</p>}
       <div className="loan-form-grid">
         <label>周期单位<Select ariaLabel="周期单位" value={frequency} onChange={(value) => { setFrequency(value as LoanFrequency); invalidate(); }} options={Object.entries(loanFrequencyLabels).map(([value, label]) => ({ value, label }))} /></label>
         <label>每隔几个周期<input type="number" required min="1" max="10000" step="1" value={interval} onChange={(event) => { setInterval(event.target.value); invalidate(); }} /></label>
-        <label>生成方式<Select ariaLabel="生成方式" value={method} onChange={(value) => { setMethod(value as LoanScheduleInput["method"]); invalidate(); }} options={[{ value: "EQUAL_PRINCIPAL", label: "等额本金（0 利率可用于无息分期）" }, { value: "ANNUITY", label: "等额本息" }, { value: "MANUAL", label: "手动逐期指定" }]} /></label>
+        <label>生成方式<Select ariaLabel="生成方式" value={method} disabled={correctPastInstallments} onChange={(value) => { setMethod(value as LoanScheduleInput["method"]); invalidate(); }} options={[{ value: "EQUAL_PRINCIPAL", label: "等额本金（0 利率可用于无息分期）" }, { value: "ANNUITY", label: "等额本息" }, { value: "MANUAL", label: "手动逐期指定" }]} /></label>
         {method !== "MANUAL" && <>
           <label>首次还款日<input type="date" required value={first} min={detail.versions.length ? today : detail.loan.started_on} onChange={(event) => { setFirst(event.target.value); invalidate(); }} /></label>
           <label>期数<input type="number" required min="1" max="10000" step="1" value={count} onChange={(event) => { setCount(event.target.value); invalidate(); }} /></label>
@@ -138,7 +184,7 @@ export function LoanScheduleEditor({ detail, onClose, onSaved }: { detail: LoanD
       </div>
       <label>变更说明（可选）<input value={note} onChange={(event) => { setNote(event.target.value); invalidate(); }} placeholder="例如提前还款后重排、约定延期" /></label>
     </fieldset></form>
-    {preview && <div className="success-banner" role="status">本次安排本金 {formatMoney(preview.principal_to_schedule, detail.loan.currency)}；保留 {preview.preserved_count} 个历史期次，生成 {preview.rows.length} 个后续期次。</div>}
+    {preview && <div className="success-banner" role="status">本次安排本金 {formatMoney(preview.principal_to_schedule, detail.loan.currency)}。{preview.corrected_past_count > 0 ? `替换 ${preview.corrected_past_count} 个逾期未清偿期次，` : ""}保留 {preview.preserved_count} 个现有期次，生成 {preview.rows.length} 个新期次。</div>}
     {method === "MANUAL" && <div className="special-actions"><button className="button button-secondary" type="button" disabled={busy} onClick={() => { setRows((value) => [...value, { due_on: first, principal: "0.00", interest: "0.00", fees: "0.00" }]); setPage(Math.floor(rows.length / 40)); invalidate(); }}>添加一期</button><small>按日期递增排列；本金合计须与本次可安排本金一致。提前结清后可清空未来未履行的计划。</small></div>}
     {visibleRows.length > 0 && <div className="table-scroll loan-table-scroll"><table className="data-table loan-edit-table"><caption className="sr-only">待保存的还款计划</caption><thead><tr><th>期次</th><th>还款日期</th><th>本金</th><th>利息</th><th>费用</th>{method === "MANUAL" && <th>操作</th>}</tr></thead><tbody>{visibleRows.slice(currentPage * 40, currentPage * 40 + 40).map((row, index) => {
       const position = currentPage * 40 + index;
@@ -146,7 +192,7 @@ export function LoanScheduleEditor({ detail, onClose, onSaved }: { detail: LoanD
     })}</tbody></table></div>}
     {pages > 1 && <div className="loan-pagination"><button className="button button-quiet" type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</button><span>{currentPage + 1} / {pages}</span><button className="button button-quiet" type="button" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)}>下一页</button></div>}
     {preview && method !== "MANUAL" && <button className="text-button" type="button" disabled={busy} onClick={() => { setRows(preview.rows); setMethod("MANUAL"); invalidate(); }}>在此结果上手动调整本金、利息或日期</button>}
-    <ErrorMessage error={checking.error ?? mutation.error} />
+    <ErrorMessage error={correctionStale ? new Error("借贷记录已变更，请关闭并重新打开此窗口以核对最新期次。") : checking.error ?? mutation.error} />
   </Dialog>;
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { canEditSpecialAllocation, nextSpecialMonth, specialActualInput, specialEntryRateSnapshot, specialEntryValidation, validSpecialBudget, validSpecialEntryDate, type SpecialEntryValues } from "./specialForms";
+import { entryRateSnapshot } from "../../shared/api/entryRateSnapshot";
+import { canEditSpecialAllocation, nextSpecialMonth, specialActualInput, specialEntryValidation, validSpecialBudget, validSpecialEntryDate, type SpecialEntryValues } from "./specialForms";
 import { specialAllocation, specialEntry, specialRates } from "./testFixtures";
 
 const values: SpecialEntryValues = {
@@ -10,18 +11,18 @@ const values: SpecialEntryValues = {
 describe("special forms retain financial ownership and snapshots", () => {
   it("uses the saved FX snapshot when an actual entry is edited after current rates change", () => {
     const existing = specialEntry();
-    expect(specialEntryRateSnapshot("USD", "CNY", "2026-10-07", specialRates, existing)).toEqual({
+    expect(entryRateSnapshot("USD", "CNY", "2026-10-07", specialRates, existing)).toEqual({
       rate: "7.00000000", source: "ECB_REFERENCE", observedOn: "2026-10-01",
     });
-    expect(specialEntryRateSnapshot("USD", "CNY", "2026-10-07", specialRates)).toEqual({
+    expect(entryRateSnapshot("USD", "CNY", "2026-10-07", specialRates)).toEqual({
       rate: "8.00000000", source: "MANUAL", observedOn: "2026-10-07",
     });
   });
 
   it("requires a rate for the correct base and records an explicit base currency snapshot", () => {
-    expect(specialEntryRateSnapshot("USD", "EUR", "2026-10-07", specialRates)).toBeNull();
-    expect(specialEntryRateSnapshot("JPY", "CNY", "2026-10-07", specialRates)).toBeNull();
-    expect(specialEntryRateSnapshot("CNY", "CNY", "2026-10-07", [])).toEqual({ rate: "1.00000000", source: "BASE_CURRENCY", observedOn: "2026-10-07" });
+    expect(entryRateSnapshot("USD", "EUR", "2026-10-07", specialRates)).toBeNull();
+    expect(entryRateSnapshot("JPY", "CNY", "2026-10-07", specialRates)).toBeNull();
+    expect(entryRateSnapshot("CNY", "CNY", "2026-10-07", [])).toEqual({ rate: "1.00000000", source: "BASE_CURRENCY", observedOn: "2026-10-07" });
   });
 
   it("only offers edit/delete for unfrozen future allocations on active projects", () => {
