@@ -86,7 +86,7 @@ actual_entries
 
 ### 5.1 自动边界
 
-启动时只自动初始化当前自然月。创建或更新周期规则不会自动回填当前月；用户若确需补齐符合本月的规则，必须在月度执行中显式初始化。读取历史或未来月份绝不隐式写入。
+启动时只自动初始化当前自然月。创建或更新周期规则不会自动回填当前月；用户若确需补齐符合本月的规则，必须在月度执行中点击“补齐该月规则”并确认。首次创建该月数据仍显示初始化。读取历史或未来月份绝不隐式写入。
 
 ### 5.2 显式边界
 
@@ -135,7 +135,6 @@ preview_plan_item / get_budget_projection
 preview_month / initialize_month / get_startup_status
 list_monthly_items / update_monthly_note
 create_manual_monthly_item / delete_manual_monthly_item
-ensure_actual_only_monthly_item
 list_actual_entries / create_actual_entry
 update_actual_entry / delete_actual_entry
 get_month_analytics / get_history_analytics

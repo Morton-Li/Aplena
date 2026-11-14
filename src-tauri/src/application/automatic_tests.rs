@@ -8,10 +8,7 @@ use crate::infrastructure::{Store, open_database, open_memory_database};
 
 use super::{
     automatic::{AutomaticPolicyInputDto, ResolveAutomaticEntryConflictInputDto},
-    dto::{
-        ActualEntryInputDto, EnsureActualOnlyInputDto, InitializeMonthInputDto, PlanItemInputDto,
-        SettingsInputDto,
-    },
+    dto::{ActualEntryInputDto, InitializeMonthInputDto, PlanItemInputDto, SettingsInputDto},
     service::{FinanceService, current_natural_date},
 };
 
@@ -144,15 +141,24 @@ async fn manual_entry(
     plan: &PlanItem,
     occurred_on: &str,
 ) -> super::dto::ActualEntryDto {
-    let container = service
-        .ensure_actual_only(EnsureActualOnlyInputDto {
-            plan_item_id: plan.id().to_string(),
-            month: date(occurred_on).year_month().to_string(),
-        })
+    let container = MonthlyItem::actual_only(
+        Uuid::new_v4(),
+        plan,
+        date(occurred_on).year_month(),
+        currency("CNY"),
+    );
+    service
+        .current_store()
+        .await
+        .insert_monthly_item(&container, FIXTURE_TIMESTAMP)
         .await
         .unwrap();
     service
-        .create_actual_entry(actual_input(&container.id, occurred_on, "37.00"))
+        .create_actual_entry(actual_input(
+            &container.id().to_string(),
+            occurred_on,
+            "37.00",
+        ))
         .await
         .unwrap()
 }

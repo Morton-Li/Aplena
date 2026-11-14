@@ -14,10 +14,9 @@ use crate::infrastructure::{StoreError, open_database, open_memory_database};
 use super::{
     automatic::AutomaticPolicyInputDto,
     dto::{
-        ActualEntryInputDto, DeleteManualMonthlyItemInputDto, EnsureActualOnlyInputDto,
-        ExchangeRateUpsertDto, InitializeMonthInputDto, ManualMonthlyItemInputDto,
-        PlanItemInputDto, RateOverrideDto, ReferenceRateImportDto, ReferenceRateObservationDto,
-        SettingsInputDto,
+        ActualEntryInputDto, DeleteManualMonthlyItemInputDto, ExchangeRateUpsertDto,
+        InitializeMonthInputDto, ManualMonthlyItemInputDto, PlanItemInputDto, RateOverrideDto,
+        ReferenceRateImportDto, ReferenceRateObservationDto, SettingsInputDto,
     },
     service::FinanceService,
 };
@@ -1724,13 +1723,27 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
         ))
         .await
         .unwrap();
-    let actual_only = service
-        .ensure_actual_only(EnsureActualOnlyInputDto {
-            plan_item_id: created.id.clone(),
-            month: next.to_string(),
-        })
+    // Seed an existing container to retain coverage for automatic and legacy data.
+    let store = service.current_store().await;
+    let rule = store
+        .get_plan_item(Uuid::parse_str(&created.id).unwrap())
         .await
         .unwrap();
+    let container = pfcm_domain::MonthlyItem::actual_only(
+        Uuid::new_v4(),
+        &rule.value,
+        next,
+        CurrencyCode::new("CNY").unwrap(),
+    );
+    store
+        .insert_monthly_item(&container, "2026-01-01T00:00:00Z")
+        .await
+        .unwrap();
+    let actual_only = service
+        .list_monthly_items(next.to_string())
+        .await
+        .unwrap()
+        .remove(0);
     assert_eq!(actual_only.item_source, "ACTUAL_ONLY");
     assert_eq!(actual_only.planned_amount, "0.00");
     assert_eq!(actual_only.scheduled_date, None);
@@ -1812,241 +1825,6 @@ async fn actual_only_item_promotes_in_place_keeps_entries_and_deleted_plan_rejec
         .await
         .unwrap_err();
     assert_eq!(error.error_code, "DELETED_PLAN_CANNOT_ACCEPT_ENTRY");
-}
-
-fn linked_refund(
-    item: &super::dto::MonthlyItemDto,
-    currency: &str,
-    rate: &str,
-) -> ActualEntryInputDto {
-    ActualEntryInputDto {
-        id: None,
-        monthly_item_id: item.id.clone(),
-        occurred_on: format!("{}-03", item.month),
-        effect: "DECREASE".to_owned(),
-        amount: "10.00".to_owned(),
-        currency: currency.to_owned(),
-        exchange_rate: rate.to_owned(),
-        exchange_rate_source: if currency == "CNY" {
-            "BASE_CURRENCY"
-        } else {
-            "MANUAL"
-        }
-        .to_owned(),
-        exchange_rate_observed_on: format!("{}-01", item.month),
-        exchange_rate_rebased_from_currency: None,
-        exchange_rate_rebased_on: None,
-        note: Some("迟到退款".to_owned()),
-        detail_group: None,
-    }
-}
-
-#[tokio::test]
-async fn linked_actual_only_nonpayment_month_stays_zero_and_counts_the_refund_once() {
-    let service = test_service().await;
-    saved_rate(&service, "USD", "7.2").await;
-    let january = YearMonth::new(2026, 1).unwrap();
-    let february = january.next_month().unwrap();
-    let rule = service
-        .create_plan_item(plan(
-            "季度网络费",
-            "ESSENTIAL_EXPENSE",
-            "300",
-            "USD",
-            3,
-            "PAYMENT",
-            january,
-            None,
-        ))
-        .await
-        .unwrap();
-    let request = EnsureActualOnlyInputDto {
-        plan_item_id: rule.id.clone(),
-        month: february.to_string(),
-    };
-    let container = service.ensure_actual_only(request.clone()).await.unwrap();
-    assert_eq!(
-        service.ensure_actual_only(request).await.unwrap(),
-        container
-    );
-    assert_eq!(
-        container.source_plan_item_id.as_deref(),
-        Some(rule.id.as_str())
-    );
-    assert_eq!(container.item_source, "ACTUAL_ONLY");
-    assert_eq!(container.planned_amount, "0.00");
-    assert!(
-        service
-            .list_actual_entries(container.id.clone())
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    let refund = service
-        .create_actual_entry(linked_refund(&container, "USD", "6.5"))
-        .await
-        .unwrap();
-    assert_eq!(refund.amount, "65.00");
-    let preview = service.preview_month(init(february)).await.unwrap();
-    assert_eq!(preview.candidate_count, 0);
-    assert_eq!(preview.excluded_count, 1);
-    assert_eq!(
-        service
-            .initialize_month(init(february))
-            .await
-            .unwrap()
-            .created_count,
-        0
-    );
-    let items = service
-        .list_monthly_items(february.to_string())
-        .await
-        .unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].id, container.id);
-    assert_eq!(items[0].item_source, "ACTUAL_ONLY");
-    assert_eq!(items[0].planned_amount, "0.00");
-    assert_eq!(items[0].actual_amount.as_deref(), Some("-65.00"));
-    let analytics = service.month_analytics(february.to_string()).await.unwrap();
-    assert_eq!(analytics.total_item_count, 1);
-    assert_eq!(analytics.expense.actual_to_date.as_deref(), Some("-65.00"));
-    assert_eq!(
-        service.list_actual_entries(container.id).await.unwrap(),
-        vec![refund]
-    );
-}
-
-#[tokio::test]
-async fn linked_actual_only_recognized_month_promotes_with_foreign_snapshot_and_id_preserved() {
-    let service = test_service().await;
-    saved_rate(&service, "USD", "7.2").await;
-    let january = YearMonth::new(2026, 1).unwrap();
-    let rule = service
-        .create_plan_item(plan(
-            "可提升季度网络费",
-            "ESSENTIAL_EXPENSE",
-            "300",
-            "USD",
-            3,
-            "PAYMENT",
-            january,
-            None,
-        ))
-        .await
-        .unwrap();
-    let container = service
-        .ensure_actual_only(EnsureActualOnlyInputDto {
-            plan_item_id: rule.id,
-            month: january.to_string(),
-        })
-        .await
-        .unwrap();
-    let refund = service
-        .create_actual_entry(linked_refund(&container, "USD", "6.5"))
-        .await
-        .unwrap();
-    assert_eq!(
-        service
-            .initialize_month(init(january))
-            .await
-            .unwrap()
-            .created_count,
-        1
-    );
-    let promoted = service
-        .list_monthly_items(january.to_string())
-        .await
-        .unwrap();
-    assert_eq!(promoted.len(), 1);
-    assert_eq!(promoted[0].id, container.id);
-    assert_eq!(promoted[0].item_source, "PLANNED");
-    assert_eq!(promoted[0].planned_amount, "2160.00");
-    assert_eq!(promoted[0].actual_amount.as_deref(), Some("-65.00"));
-    assert_eq!(
-        service
-            .list_actual_entries(container.id.clone())
-            .await
-            .unwrap(),
-        vec![refund.clone()]
-    );
-    saved_rate(&service, "USD", "9").await;
-    assert_eq!(
-        service
-            .initialize_month(init(january))
-            .await
-            .unwrap()
-            .created_count,
-        0
-    );
-    assert_eq!(
-        service
-            .list_monthly_items(january.to_string())
-            .await
-            .unwrap(),
-        promoted
-    );
-    assert_eq!(
-        service.list_actual_entries(container.id).await.unwrap(),
-        vec![refund]
-    );
-}
-
-#[tokio::test]
-async fn linked_actual_only_accepts_ended_rules_but_rejects_deleted_rules_without_losing_entries() {
-    let service = test_service().await;
-    let january = YearMonth::new(2026, 1).unwrap();
-    let february = january.next_month().unwrap();
-    let rule = service
-        .create_plan_item(plan(
-            "已结束订阅",
-            "ESSENTIAL_EXPENSE",
-            "300",
-            "CNY",
-            3,
-            "PAYMENT",
-            january,
-            Some(january),
-        ))
-        .await
-        .unwrap();
-    let request = EnsureActualOnlyInputDto {
-        plan_item_id: rule.id.clone(),
-        month: february.to_string(),
-    };
-    let container = service.ensure_actual_only(request.clone()).await.unwrap();
-    let refund = service
-        .create_actual_entry(linked_refund(&container, "CNY", "1"))
-        .await
-        .unwrap();
-    assert_eq!(
-        service
-            .initialize_month(init(february))
-            .await
-            .unwrap()
-            .created_count,
-        0
-    );
-    service.delete_plan_item(rule.id).await.unwrap();
-    assert_eq!(
-        service
-            .ensure_actual_only(request)
-            .await
-            .unwrap_err()
-            .error_code,
-        "NOT_FOUND"
-    );
-    assert_eq!(
-        service
-            .create_actual_entry(linked_refund(&container, "CNY", "1"))
-            .await
-            .unwrap_err()
-            .error_code,
-        "DELETED_PLAN_CANNOT_ACCEPT_ENTRY"
-    );
-    assert_eq!(
-        service.list_actual_entries(container.id).await.unwrap(),
-        vec![refund]
-    );
 }
 
 #[tokio::test]

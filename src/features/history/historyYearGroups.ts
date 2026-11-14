@@ -1,4 +1,4 @@
-import type { MonthAnalytics } from "../../shared/api/finance";
+import type { CategoryBreakdown, MonthAnalytics } from "../../shared/api/finance";
 
 export interface HistoryYearGroup {
   year: string;
@@ -9,6 +9,13 @@ export interface HistoryYearGroup {
   actualExpense: string | null;
   actualNetBalance: string | null;
   actualSavingsRatePercent: string | null;
+  actualMonthCount: number;
+  plannedMonthCount: number;
+  plannedIncome: string;
+  plannedExpense: string;
+  plannedNetBalance: string;
+  plannedSavingsRatePercent: string | null;
+  categories: CategoryBreakdown[];
 }
 
 export function groupHistoryByYear(months: MonthAnalytics[]): HistoryYearGroup[] {
@@ -34,6 +41,32 @@ function buildYearGroup(year: string, months: MonthAnalytics[]): HistoryYearGrou
   const incomeCents = sumAmounts(sortedMonths.map((month) => month.income.actual_to_date));
   const expenseCents = sumAmounts(sortedMonths.map((month) => month.expense.actual_to_date));
   const netCents = sumAmounts(sortedMonths.map((month) => month.net_balance.actual_to_date));
+  const plannedIncome = sumAmounts(sortedMonths.map((month) => month.income.planned));
+  const plannedExpense = sumAmounts(sortedMonths.map((month) => month.expense.planned));
+  const plannedNet = sumAmounts(sortedMonths.map((month) => month.net_balance.planned));
+
+  const categoryGroups = new Map<string, CategoryBreakdown[]>();
+  for (const month of sortedMonths) {
+    for (const category of month.categories) {
+      const key = `${category.flow_type}:${category.category}`;
+      const group = categoryGroups.get(key) ?? [];
+      group.push(category);
+      categoryGroups.set(key, group);
+    }
+  }
+  const categories = [...categoryGroups.values()].map((group) => {
+    const first = group[0];
+    const planned = sumAmounts(group.map((item) => item.planned_amount));
+    const actual = sumAmounts(group.map((item) => item.actual_to_date));
+    return {
+      category: first.category,
+      flow_type: first.flow_type,
+      planned_amount: formatCents(planned) ?? "0.00",
+      actual_to_date: formatCents(actual),
+      planned_share_percent: savingsRate(first.flow_type === "INCOME" ? plannedIncome : plannedExpense, planned),
+      actual_share_percent: savingsRate(first.flow_type === "INCOME" ? incomeCents : expenseCents, actual),
+    };
+  });
 
   return {
     year,
@@ -44,6 +77,13 @@ function buildYearGroup(year: string, months: MonthAnalytics[]): HistoryYearGrou
     actualExpense: formatCents(expenseCents),
     actualNetBalance: formatCents(netCents),
     actualSavingsRatePercent: savingsRate(incomeCents, netCents),
+    actualMonthCount: sortedMonths.filter((month) => month.net_balance.actual_to_date !== null).length,
+    plannedMonthCount: sortedMonths.filter((month) => month.planned_item_count > 0).length,
+    plannedIncome: formatCents(plannedIncome) ?? "0.00",
+    plannedExpense: formatCents(plannedExpense) ?? "0.00",
+    plannedNetBalance: formatCents(plannedNet) ?? "0.00",
+    plannedSavingsRatePercent: savingsRate(plannedIncome, plannedNet),
+    categories,
   };
 }
 

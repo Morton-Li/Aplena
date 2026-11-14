@@ -150,6 +150,7 @@ function AppBootstrap() {
               <Route path="specials" element={<SpecialsPage />} />
               <Route path="loans" element={<LoansPage />} />
               <Route path="history" element={<HistoryPage />} />
+              <Route path="history/year/:year" element={<HistoryPage />} />
               <Route path="history/:month" element={<HistoryPage />} />
               <Route path="goals" element={<GoalsPage />} />
               <Route path="plans" element={<Navigate replace to="/goals" />} />
