@@ -8,6 +8,7 @@ import { describeError } from "../../shared/formatting/errors";
 import { formatMoney, formatPercent, isValidMonth, monthLabel } from "../../shared/formatting/finance";
 import { HistoricalMonthEntry } from "./HistoricalMonthEntry";
 import { MonthReportDetail } from "./MonthReportDetail";
+import { YearReportDetail } from "./YearReportDetail";
 import {
   defaultExpandedHistoryYears,
   groupHistoryByYear,
@@ -15,7 +16,7 @@ import {
 } from "./historyYearGroups";
 
 export function HistoryPage() {
-  const { month } = useParams<{ month?: string }>();
+  const { month, year } = useParams<{ month?: string; year?: string }>();
   const historyQuery = useQuery({
     queryKey: queryKeys.historyAnalytics,
     queryFn: () => getHistoryAnalytics(),
@@ -25,6 +26,7 @@ export function HistoryPage() {
   if (historyQuery.isError) return <section className="state-card"><span role="alert">{describeError(historyQuery.error)}</span></section>;
 
   const months = historyQuery.data.months;
+  if (year) return <YearReportPage requestedYear={year} months={months} />;
   if (month) return <MonthReportPage requestedMonth={month} months={months} />;
   if (months.length === 0) {
     return <EmptyState eyebrow="历史报表" title="还没有可查看的月份" description="录入第一个月份的实际数据后，月度详细报告会自动出现在这里；只有进入明确的调整操作才会修改数据。" action={<div className="empty-actions"><Link className="button button-primary" to="/monthly">录入本月实际</Link><HistoricalMonthEntry /></div>} />;
@@ -52,14 +54,14 @@ function HistoryIndex({ months }: { months: MonthAnalytics[] }) {
         <div>
           <p className="eyebrow">历史归档</p>
           <h1>历史报表</h1>
-          <p>按年份浏览月度财务结果，再进入某个月查看完整分析；实际条目可在明确的调整入口中补录、编辑或删除。</p>
+          <p>查看年度汇总与全年趋势，或进入某个月查看完整分析；可从月度报告调整实际条目。</p>
         </div>
         <div className="header-actions"><span className="context-chip">{groups.length} 个年度 · {months.length} 个月份</span><HistoricalMonthEntry /></div>
       </header>
 
       <section className="history-year-index" aria-labelledby="history-year-index-title">
         <header className="section-heading history-index-heading">
-          <div><p className="section-label">Monthly Reports</p><h2 id="history-year-index-title">按月份查看详细报告</h2></div>
+          <div><p className="section-label">Annual & Monthly Reports</p><h2 id="history-year-index-title">年度与月度报告</h2></div>
           <span className="report-context">年份与月份均按最近优先</span>
         </header>
         <div className="history-year-groups">
@@ -93,6 +95,7 @@ function HistoryYearSection({ group, expanded, onToggle }: { group: HistoryYearG
           <span aria-hidden="true" className="history-year-chevron" />
           <span><strong>{group.year} 年</strong><small>{group.monthCount} 个月度报告</small></span>
         </button>
+        <Link className="history-annual-link" to={`/history/year/${group.year}`} aria-label={`查看 ${group.year} 年年度报告`}>查看年度报告 →</Link>
         <dl className="history-year-summary" aria-label={`${group.year} 年度汇总`}>
           <YearMetric label="实际收入" value={formatMoney(group.actualIncome, group.currency)} />
           <YearMetric label="实际支出" value={formatMoney(group.actualExpense, group.currency)} />
@@ -115,6 +118,28 @@ function HistoryYearSection({ group, expanded, onToggle }: { group: HistoryYearG
 
 function YearMetric({ label, value }: { label: string; value: string }) {
   return <div><dt>{label}</dt><dd>{value}</dd></div>;
+}
+
+function YearReportPage({ requestedYear, months }: { requestedYear: string; months: MonthAnalytics[] }) {
+  const groups = groupHistoryByYear(months);
+  const index = groups.findIndex((group) => group.year === requestedYear);
+  const selected = groups[index];
+  if (!/^(?!0000)\d{4}$/.test(requestedYear) || !selected) {
+    return <EmptyState eyebrow="历史报表" title="没有找到这个年度" description="该年度没有可用的月度数据。" action={<Link className="button button-secondary" to="/history">返回历史报表</Link>} />;
+  }
+  const newer = groups[index - 1];
+  const older = groups[index + 1];
+  return <>
+    <header className="page-header history-report-header">
+      <div><Link className="back-link" to="/history">← 返回历史报表</Link><p className="eyebrow">年度详细报告</p><h1>{selected.year} 年</h1><p>全年收支、计划执行、月度趋势与分类结构。</p></div>
+      <div className="history-report-context"><span className="context-chip">{selected.currency}</span><strong>{selected.monthCount} 个月度报告</strong></div>
+    </header>
+    {(newer || older) && <nav className="month-report-navigation" aria-label="相邻年度">
+      {older ? <Link to={`/history/year/${older.year}`}>← {older.year} 年</Link> : <span />}
+      {newer ? <Link to={`/history/year/${newer.year}`}>{newer.year} 年 →</Link> : <span />}
+    </nav>}
+    <YearReportDetail group={selected} key={selected.year} />
+  </>;
 }
 
 function HistoryMonthRow({ analytics }: { analytics: MonthAnalytics }) {

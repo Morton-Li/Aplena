@@ -2079,6 +2079,21 @@ textarea {
   margin-top: 2px;
 }
 
+.dialog-body label.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.dialog-body label.check-row input {
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  margin: 2px 0 0;
+  padding: 0;
+}
+
 @media (max-width: 1040px) {
   .plan-card {
     grid-template-columns: 1fr;
@@ -3328,7 +3343,7 @@ textarea:focus,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .dashboard-chart-grid-primary {
@@ -3394,6 +3409,16 @@ textarea:focus,
 .chart-data-flip {
   margin-top: 4px;
   perspective: 1200px;
+}
+
+.dashboard-chart-section .chart-data-flip,
+.year-report-detail .chart-data-flip {
+  margin-top: 12px;
+}
+
+.dashboard-chart-section .chart-data-flip-front > .analytics-chart,
+.year-report-detail .chart-data-flip-front > .analytics-chart {
+  margin-top: 0;
 }
 
 .chart-data-flip-stage,
@@ -3704,6 +3729,7 @@ textarea:focus,
 .monthly-page .month-context {
   grid-template-columns: minmax(220px, 1fr) auto auto;
   gap: 14px;
+  margin-bottom: 12px;
   padding: 11px 14px;
   background: #ffffff;
   border-color: var(--border);
@@ -4817,9 +4843,23 @@ textarea:focus,
 
 .history-year-header {
   display: grid;
-  grid-template-columns: minmax(180px, 0.7fr) minmax(520px, 1.8fr);
+  grid-template-columns: minmax(140px, 0.7fr) auto minmax(440px, 1.8fr);
   align-items: stretch;
   background: #ffffff;
+}
+
+.history-annual-link {
+  align-self: center;
+  margin-right: 14px;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.history-annual-link:hover {
+  text-decoration: underline;
 }
 
 .history-year-toggle {
@@ -5066,6 +5106,34 @@ textarea:focus,
   overflow: auto;
 }
 
+.history-structure-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+.history-structure-grid > .analysis-card {
+  min-width: 0;
+  margin-top: 0;
+}
+
+.share-chart-empty {
+  display: grid;
+  min-height: 300px;
+  margin: 0;
+  place-items: center;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.history-report-note {
+  margin: 0 0 12px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .ranking-card {
   overflow: hidden;
   padding-top: 0;
@@ -5251,10 +5319,11 @@ textarea:focus,
   }
 
   .history-year-header {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr auto;
   }
 
   .history-year-summary {
+    grid-column: 1 / -1;
     border-top: 1px solid #e5eaf1;
     border-left: 0;
   }
@@ -5331,7 +5400,8 @@ textarea:focus,
   }
 
   .dashboard-chart-grid,
-  .dashboard-chart-grid-primary {
+  .dashboard-chart-grid-primary,
+  .history-structure-grid {
     grid-template-columns: 1fr;
   }
 

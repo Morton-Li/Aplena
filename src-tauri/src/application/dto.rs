@@ -155,13 +155,6 @@ pub struct ActualEntryDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EnsureActualOnlyInputDto {
-    pub plan_item_id: String,
-    pub month: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ManualMonthlyItemInputDto {
     pub name: String,
     pub month: String,

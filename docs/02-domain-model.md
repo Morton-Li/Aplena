@@ -275,7 +275,6 @@ projected_savings_rate = projected_savings / projected_income
 - 设置/汇率/长期计划 CRUD 与计划预览；
 - `preview_month`、`initialize_month`、自动当前月初始化；
 - `list_monthly_items`、`update_monthly_note`；
-- `ensure_actual_only_monthly_item`；
 - `create_manual_monthly_item`、`delete_manual_monthly_item`；
 - `list/create/update/delete_actual_entry`；
 - 月度、历史与下月预算投影查询。

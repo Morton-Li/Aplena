@@ -582,8 +582,6 @@ function installHarness(options: HarnessOptions = {}) {
         const monthlyItemId = args?.monthlyItemId as string;
         return (actualEntries[monthlyItemId] ?? []) as T;
       }
-      case "ensure_actual_only_monthly_item":
-        return monthlyItem({ item_source: "ACTUAL_ONLY", planned_amount: "0.00" }) as T;
       case "create_manual_monthly_item": {
         const input = args?.input as { name: string; month: string; category: string; note?: string };
         const created = monthlyItem({
@@ -1284,7 +1282,6 @@ describe("planning workflows", () => {
     });
     expect(await screen.findByRole("dialog", { name: "本月房租" })).toBeInTheDocument();
     expect(invokeMock.mock.calls.some(([command]) => command === "create_actual_entry")).toBe(false);
-    expect(invokeMock.mock.calls.some(([command]) => command === "ensure_actual_only_monthly_item")).toBe(false);
   });
 
   it("deletes a temporary category only after explicit confirmation", async () => {

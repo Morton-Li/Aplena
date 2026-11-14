@@ -17,13 +17,13 @@ use super::{
     },
     dto::{
         ActualEntryDto, ActualEntryInputDto, BudgetProjectionDto, BudgetProjectionRequestDto,
-        DeleteManualMonthlyItemInputDto, DeletePlanItemDto, DomainContractDto,
-        EnsureActualOnlyInputDto, EnumOptionDto, ExchangeRateDto, ExchangeRateInputDto,
-        ExchangeRateUpsertDto, HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto,
-        ManualMonthlyItemInputDto, MonthAnalyticsDto, MonthInitializationStatusDto,
-        MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto,
-        PlanPreviewDto, PlanPreviewRequestDto, ReferenceRateImportDto, SettingsDto,
-        SettingsInputDto, StartupStatusDto, StopPlanItemRequestDto,
+        DeleteManualMonthlyItemInputDto, DeletePlanItemDto, DomainContractDto, EnumOptionDto,
+        ExchangeRateDto, ExchangeRateInputDto, ExchangeRateUpsertDto, HistoryAnalyticsDto,
+        InitializeMonthDto, InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
+        MonthInitializationStatusDto, MonthPreviewDto, MonthlyItemDto, MonthlyNoteInputDto,
+        PlanItemDto, PlanItemInputDto, PlanPreviewDto, PlanPreviewRequestDto,
+        ReferenceRateImportDto, SettingsDto, SettingsInputDto, StartupStatusDto,
+        StopPlanItemRequestDto,
     },
     error::AppError,
     service::FinanceService,
@@ -232,14 +232,6 @@ pub async fn list_monthly_items(
     month: String,
 ) -> Result<Vec<MonthlyItemDto>, AppError> {
     service.list_monthly_items(month).await
-}
-
-#[tauri::command]
-pub async fn ensure_actual_only_monthly_item(
-    service: State<'_, FinanceService>,
-    input: EnsureActualOnlyInputDto,
-) -> Result<MonthlyItemDto, AppError> {
-    service.ensure_actual_only(input).await
 }
 
 #[tauri::command]
