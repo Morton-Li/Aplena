@@ -75,7 +75,7 @@ Aplena 以月份为基本工作单位，将真实结果、可选预算基准和�
 
 Aplena 是单用户、单账本的本地桌面应用，不需要登录，也不会把财务数据上传到云服务。网络只用于读取欧洲央行每日参考汇率，以及从 GitHub Releases 检查和下载软件更新；断网时仍可使用全部本地财务功能、本位币和已经保存的备用汇率。
 
-首个版本使用受操作系统用户权限保护的本地 SQLite 数据库，目录与数据库相关文件限制为当前用户访问。数据库文件本身未做静态加密，因此不能把 Aplena 描述为端到端加密产品；建议在设备上启用 FileVault，并妥善保护本机账户。
+当前实现使用受操作系统用户权限保护的本地 SQLite 数据库，目录与数据库相关文件限制为当前用户访问。数据库文件本身未做静态加密，因此不能把 Aplena 描述为端到端加密产品；建议在设备上启用 FileVault，并妥善保护本机账户。
 
 ### 稳定的财务口径
 
@@ -93,7 +93,7 @@ Aplena 关注个人财务事实、月度执行和预算投影，不提供账户�
 
 ### 系统要求与下载
 
-首发目标为 macOS 11 及以上版本。正式版本通过严格的 `vMAJOR.MINOR.PATCH` 标签构建；双架构远程流水线验证通过后，可在 [GitHub Releases](https://github.com/Morton-Li/Aplena/releases) 下载 Apple Silicon 与 Intel 安装包。安装首个包含 updater 的桥接版本后，后续稳定版可以由应用在后台检查，并在用户确认后下载、验签、安装和重启；当前公开的 `v1.1.3` 尚不具备该桥接能力，仍需最后一次手动安装桥接版本。
+构建目标为 macOS 11 及以上版本。正式版本通过严格的 `vMAJOR.MINOR.PATCH` 标签构建，发行流水线分别验证 Apple Silicon 与 Intel 安装包；实际可下载版本及资产以 [GitHub Releases](https://github.com/Morton-Li/Aplena/releases) 为准。已具备 updater 的安装可在后台检查稳定版，并在用户确认后下载、验签、安装和重启；未包含 updater 的早期安装需要先手动安装一次桥接版本。
 
 GitHub Actions 发行流程配置为使用项目的 “Morton Li” 自签名证书并校验证书指纹，同时使用独立的 Tauri updater 密钥验证更新包。两套签名不能互相替代；自签名证书不属于 Apple Developer ID 信任链，也未经过 Apple 公证，因此 macOS 仍可能在首次打开或更新后显示安全提示。本地自行构建的应用仅使用系统默认的 ad-hoc/linker 签名，普通开发构建也不会生成可发布的 updater 包。
 
@@ -109,10 +109,12 @@ GitHub Actions 发行流程配置为使用项目的 “Morton Li” 自签名证
 
 ### 文档
 
-- [产品规格](docs/01-product-spec.md)
-- [架构设计](docs/03-architecture.md)
-- [用户流程](docs/05-ux-and-user-flows.md)
+- [文档导航与维护约定](docs/README.md)
+- [产品与使用流程](docs/product.md)
+- [架构与领域规则](docs/architecture.md)
+- [数据库与迁移](docs/database.md)
 - [开发、构建与发行](docs/development.md)
+- [设计决策与替代关系](docs/decisions.md)
 - [第三方许可证材料](THIRD_PARTY_NOTICES.md)
 
 ### 许可
