@@ -53,7 +53,7 @@ it.each([
   await user.type(editor.getByLabelText("追加本金（CNY）"), "200");
   fireEvent.change(editor.getByLabelText("发生日期"), { target: { value: "2000-02-12" } });
   await user.click(editor.getByRole("button", { name: "保存" }));
-  const table = within(await screen.findByRole("table", { name: direction === "LENT" ? "借出与归还记录" : "追加本金记录" }));
+  const table = within(await screen.findByRole("table", { name: direction === "LENT" ? "借出与归还记录" : "借入与偿还记录" }));
   const balance = within(screen.getByRole("region", { name: "借贷余额" }));
   expect(balance.getByText("剩余本金").parentElement).toHaveTextContent("1,200.00");
   expect(invoke).toHaveBeenCalledWith("save_loan_advance", { input: expect.objectContaining({ loanId: detail.loan.id, occurredOn: "2000-02-12", principal: "200" }) });
@@ -70,7 +70,7 @@ it.each([
 
   await user.click(table.getByRole("button", { name: "删除" }));
   await user.click(within(screen.getByRole("dialog", { name: "删除这笔追加记录？" })).getByRole("button", { name: "确认删除" }));
-  expect(await screen.findByText(direction === "LENT" ? "还没有借出或归还记录。" : "还没有追加记录。")).toBeInTheDocument();
+  expect(await screen.findByText(direction === "LENT" ? "还没有借出或归还记录。" : "还没有借入或偿还记录。")).toBeInTheDocument();
   expect(balance.getByText("剩余本金").parentElement).toHaveTextContent("1,000.00");
   expect(invoke).toHaveBeenCalledWith("delete_loan_advance", { input: { id: expect.any(String), expectedUpdatedAt: "revision" } });
 });
@@ -287,9 +287,9 @@ it.each(["BORROWED", "LENT"] as const)("calculates %s interest excluding the edi
   expect(screen.getByLabelText("利息（CNY）")).toHaveValue("7.00");
 });
 
-it("combines lent advances and repayments chronologically and routes payment edits and deletion correctly", async () => {
+it.each(["BORROWED", "LENT"] as const)("combines %s advances and repayments chronologically and routes payment edits and deletion correctly", async (direction) => {
   const user = userEvent.setup();
-  const loan = { ...detail.loan, direction: "LENT" as const };
+  const loan = { ...detail.loan, direction };
   const advance = { id: "advance", occurred_on: "2000-02-10", principal: "200", note: "追加", updated_at: "advance-revision" };
   const payment = { id: "payment", occurred_on: "2000-03-10", principal: "100", interest: "5", fees: "1", total: "106", note: "归还备注", updated_at: "payment-revision", allocations: [] };
   let payments = [payment];
@@ -305,17 +305,18 @@ it("combines lent advances and repayments chronologically and routes payment edi
     }
   });
   wrap(<MemoryRouter><LoansPage /></MemoryRouter>);
-  await user.click(screen.getByRole("button", { name: "待他人归还" }));
-  const table = within(await screen.findByRole("table", { name: "借出与归还记录" }));
+  await user.click(screen.getByRole("button", { name: direction === "BORROWED" ? "我需偿还" : "待他人归还" }));
+  const table = within(await screen.findByRole("table", { name: direction === "BORROWED" ? "借入与偿还记录" : "借出与归还记录" }));
   const rows = table.getAllByRole("row");
   expect(rows).toHaveLength(3);
   expect(rows[1]).toHaveTextContent("2000-03-10");
   expect(rows[1]).toHaveTextContent("106.00");
-  expect(rows[2]).toHaveTextContent("追加借出");
+  expect(rows[2]).toHaveTextContent(direction === "BORROWED" ? "追加借入" : "追加借出");
   expect(screen.queryByRole("table", { name: "追加本金记录" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("heading", { name: "实际回款" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: /实际还款|实际回款|追加本金/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("table", { name: "实际还款及回款记录" })).not.toBeInTheDocument();
   await user.click(within(rows[1]).getByRole("button", { name: "编辑" }));
-  const editor = within(screen.getByRole("dialog", { name: "编辑回款" }));
+  const editor = within(screen.getByRole("dialog", { name: direction === "BORROWED" ? "编辑还款" : "编辑回款" }));
   expect(editor.getByLabelText("本金（CNY）")).toHaveValue("100");
   expect(editor.getByLabelText("利息（CNY）")).toHaveValue("5");
   await user.click(editor.getByRole("button", { name: "取消" }));

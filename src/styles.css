@@ -2805,6 +2805,11 @@ a:focus-visible,
 }
 
 .nav-item {
+  --nav-accent: #84b3ff;
+  --nav-text: #e6efff;
+  --nav-hover: #19283f;
+  --nav-active: #203552;
+  --nav-active-hover: #294466;
   position: relative;
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 10px;
@@ -2821,14 +2826,75 @@ a:focus-visible,
   height: 17px;
 }
 
-.nav-item[href]:hover {
-  color: #f8fafc;
-  background: #172235;
+.nav-item[data-nav-section="calendar"] {
+  --nav-accent: #63d5d0;
+  --nav-text: #d5f8f4;
+  --nav-hover: #142f36;
+  --nav-active: #19414a;
+  --nav-active-hover: #21545c;
+}
+
+.nav-item[data-nav-section="specials"] {
+  --nav-accent: #f1c16c;
+  --nav-text: #fff0cc;
+  --nav-hover: #332b22;
+  --nav-active: #463721;
+  --nav-active-hover: #58462b;
+}
+
+.nav-item[data-nav-section="loans"] {
+  --nav-accent: #b494f4;
+  --nav-text: #f0e8ff;
+  --nav-hover: #281e3e;
+  --nav-active: #30234c;
+  --nav-active-hover: #40305f;
+}
+
+.nav-item[data-nav-section="history"] {
+  --nav-accent: #7ad6a5;
+  --nav-text: #ddf7e8;
+  --nav-hover: #193128;
+  --nav-active: #214336;
+  --nav-active-hover: #2b5443;
+}
+
+.nav-item[data-nav-section="target"] {
+  --nav-accent: #f297ba;
+  --nav-text: #ffe6ef;
+  --nav-hover: #341f32;
+  --nav-active: #48283e;
+  --nav-active-hover: #5c334f;
+}
+
+.nav-item[data-nav-section="settings"] {
+  --nav-accent: #a7b4c9;
+  --nav-text: #edf1f7;
+  --nav-hover: #232c3c;
+  --nav-active: #303e53;
+  --nav-active-hover: #3c4e66;
+}
+
+.nav-item .nav-icon { color: var(--nav-accent); }
+
+.nav-item[href]:hover,
+.nav-item[href]:focus-visible {
+  color: var(--nav-text);
+  background: var(--nav-hover);
+}
+
+.nav-item[href]:focus-visible {
+  outline: 2px solid var(--nav-accent);
+  outline-offset: 2px;
 }
 
 .nav-item-active {
-  color: #ffffff;
-  background: #1b2d4b;
+  color: var(--nav-text);
+  background: var(--nav-active);
+}
+
+.nav-item-active[href]:hover,
+.nav-item-active[href]:focus-visible {
+  background: var(--nav-active-hover);
 }
 
 .nav-item::before {
@@ -2837,7 +2903,7 @@ a:focus-visible,
   bottom: 9px;
   left: 0;
   width: 3px;
-  background: #4f8cff;
+  background: var(--nav-accent);
   border-radius: 0 3px 3px 0;
   content: "";
   opacity: 0;
@@ -2846,7 +2912,9 @@ a:focus-visible,
   transition: opacity 150ms ease, transform 180ms cubic-bezier(0.2, 0.72, 0.28, 1);
 }
 
-.nav-item-active::before {
+.nav-item-active::before,
+.nav-item[href]:hover::before,
+.nav-item[href]:focus-visible::before {
   opacity: 1;
   transform: scaleY(1);
 }
@@ -6037,8 +6105,6 @@ textarea:focus,
 .loans-page .eyebrow, .loans-page .section-label,
 .loans-page .text-button:not(.danger-text), .loan-dialog .text-button:not(.danger-text) { color: var(--accent-hover); }
 .loans-page .loan-month-card { border-color: #e3d8f7; }
-.nav-item-active[href$="/loans"] { background: #30234c; }
-.nav-item-active[href$="/loans"]::before { background: #b494f4; }
 .loan-activity-kind { display: inline-block; padding: 4px 8px; border-radius: 5px; white-space: nowrap; color: #5b21b6; background: #f3edff; font-size: 12px; }
 .loan-activity-advance { color: #655776; background: #f1eef5; }
 .loan-interest-settings { display: grid; gap: 16px; padding: 16px; border: 1px solid #e3d8f7; border-radius: 8px; background: #faf8ff; }
