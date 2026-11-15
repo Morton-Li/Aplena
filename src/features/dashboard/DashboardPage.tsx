@@ -249,6 +249,7 @@ function DashboardCharts({
               front={<AnalyticsChart option={trendOption} label="近八个月实际收入、支出与净结余趋势图" height={244} />}
               back={<TrendDataTable months={recentHistory} currency={analytics.currency} />}
               dataLabel="收入、支出与净结余精确数据"
+              height={244}
             />
           ) : (
             <ChartEmpty message="至少录入一个月份的实际数据后显示趋势图。" />
@@ -263,9 +264,10 @@ function DashboardCharts({
         <ReportCard eyebrow="支出结构" title="分类金额与占比">
           {expenses.length > 0 ? (
             <ChartDataFlip
-              front={<AnalyticsChart option={expenseOption} label={`${analytics.month}支出分类${hasPlanBaseline ? "计划与实际" : "实际"}横向条形图`} height={Math.max(220, expenses.length * 44)} />}
+              front={<AnalyticsChart option={expenseOption} label={`${analytics.month}支出分类${hasPlanBaseline ? "计划与实际" : "实际"}横向条形图`} height={244} />}
               back={<CategoryDataTable categories={expenses} currency={analytics.currency} hasPlanBaseline={hasPlanBaseline} />}
               dataLabel="分类金额与占比精确数据"
+              height={244}
             />
           ) : (
             <ChartEmpty message="当前月份没有可绘制的支出分类。" />
@@ -277,6 +279,7 @@ function DashboardCharts({
               front={<AnalyticsChart option={savingsOption} label="近八个月计划储蓄率与实际储蓄率趋势图" height={244} />}
               back={<SavingsTrendDataTable months={recentHistory} />}
               dataLabel="计划与实际储蓄率精确数据"
+              height={244}
             />
           ) : (
             <ChartEmpty message="至少形成一个月份的实际储蓄率后显示趋势图。" />

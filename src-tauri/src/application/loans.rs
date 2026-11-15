@@ -2,8 +2,9 @@ use std::str::FromStr;
 
 use pfcm_domain::{
     ActualEntry, ActualEntryEffect, ActualEntryOrigin, Amount, CalendarDate, Category,
-    CurrencyCode, ExchangeRate, LoanFrequency, LoanScheduleMethod, LoanScheduleRow, MonthlyItem,
-    SignedAmount, YearMonth, generate_loan_schedule,
+    CurrencyCode, ExchangeRate, LoanFrequency, LoanInterestAccrual, LoanInterestMode,
+    LoanInterestMovement, LoanInterestRule, LoanScheduleMethod, LoanScheduleRow, MonthlyItem,
+    SignedAmount, YearMonth, accrue_loan_interest, generate_loan_schedule,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,7 @@ pub struct LoanInput {
     pub started_on: String,
     pub opening_only: bool,
     pub note: Option<String>,
+    pub interest: Option<LoanInterestRule>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -39,6 +41,28 @@ pub struct LoanMetadataInput {
     pub counterparty: String,
     pub note: Option<String>,
     pub archived: bool,
+    /// Omitted on archival updates; a null rule explicitly disables estimation.
+    pub interest: Option<LoanInterestUpdate>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoanInterestUpdate {
+    pub rule: Option<LoanInterestRule>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoanInterestPreviewInput {
+    pub loan_id: String,
+    pub as_of: String,
+    pub exclude_payment_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoanInterestPreview {
+    pub as_of: String,
+    #[serde(flatten)]
+    pub amounts: LoanInterestAccrual,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,6 +86,7 @@ pub struct LoanDto {
     pub overdue_total: String,
     pub next_due_on: Option<String>,
     pub status: String,
+    pub interest: Option<LoanInterestRule>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -159,6 +184,8 @@ pub struct LoanDetailDto {
     pub payments: Vec<LoanPaymentDto>,
     pub advances: Vec<LoanAdvanceDto>,
     pub versions: Vec<LoanScheduleVersionDto>,
+    pub interest_summary: Option<LoanInterestPreview>,
+    pub interest_error: Option<AppError>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -252,6 +279,107 @@ fn components(principal: &str, interest: &str, fees: &str) -> Result<[i64; 3], A
     ])
 }
 
+fn validate_interest_rule(rule: &LoanInterestRule, started: CalendarDate) -> Result<(), AppError> {
+    rule.validate()
+        .map_err(|error| AppError::from_domain(error, Some("interest")))?;
+    if rule.started_on < started || rule.started_on > current_natural_date()? {
+        return Err(invalid("LOAN_INTEREST_DATE_INVALID"));
+    }
+    Ok(())
+}
+
+async fn interest_rule_on(
+    connection: &mut SqliteConnection,
+    id: &str,
+) -> Result<Option<LoanInterestRule>, AppError> {
+    let row = sqlx::query("SELECT * FROM loan_interest_rules WHERE loan_id=?")
+        .bind(id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(db)?;
+    row.map(|row| {
+        Ok(LoanInterestRule {
+            mode: match row.get::<&str, _>("mode") {
+                "SIMPLE" => LoanInterestMode::Simple,
+                "COMPOUND" => LoanInterestMode::Compound,
+                "FIXED" => LoanInterestMode::Fixed,
+                _ => return Err(invalid("LOAN_INTEREST_RULE_INVALID")),
+            },
+            frequency: match row.get::<&str, _>("frequency") {
+                "DAY" => LoanFrequency::Day,
+                "MONTH" => LoanFrequency::Month,
+                "QUARTER" => LoanFrequency::Quarter,
+                "YEAR" => LoanFrequency::Year,
+                _ => return Err(invalid("LOAN_INTEREST_RULE_INVALID")),
+            },
+            rate_percent: Decimal::from_str_exact(row.get("rate_percent"))
+                .map_err(|_| invalid("INVALID_RATIO"))?,
+            fixed_amount: Amount::from_scaled_i64(row.get("fixed_amount_scaled"))
+                .map_err(|error| AppError::from_domain(error, None))?,
+            started_on: date(row.get("started_on"))?,
+        })
+    })
+    .transpose()
+}
+
+async fn save_interest_rule_on(
+    connection: &mut SqliteConnection,
+    id: &str,
+    rule: Option<&LoanInterestRule>,
+) -> Result<(), AppError> {
+    if let Some(rule) = rule {
+        let mode = match rule.mode {
+            LoanInterestMode::Simple => "SIMPLE",
+            LoanInterestMode::Compound => "COMPOUND",
+            LoanInterestMode::Fixed => "FIXED",
+        };
+        sqlx::query("INSERT INTO loan_interest_rules (loan_id,mode,frequency,rate_percent,fixed_amount_scaled,started_on) VALUES (?,?,?,?,?,?) ON CONFLICT(loan_id) DO UPDATE SET mode=excluded.mode,frequency=excluded.frequency,rate_percent=excluded.rate_percent,fixed_amount_scaled=excluded.fixed_amount_scaled,started_on=excluded.started_on")
+            .bind(id).bind(mode).bind(frequency_code(rule.frequency)).bind(rule.rate_percent.to_string())
+            .bind(rule.fixed_amount.scaled_i64()).bind(rule.started_on.to_string()).execute(&mut *connection).await.map_err(db)?;
+    } else {
+        sqlx::query("DELETE FROM loan_interest_rules WHERE loan_id=?")
+            .bind(id)
+            .execute(&mut *connection)
+            .await
+            .map_err(db)?;
+    }
+    Ok(())
+}
+
+fn interest_preview_for(
+    principal: Amount,
+    rule: &LoanInterestRule,
+    advances: &[LoanAdvanceDto],
+    payments: &[LoanPaymentDto],
+    as_of: CalendarDate,
+    exclude_payment_id: Option<&str>,
+) -> Result<LoanInterestPreview, AppError> {
+    let mut movements = Vec::with_capacity(advances.len() + payments.len());
+    for row in advances {
+        movements.push(LoanInterestMovement {
+            occurred_on: date(&row.occurred_on)?,
+            principal_delta: amount(&row.principal)?.scaled_i64(),
+            paid_interest: Amount::zero(),
+        });
+    }
+    for row in payments
+        .iter()
+        .filter(|row| Some(row.id.as_str()) != exclude_payment_id)
+    {
+        movements.push(LoanInterestMovement {
+            occurred_on: date(&row.occurred_on)?,
+            principal_delta: -amount(&row.principal)?.scaled_i64(),
+            paid_interest: amount(&row.interest)?,
+        });
+    }
+    let amounts = accrue_loan_interest(principal, rule, &movements, as_of)
+        .map_err(|_| invalid("LOAN_INTEREST_CALCULATION_FAILED"))?;
+    Ok(LoanInterestPreview {
+        as_of: as_of.to_string(),
+        amounts,
+    })
+}
+
 impl FinanceService {
     pub async fn create_loan(&self, input: LoanInput) -> Result<LoanDto, AppError> {
         let _operation = self.operation_gate.write().await;
@@ -266,6 +394,10 @@ impl FinanceService {
         let started = date(&input.started_on)?;
         if principal == Amount::zero() || started > current_natural_date()? {
             return Err(invalid("LOAN_DATE_OR_AMOUNT_INVALID"));
+        }
+        if let Some(rule) = &input.interest {
+            validate_interest_rule(rule, started)?;
+            interest_preview_for(principal, rule, &[], &[], current_natural_date()?, None)?;
         }
         let settings = self.ensure_default_settings_unlocked().await?;
         let store = self.current_store().await;
@@ -283,6 +415,7 @@ impl FinanceService {
                 || row.get::<String, _>("started_on") != started.to_string()
                 || row.get::<i64, _>("opening_only") != i64::from(input.opening_only)
                 || row.get::<Option<String>, _>("note") != normalized(input.note.clone())
+                || interest_rule_on(&mut tx, &id).await? != input.interest
             {
                 return Err(invalid("LOAN_DUPLICATE_REQUEST"));
             }
@@ -292,6 +425,7 @@ impl FinanceService {
                 .bind(&id).bind(input.name.trim()).bind(input.counterparty.trim()).bind(&input.direction)
                 .bind(settings.value.base_currency().as_str()).bind(principal.scaled_i64()).bind(started.to_string())
                 .bind(input.opening_only).bind(normalized(input.note)).bind(&now).bind(&now).execute(&mut *tx).await.map_err(db)?;
+            save_interest_rule_on(&mut tx, &id, input.interest.as_ref()).await?;
         }
         let result = detail_on(&mut tx, &id, current_natural_date()?).await?.loan;
         tx.commit().await.map_err(db)?;
@@ -333,7 +467,22 @@ impl FinanceService {
         }
         let store = self.current_store().await;
         let mut tx = store.pool().begin().await.map_err(db)?;
-        let detail = detail_on(&mut tx, &input.id, current_natural_date()?).await?;
+        let mut detail = detail_on(&mut tx, &input.id, current_natural_date()?).await?;
+        if let Some(update) = &input.interest {
+            if let Some(rule) = &update.rule {
+                validate_interest_rule(rule, date(&detail.loan.started_on)?)?;
+                interest_preview_for(
+                    amount(&detail.loan.principal)?,
+                    rule,
+                    &detail.advances,
+                    &detail.payments,
+                    current_natural_date()?,
+                    None,
+                )?;
+            }
+            save_interest_rule_on(&mut tx, &input.id, update.rule.as_ref()).await?;
+            detail = detail_on(&mut tx, &input.id, current_natural_date()?).await?;
+        }
         if input.archived && detail.loan.status != "SETTLED" {
             return Err(invalid("LOAN_NOT_SETTLED"));
         }
@@ -351,6 +500,45 @@ impl FinanceService {
         .map_err(db)?;
         tx.commit().await.map_err(db)?;
         Ok(())
+    }
+
+    pub async fn preview_loan_interest(
+        &self,
+        input: LoanInterestPreviewInput,
+    ) -> Result<LoanInterestPreview, AppError> {
+        let _operation = self.operation_gate.read().await;
+        parse_uuid(&input.loan_id, "loanId")?;
+        let as_of = date(&input.as_of)?;
+        if as_of > current_natural_date()? {
+            return Err(invalid("LOAN_INTEREST_DATE_INVALID"));
+        }
+        let store = self.current_store().await;
+        let mut tx = store.pool().begin().await.map_err(db)?;
+        let detail = detail_on(&mut tx, &input.loan_id, current_natural_date()?).await?;
+        if as_of < date(&detail.loan.started_on)? {
+            return Err(invalid("LOAN_INTEREST_DATE_INVALID"));
+        }
+        if let Some(id) = &input.exclude_payment_id {
+            parse_uuid(id, "excludePaymentId")?;
+            if !detail.payments.iter().any(|row| row.id == *id) {
+                return Err(invalid("NOT_FOUND"));
+            }
+        }
+        let rule = detail
+            .loan
+            .interest
+            .as_ref()
+            .ok_or_else(|| invalid("LOAN_INTEREST_NOT_ENABLED"))?;
+        let result = interest_preview_for(
+            amount(&detail.loan.principal)?,
+            rule,
+            &detail.advances,
+            &detail.payments,
+            as_of,
+            input.exclude_payment_id.as_deref(),
+        )?;
+        tx.commit().await.map_err(db)?;
+        Ok(result)
     }
 
     pub async fn preview_loan_schedule(
@@ -897,6 +1085,26 @@ async fn detail_on(
     })
     .collect();
     let plan_review_required = !versions.is_empty() && scheduled_remaining_principal != remaining;
+    let interest = interest_rule_on(connection, id).await?;
+    let (interest_summary, interest_error) = match &interest {
+        Some(rule) => match interest_preview_for(
+            Amount::from_scaled_i64(principal)
+                .map_err(|error| AppError::from_domain(error, None))?,
+            rule,
+            &advances,
+            &payments,
+            today,
+            None,
+        ) {
+            Ok(summary) => (Some(summary), None),
+            Err(error) => (None, Some(error)),
+        },
+        None => (None, None),
+    };
+    let interest_settled = interest_error.is_none()
+        && interest_summary
+            .as_ref()
+            .is_none_or(|summary| summary.amounts.remaining_interest == Amount::zero());
     Ok(LoanDetailDto {
         loan: LoanDto {
             id: id.to_owned(),
@@ -917,17 +1125,21 @@ async fn detail_on(
             plan_review_required,
             overdue_total: money(overdue)?,
             next_due_on: next_due,
-            status: if remaining == 0 && charges == 0 && !plan_review_required {
-                "SETTLED"
-            } else {
-                "ACTIVE"
-            }
-            .to_owned(),
+            status:
+                if remaining == 0 && charges == 0 && !plan_review_required && interest_settled {
+                    "SETTLED"
+                } else {
+                    "ACTIVE"
+                }
+                .to_owned(),
+            interest,
         },
         installments,
         payments,
         advances,
         versions,
+        interest_summary,
+        interest_error,
     })
 }
 
@@ -1525,6 +1737,14 @@ pub async fn delete_loan_advance(
 ) -> Result<(), AppError> {
     service.delete_loan_advance(input).await
 }
+#[tauri::command]
+pub async fn preview_loan_interest(
+    service: State<'_, FinanceService>,
+    input: LoanInterestPreviewInput,
+) -> Result<LoanInterestPreview, AppError> {
+    service.preview_loan_interest(input).await
+}
+
 #[tauri::command]
 pub async fn get_loan_month_summary(
     service: State<'_, FinanceService>,

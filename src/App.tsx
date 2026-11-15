@@ -150,6 +150,7 @@ function AppBootstrap() {
               <Route path="specials" element={<SpecialsPage />} />
               <Route path="loans" element={<LoansPage />} />
               <Route path="history" element={<HistoryPage />} />
+              <Route path="history/year/:year" element={<HistoryPage />} />
               <Route path="history/:month" element={<HistoryPage />} />
               <Route path="goals" element={<GoalsPage />} />
               <Route path="plans" element={<Navigate replace to="/goals" />} />
@@ -288,12 +289,13 @@ function AppSidebar({ currentMonth, settings }: { currentMonth?: string; setting
               className={({ isActive }) => (isActive ? "nav-item nav-item-active" : "nav-item")}
               key={item.to}
               to={item.to}
+              data-nav-section={item.icon}
             >
               <NavigationIcon name={item.icon} />
               {item.label}
             </NavLink>
           ) : (
-            <span className="nav-item nav-item-placeholder" key={item.to}>
+            <span className="nav-item nav-item-placeholder" data-nav-section={item.icon} key={item.to}>
               <NavigationIcon name={item.icon} />
               {item.label}
             </span>

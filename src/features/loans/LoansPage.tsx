@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { getSettings, getStartupStatus, queryKeys } from "../../shared/api/finance";
-import { deleteLoanAdvance, deleteLoanPayment, getLoan, listLoans, loanFrequencyLabels, loanQueryKeys, updateLoanMetadata, type Loan, type LoanAdvance, type LoanDetail, type LoanDirection, type LoanPayment } from "../../shared/api/loans";
+import { deleteLoanAdvance, deleteLoanPayment, getLoan, listLoans, loanFrequencyLabels, loanInterestModeLabels, loanQueryKeys, updateLoanMetadata, type Loan, type LoanAdvance, type LoanDetail, type LoanDirection, type LoanPayment } from "../../shared/api/loans";
 import { Dialog } from "../../shared/components/Dialog";
 import { EmptyState } from "../../shared/components/EmptyState";
 import { Select } from "../../shared/components/Select";
@@ -11,8 +11,9 @@ import { formatMoney } from "../../shared/formatting/finance";
 import { refreshFinancialQueries } from "../automatic/refreshFinancialQueries";
 import { LoanAdvanceEditor, LoanEditor, LoanPaymentEditor, LoanScheduleEditor } from "./LoanEditors";
 import { LoanMetric, LoanMonthCard } from "./LoanMonthCard";
+import { LoanActivityTable } from "./LoanActivityTable";
 
-type Editor = { kind: "loan"; loan?: Loan } | { kind: "schedule"; detail: LoanDetail } | { kind: "payment"; payment?: LoanPayment } | { kind: "advance"; loan: Loan; advance?: LoanAdvance };
+type Editor = { kind: "loan"; loan?: Loan } | { kind: "schedule"; detail: LoanDetail } | { kind: "payment"; detail: LoanDetail; payment?: LoanPayment } | { kind: "advance"; loan: Loan; advance?: LoanAdvance };
 type Deletion = { kind: "payment"; record: LoanPayment } | { kind: "advance"; record: LoanAdvance };
 const installmentStates: Record<string, string> = { PENDING: "待还", PARTIAL: "部分归还", OVERDUE: "逾期未还清", PAID: "已还清", SUPERSEDED: "旧版计划" };
 
@@ -89,25 +90,25 @@ export function LoansPage() {
             <LoanMetric label="计划剩余利息及费用" value={loan.remaining_charges} currency={loan.currency} />
             <LoanMetric label="逾期未还清" value={loan.plan_review_required ? null : loan.overdue_total} currency={loan.currency} />
           </section>
+          {loan.interest && <section className="report-card loan-section loan-interest-summary" aria-label="利息估算">
+            <div className="special-section-heading"><h3>利息估算</h3><span className="loan-activity-kind">{loanInterestModeLabels[loan.interest.mode]}</span></div>
+            <p className="chart-note">每{loanFrequencyLabels[loan.interest.frequency]}{loan.interest.mode === "FIXED" ? "固定 " + formatMoney(loan.interest.fixedAmount, loan.currency) : "利率 " + loan.interest.ratePercent + "%"} · 起息日 {loan.interest.startedOn}{loanDetail.interest_summary ? " · 截至 " + loanDetail.interest_summary.as_of + "（不含当日）" : ""}</p>
+            {loanDetail.interest_summary && <div className="loan-metrics">
+              <LoanMetric label="累计应计利息" value={loanDetail.interest_summary.accrued_interest} currency={loan.currency} />
+              <LoanMetric label={loan.direction === "BORROWED" ? "已付利息" : "已收利息"} value={loanDetail.interest_summary.paid_interest} currency={loan.currency} />
+              <LoanMetric label={loan.direction === "BORROWED" ? "待付利息估算" : "待收利息估算"} value={loanDetail.interest_summary.remaining_interest} currency={loan.currency} />
+              {loanDetail.interest_summary.overpaid_interest !== "0.00" && <LoanMetric label={loan.direction === "BORROWED" ? "已多付利息" : "已多收利息"} value={loanDetail.interest_summary.overpaid_interest} currency={loan.currency} />}
+            </div>}
+            {loanDetail.interest_error && <p className="inline-error" role="alert">{describeError(loanDetail.interest_error)}</p>}
+            <p className="chart-note">按实际追加、归还与已收付利息估算。可在记录收付时计算并填入，保存实际收付后计入月度收支；分期约定金额保持独立。</p>
+          </section>}
           <section className="report-card loan-section">
-            <div className="special-section-heading">
-              <h3>追加本金</h3>
+            <div className="special-section-heading"><h3>{loan.direction === "BORROWED" ? "借入与偿还" : "借出与归还"}</h3><div className="special-actions">
               <button className="button button-secondary" onClick={() => setEditor({ kind: "advance", loan })} type="button">{advanceLabel}</button>
-            </div>
-            {loanDetail.advances.length === 0 ? <p className="special-empty-copy">还没有追加记录。</p> : (
-              <div className="table-scroll loan-table-scroll"><table className="data-table">
-                <caption className="sr-only">追加本金记录</caption>
-                <thead><tr><th>日期 / 备注</th><th>追加本金</th><th>操作</th></tr></thead>
-                <tbody>{loanDetail.advances.map((advance) => <tr key={advance.id}>
-                  <th scope="row">{advance.occurred_on}<small>{advance.note ?? "无备注"}</small></th>
-                  <td>{formatMoney(advance.principal, loan.currency)}</td>
-                  <td><div className="special-actions">
-                    <button className="text-button" onClick={() => setEditor({ kind: "advance", loan, advance })} type="button">编辑</button>
-                    <button className="text-button danger-text" onClick={() => { remove.reset(); setDeletion({ kind: "advance", record: advance }); }} type="button">删除</button>
-                  </div></td>
-                </tr>)}</tbody>
-              </table></div>
-            )}
+              <button className="button button-primary" onClick={() => setEditor({ kind: "payment", detail: loanDetail })} type="button">{loan.direction === "BORROWED" ? "记录还款" : "记录回款"}</button>
+            </div></div>
+            <p className="chart-note">{loan.direction === "BORROWED" ? "追加借入与实际还款" : "追加借出与归还"}按日期统一列示。利息和费用按实际收付记录，并同步计入月度收支。</p>
+            <LoanActivityTable detail={loanDetail} onEdit={(activity) => setEditor(activity.kind === "advance" ? { kind: "advance", loan, advance: activity.record } : { kind: "payment", detail: loanDetail, payment: activity.record })} onDelete={(activity) => { remove.reset(); setDeletion(activity); }} />
           </section>
           <section className="report-card loan-section">
             <div className="special-section-heading"><h3>分期还款计划</h3><button className="button button-secondary" disabled={loan.archived} onClick={() => setEditor({ kind: "schedule", detail: loanDetail })} type="button">{loanDetail.versions.length ? "调整后续计划" : "建立还款计划"}</button></div>
@@ -118,20 +119,15 @@ export function LoansPage() {
               {schedulePages > 1 && <div className="loan-pagination"><button className="button button-quiet" type="button" disabled={currentSchedulePage === 0} onClick={() => setSchedulePage(currentSchedulePage - 1)}>上一页</button><span>{currentSchedulePage + 1} / {schedulePages}</span><button className="button button-quiet" type="button" disabled={currentSchedulePage === schedulePages - 1} onClick={() => setSchedulePage(currentSchedulePage + 1)}>下一页</button></div>}
             </>}
           </section>
-          <section className="report-card loan-section">
-            <div className="special-section-heading"><h3>实际{loan.direction === "BORROWED" ? "还款" : "回款"}</h3><button className="button button-primary" onClick={() => setEditor({ kind: "payment" })} type="button">{loan.direction === "BORROWED" ? "记录还款" : "记录回款"}</button></div>
-            <p className="chart-note">按实际发生日期计入现金流。利息及费用与月度执行共用关联记录；编辑或删除会同步更新。</p>
-            {loanDetail.payments.length === 0 ? <p className="special-empty-copy">还没有实际收付记录。</p> : <div className="table-scroll loan-table-scroll"><table className="data-table"><caption className="sr-only">实际还款及回款记录</caption><thead><tr><th>日期 / 备注</th><th>本金</th><th>利息</th><th>费用</th><th>合计</th><th>操作</th></tr></thead><tbody>{loanDetail.payments.map((payment) => <tr key={payment.id}><th>{payment.occurred_on}<small>{payment.note ?? "无备注"}</small></th><td>{formatMoney(payment.principal, loan.currency)}</td><td>{formatMoney(payment.interest, loan.currency)}</td><td>{formatMoney(payment.fees, loan.currency)}</td><td>{formatMoney(payment.total, loan.currency)}</td><td><div className="special-actions"><button className="text-button" onClick={() => setEditor({ kind: "payment", payment })} type="button">编辑</button><button className="text-button danger-text" onClick={() => { remove.reset(); setDeletion({ kind: "payment", record: payment }); }} type="button">删除</button></div></td></tr>)}</tbody></table></div>}
-          </section>
           {loanDetail.versions.length > 0 && <details className="report-card loan-section"><summary>计划变更记录（{loanDetail.versions.length}）</summary>{loanDetail.versions.map((version) => <p key={version.id}>{version.created_at.slice(0, 10)} · 每 {version.interval_count} {loanFrequencyLabels[version.frequency]} · {version.method === "MANUAL" ? "手动计划" : version.method === "ANNUITY" ? "等额本息" : "等额本金"} · 每期利率 {version.period_rate_percent}%{version.note ? " · " + version.note : ""}</p>)}</details>}
         </>}
       </div>
     </div>}
     {editor?.kind === "loan" && <LoanEditor loan={editor.loan} direction={activeDirection} currency={settings.data?.base_currency ?? "CNY"} onClose={() => setEditor(null)} onSaved={async (created) => { if (created) { setDirection(created.direction); setParams({ id: created.id }); } await saved(); }} />}
     {editor?.kind === "schedule" && <LoanScheduleEditor detail={editor.detail} onClose={() => setEditor(null)} onSaved={saved} />}
-    {editor?.kind === "payment" && detail.data && <LoanPaymentEditor detail={detail.data} payment={editor.payment} onClose={() => setEditor(null)} onSaved={saved} />}
+    {editor?.kind === "payment" && <LoanPaymentEditor detail={editor.detail} payment={editor.payment} onClose={() => setEditor(null)} onSaved={saved} />}
     {editor?.kind === "advance" && <LoanAdvanceEditor loan={editor.loan} advance={editor.advance} onClose={() => setEditor(null)} onSaved={saved} />}
-    {deletion && <Dialog title={deletion.kind === "advance" ? "删除这笔追加记录？" : "删除这笔实际收付？"} onClose={() => { if (!remove.isPending) setDeletion(null); }} footer={<>
+    {deletion && <Dialog className="loan-dialog" title={deletion.kind === "advance" ? "删除这笔追加记录？" : "删除这笔实际收付？"} onClose={() => { if (!remove.isPending) setDeletion(null); }} footer={<>
       <button className="button button-quiet" disabled={remove.isPending} onClick={() => setDeletion(null)} type="button">取消</button>
       <button className="button button-danger" disabled={remove.isPending} onClick={() => remove.mutate(deletion)} type="button">确认删除</button>
     </>}>

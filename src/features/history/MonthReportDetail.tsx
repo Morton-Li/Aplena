@@ -8,6 +8,7 @@ import type {
   ProjectBreakdown,
 } from "../../shared/api/finance";
 import { AnalyticsChart } from "../../shared/components/AnalyticsChart";
+import { AmountShareChart } from "../../shared/components/AmountShareChart";
 import { formatMoney, formatPercent } from "../../shared/formatting/finance";
 import { categoryLabel, flowLabel } from "../../shared/formatting/labels";
 import { LoanMonthCard } from "../loans/LoanMonthCard";
@@ -129,7 +130,13 @@ function CategoryAnalysis({
   hasPlanBaseline: boolean;
 }) {
   const [flow, setFlow] = useState<FlowFilter>("EXPENSE");
+  const [basis, setBasis] = useState<"ACTUAL" | "PLANNED">("ACTUAL");
   const categories = analytics.categories.filter((item) => item.flow_type === flow);
+  const shareItems = analytics.projects.filter((item) => item.flow_type === flow).map((item) => ({
+    id: item.monthly_item_id,
+    name: item.name,
+    amount: basis === "PLANNED" ? item.planned_amount : item.actual_amount,
+  }));
   const option = useMemo(
     () => categoryStructureOption(categories, hasPlanBaseline),
     [categories, hasPlanBaseline],
@@ -144,17 +151,29 @@ function CategoryAnalysis({
           <button aria-pressed={flow === "EXPENSE"} className={flow === "EXPENSE" ? "segment-active" : ""} onClick={() => setFlow("EXPENSE")} type="button">支出结构</button>
         </div>
       </header>
-      <section className="analysis-card history-category-card">
-        <header><h3>{flowLabel(flow)}分类金额与占比</h3><span>{actualLabel}</span></header>
-        <AnalyticsChart option={option} label={`${analytics.month}${flowLabel(flow)}分类${hasPlanBaseline ? "计划与实际" : "实际"}占比图`} height={300} />
-        <div className="table-scroll">
-          <table className="data-table">
-            <caption className="sr-only">分类结构图对应数据</caption>
-            <thead><tr><th>类别</th><th>计划金额</th><th>计划占比</th><th>{actualLabel}</th><th>实际占比</th></tr></thead>
-            <tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, analytics.currency) : "—"}</td><td>{hasPlanBaseline ? formatPercent(item.planned_share_percent) : "—"}</td><td>{formatMoney(item.actual_to_date, analytics.currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody>
-          </table>
-        </div>
-      </section>
+      <div className="history-structure-grid">
+        <section className="analysis-card history-category-card">
+          <header><h3>{flowLabel(flow)}分类金额与占比</h3><span>{actualLabel}</span></header>
+          <AnalyticsChart option={option} label={`${analytics.month}${flowLabel(flow)}分类${hasPlanBaseline ? "计划与实际" : "实际"}占比图`} height={300} />
+          <div className="table-scroll">
+            <table className="data-table">
+              <caption className="sr-only">分类结构图对应数据</caption>
+              <thead><tr><th>类别</th><th>计划金额</th><th>计划占比</th><th>{actualLabel}</th><th>实际占比</th></tr></thead>
+              <tbody>{categories.map((item) => <tr key={item.category}><th>{categoryLabel(item.category)}</th><td>{hasPlanBaseline ? formatMoney(item.planned_amount, analytics.currency) : "—"}</td><td>{hasPlanBaseline ? formatPercent(item.planned_share_percent) : "—"}</td><td>{formatMoney(item.actual_to_date, analytics.currency)}</td><td>{formatPercent(item.actual_share_percent)}</td></tr>)}</tbody>
+            </table>
+          </div>
+        </section>
+        <section className="analysis-card history-project-share-card">
+          <header>
+            <h3>{flowLabel(flow)}项目占比</h3>
+            {hasPlanBaseline && <div className="segmented-control" aria-label="项目占比口径" role="group">
+              <button aria-pressed={basis === "ACTUAL"} className={basis === "ACTUAL" ? "segment-active" : ""} onClick={() => setBasis("ACTUAL")} type="button">实际占比</button>
+              <button aria-pressed={basis === "PLANNED"} className={basis === "PLANNED" ? "segment-active" : ""} onClick={() => setBasis("PLANNED")} type="button">计划占比</button>
+            </div>}
+          </header>
+          <AmountShareChart items={shareItems} currency={analytics.currency} label={`${analytics.month}${flowLabel(flow)}项目${basis === "PLANNED" ? "计划" : "实际"}占比饼图`} />
+        </section>
+      </div>
     </section>
   );
 }

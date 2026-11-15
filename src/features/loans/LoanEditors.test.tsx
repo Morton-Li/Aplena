@@ -53,7 +53,7 @@ it.each([
   await user.type(editor.getByLabelText("追加本金（CNY）"), "200");
   fireEvent.change(editor.getByLabelText("发生日期"), { target: { value: "2000-02-12" } });
   await user.click(editor.getByRole("button", { name: "保存" }));
-  const table = within(await screen.findByRole("table", { name: "追加本金记录" }));
+  const table = within(await screen.findByRole("table", { name: direction === "LENT" ? "借出与归还记录" : "借入与偿还记录" }));
   const balance = within(screen.getByRole("region", { name: "借贷余额" }));
   expect(balance.getByText("剩余本金").parentElement).toHaveTextContent("1,200.00");
   expect(invoke).toHaveBeenCalledWith("save_loan_advance", { input: expect.objectContaining({ loanId: detail.loan.id, occurredOn: "2000-02-12", principal: "200" }) });
@@ -70,7 +70,7 @@ it.each([
 
   await user.click(table.getByRole("button", { name: "删除" }));
   await user.click(within(screen.getByRole("dialog", { name: "删除这笔追加记录？" })).getByRole("button", { name: "确认删除" }));
-  expect(await screen.findByText("还没有追加记录。")).toBeInTheDocument();
+  expect(await screen.findByText(direction === "LENT" ? "还没有借出或归还记录。" : "还没有借入或偿还记录。")).toBeInTheDocument();
   expect(balance.getByText("剩余本金").parentElement).toHaveTextContent("1,000.00");
   expect(invoke).toHaveBeenCalledWith("delete_loan_advance", { input: { id: expect.any(String), expectedUpdatedAt: "revision" } });
 });
@@ -226,4 +226,102 @@ it("omits settled future installments from manual edits and ignores a hidden cal
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("preview_loan_schedule", { input: expect.objectContaining({
     method: "MANUAL", periodRatePercent: "0", rows: [{ due_on: "2099-12-02", principal: "750.00", interest: "0.00", fees: "0.00" }],
   }) }));
+});
+
+it.each([
+  ["按剩余本金单利", "日", "SIMPLE", "DAY"],
+  ["按周期复利", "季度", "COMPOUND", "QUARTER"],
+  ["每周期固定利息", "年", "FIXED", "YEAR"],
+] as const)("saves optional %s settings from edit metadata", async (modeLabel, frequencyLabel, mode, frequency) => {
+  const user = userEvent.setup();
+  const saved = vi.fn().mockResolvedValue(undefined);
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  wrap(<LoanEditor loan={detail.loan} currency="CNY" direction="BORROWED" onClose={vi.fn()} onSaved={saved} />);
+  expect(screen.queryByText(/本金、方向与起始日期保留为建档事实/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "计息模式" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("checkbox", { name: "启用利息计算（可选）" }));
+  await user.click(screen.getByRole("combobox", { name: "计息模式" }));
+  await user.click(screen.getByRole("option", { name: modeLabel }));
+  await user.click(screen.getByRole("combobox", { name: "计息周期" }));
+  await user.click(screen.getByRole("option", { name: frequencyLabel }));
+  fireEvent.change(screen.getByLabelText(mode === "FIXED" ? /固定利息（CNY）/ : /利率（%）/), { target: { value: "1.25" } });
+  fireEvent.change(screen.getByLabelText("起息日期"), { target: { value: "2000-02-01" } });
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(saved).toHaveBeenCalledOnce());
+  expect(invoke).toHaveBeenCalledWith("update_loan_metadata", { input: expect.objectContaining({
+    id: detail.loan.id, interest: { rule: { mode, frequency, ratePercent: mode === "FIXED" ? "0" : "1.25", fixedAmount: mode === "FIXED" ? "1.25" : "0.00", startedOn: "2000-02-01" } },
+  }) });
+});
+
+it("restores interest settings and explicitly disables them without rewriting actual records", async () => {
+  const user = userEvent.setup();
+  const loan = { ...detail.loan, interest: { mode: "COMPOUND" as const, frequency: "MONTH" as const, ratePercent: "1.2", fixedAmount: "0.00", startedOn: "2000-02-01" } };
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  wrap(<LoanEditor loan={loan} currency="CNY" direction="BORROWED" onClose={vi.fn()} onSaved={vi.fn().mockResolvedValue(undefined)} />);
+  expect(screen.getByRole("checkbox", { name: "启用利息计算（可选）" })).toBeChecked();
+  expect(screen.getByRole("combobox", { name: "计息模式" })).toHaveTextContent("按周期复利");
+  expect(screen.getByLabelText(/利率（%）/)).toHaveValue(1.2);
+  expect(screen.getByLabelText("起息日期")).toHaveValue("2000-02-01");
+  await user.click(screen.getByRole("checkbox", { name: "启用利息计算（可选）" }));
+  await user.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledExactlyOnceWith("update_loan_metadata", { input: expect.objectContaining({ interest: { rule: null } }) }));
+});
+
+it.each(["BORROWED", "LENT"] as const)("calculates %s interest excluding the edited payment and requires a fresh allocation preview", async (direction) => {
+  const user = userEvent.setup();
+  const existing: LoanDetail = { ...detail, loan: { ...detail.loan, direction, interest: { mode: "SIMPLE", frequency: "MONTH", ratePercent: "1", fixedAmount: "0", startedOn: "2000-01-01" } } };
+  const payment = { id: "payment", occurred_on: "2000-02-01", principal: "100", interest: "2", fees: "0", total: "102", note: null, updated_at: "revision", allocations: [{ installmentId: null, principal: "100", interest: "2", fees: "0" }] };
+  vi.mocked(invoke).mockResolvedValue({ as_of: "2000-02-01", accrued_interest: "10.00", paid_interest: "3.00", remaining_interest: "7.00", overpaid_interest: "0.00" });
+  wrap(<LoanPaymentEditor detail={existing} payment={payment} onClose={vi.fn()} onSaved={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "保存实际收付" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "计算并填入利息" }));
+  await waitFor(() => expect(screen.getByLabelText("利息（CNY）")).toHaveValue("7.00"));
+  expect(invoke).toHaveBeenCalledExactlyOnceWith("preview_loan_interest", { input: { loanId: "loan", asOf: "2000-02-01", excludePaymentId: "payment" } });
+  expect(screen.getByRole("button", { name: "保存实际收付" })).toBeDisabled();
+  expect(screen.getByRole("status")).toHaveTextContent(direction === "BORROWED" ? "待付 ¥ 7.00" : "待收 ¥ 7.00");
+  fireEvent.change(screen.getByLabelText("实际发生日期"), { target: { value: "2000-02-02" } });
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  vi.mocked(invoke).mockRejectedValue({ error_code: "LOAN_INTEREST_CALCULATION_FAILED", message_key: "error.loan_interest_calculation_failed" });
+  await user.click(screen.getByRole("button", { name: "计算并填入利息" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("利息超出可计算范围");
+  expect(screen.getByLabelText("利息（CNY）")).toHaveValue("7.00");
+});
+
+it.each(["BORROWED", "LENT"] as const)("combines %s advances and repayments chronologically and routes payment edits and deletion correctly", async (direction) => {
+  const user = userEvent.setup();
+  const loan = { ...detail.loan, direction };
+  const advance = { id: "advance", occurred_on: "2000-02-10", principal: "200", note: "追加", updated_at: "advance-revision" };
+  const payment = { id: "payment", occurred_on: "2000-03-10", principal: "100", interest: "5", fees: "1", total: "106", note: "归还备注", updated_at: "payment-revision", allocations: [] };
+  let payments = [payment];
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    switch (command) {
+      case "list_loans": return [loan];
+      case "get_loan": return { ...detail, loan, advances: [advance], payments };
+      case "get_settings": return { base_currency: "CNY" };
+      case "get_startup_status": return { current_month: "2026-11" };
+      case "get_loan_month_summary": return { has_loans: false };
+      case "delete_loan_payment": payments = []; return;
+      default: throw new Error(command);
+    }
+  });
+  wrap(<MemoryRouter><LoansPage /></MemoryRouter>);
+  await user.click(screen.getByRole("button", { name: direction === "BORROWED" ? "我需偿还" : "待他人归还" }));
+  const table = within(await screen.findByRole("table", { name: direction === "BORROWED" ? "借入与偿还记录" : "借出与归还记录" }));
+  const rows = table.getAllByRole("row");
+  expect(rows).toHaveLength(3);
+  expect(rows[1]).toHaveTextContent("2000-03-10");
+  expect(rows[1]).toHaveTextContent("106.00");
+  expect(rows[2]).toHaveTextContent(direction === "BORROWED" ? "追加借入" : "追加借出");
+  expect(screen.queryByRole("table", { name: "追加本金记录" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: /实际还款|实际回款|追加本金/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("table", { name: "实际还款及回款记录" })).not.toBeInTheDocument();
+  await user.click(within(rows[1]).getByRole("button", { name: "编辑" }));
+  const editor = within(screen.getByRole("dialog", { name: direction === "BORROWED" ? "编辑还款" : "编辑回款" }));
+  expect(editor.getByLabelText("本金（CNY）")).toHaveValue("100");
+  expect(editor.getByLabelText("利息（CNY）")).toHaveValue("5");
+  await user.click(editor.getByRole("button", { name: "取消" }));
+  await user.click(within(rows[1]).getByRole("button", { name: "删除" }));
+  await user.click(within(screen.getByRole("dialog", { name: "删除这笔实际收付？" })).getByRole("button", { name: "确认删除" }));
+  await waitFor(() => expect(table.getAllByRole("row")).toHaveLength(2));
+  expect(invoke).toHaveBeenCalledWith("delete_loan_payment", { input: { id: "payment", expectedUpdatedAt: "payment-revision" } });
 });

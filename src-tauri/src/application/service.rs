@@ -23,12 +23,12 @@ use super::{
     analytics::build_month_analytics,
     dto::{
         ActualEntryDto, ActualEntryInputDto, BudgetProjectionDto, DeleteManualMonthlyItemInputDto,
-        DeletePlanItemDto, EnsureActualOnlyInputDto, ExchangeRateDto, ExchangeRateUpsertDto,
-        HistoryAnalyticsDto, InitializeMonthDto, InitializeMonthInputDto,
-        ManualMonthlyItemInputDto, MonthAnalyticsDto, MonthInitializationStatusDto,
-        MonthPreviewDto, MonthPreviewItemDto, MonthlyItemDto, MonthlyNoteInputDto, PlanItemDto,
-        PlanItemInputDto, RateOverrideDto, ReferenceRateImportDto, SettingsDto, SettingsInputDto,
-        StartupStatusDto, StopPlanItemRequestDto,
+        DeletePlanItemDto, ExchangeRateDto, ExchangeRateUpsertDto, HistoryAnalyticsDto,
+        InitializeMonthDto, InitializeMonthInputDto, ManualMonthlyItemInputDto, MonthAnalyticsDto,
+        MonthInitializationStatusDto, MonthPreviewDto, MonthPreviewItemDto, MonthlyItemDto,
+        MonthlyNoteInputDto, PlanItemDto, PlanItemInputDto, RateOverrideDto,
+        ReferenceRateImportDto, SettingsDto, SettingsInputDto, StartupStatusDto,
+        StopPlanItemRequestDto,
     },
     error::AppError,
 };
@@ -495,36 +495,6 @@ impl FinanceService {
                 .map(|(_, loan)| loan.clone());
         }
         Ok(items)
-    }
-
-    pub async fn ensure_actual_only(
-        &self,
-        input: EnsureActualOnlyInputDto,
-    ) -> Result<MonthlyItemDto, AppError> {
-        let _operation = self.operation_gate.write().await;
-        let plan_id = parse_uuid(&input.plan_item_id, "planItemId")?;
-        let month = parse_month(&input.month, "month")?;
-        let store = self.current_store().await;
-        if let Some(existing) = store
-            .get_monthly_item_by_source_month(plan_id, month)
-            .await
-            .map_err(AppError::from)?
-        {
-            return Ok(monthly_item_dto(existing));
-        }
-        let plan = store.get_plan_item(plan_id).await.map_err(AppError::from)?;
-        let settings = self.require_settings().await?;
-        let monthly = MonthlyItem::actual_only(
-            Uuid::new_v4(),
-            &plan.value,
-            month,
-            settings.value.base_currency().clone(),
-        );
-        store
-            .insert_monthly_item(&monthly, &timestamp())
-            .await
-            .map_err(AppError::from)
-            .map(monthly_item_dto)
     }
 
     pub async fn create_manual_monthly_item(

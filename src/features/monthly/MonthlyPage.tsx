@@ -35,7 +35,6 @@ import { Select } from "../../shared/components/Select";
 import { AutomaticEntryNotices } from "../automatic/AutomaticEntryNotices";
 import { refreshFinancialQueries } from "../automatic/refreshFinancialQueries";
 import { MonthlyDetailDrawer } from "./MonthlyDetailDrawer";
-import { LinkedActualDialog } from "./LinkedActualDialog";
 import { MonthlyWorkspace } from "./MonthlyWorkspaceView";
 import {
   defaultActualEntryDate,
@@ -75,7 +74,6 @@ export function MonthlyPage() {
   const [filters, setFilters] = useState<MonthlyWorkspaceFilters>(defaultMonthlyWorkspaceFilters);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => searchParams.get("item"));
   const [creatingTemporaryCategory, setCreatingTemporaryCategory] = useState(false);
-  const [linkingRuleMonth, setLinkingRuleMonth] = useState<string | null>(null);
   const [entryDialog, setEntryDialog] = useState<EntryDialogRequest>(null);
 
   const invalidateMonth = async () => {
@@ -99,7 +97,7 @@ export function MonthlyPage() {
             ? "按实际归属月份补录、编辑或删除条目；计划快照仍保持冻结。"
             : "查看预算类目、补充临时类目并记录实际收支。"}</p>
         </div>
-        <div className="header-actions"><button className="button button-secondary" disabled={!month || !ratesQuery.data} type="button" onClick={() => setLinkingRuleMonth(month)}>关联规则录入实际</button><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button></div>
+        <div className="header-actions"><button className="button button-primary" type="button" onClick={() => setCreatingTemporaryCategory(true)}>添加临时类目</button></div>
       </header>
 
       {startupQuery.data?.error && (
@@ -148,6 +146,7 @@ export function MonthlyPage() {
           month={month}
           preview={previewQuery.data}
           rates={ratesQuery.data}
+          hasItems={items.length > 0}
           onClose={() => setInitializing(false)}
           onInitialized={async (overrides) => {
             setPreviewOverrides(overrides);
@@ -167,19 +166,6 @@ export function MonthlyPage() {
           }}
         />
       )}
-      {linkingRuleMonth && <LinkedActualDialog
-        month={linkingRuleMonth}
-        onClose={() => setLinkingRuleMonth(null)}
-        onLinked={async (item) => {
-          queryClient.setQueryData<MonthlyItem[]>(queryKeys.monthly(item.month), (current = []) => [
-            ...current.filter((candidate) => candidate.id !== item.id), item,
-          ]);
-          setLinkingRuleMonth(null);
-          setSelectedItemId(item.id);
-          setEntryDialog({ item });
-          await invalidateMonth();
-        }}
-      />}
       {entryDialog && ratesQuery.data && (
         <EntryDialog
           rates={ratesQuery.data}
@@ -218,23 +204,19 @@ function MonthContext({ preview, hasItems, onInitialize }: { preview: MonthPrevi
     : preview.direction === "FUTURE"
       ? "未来月份"
       : "当前自然月";
-  const contextCopy = preview.direction === "HISTORICAL"
-    ? "可调整已有实际条目；补齐计划快照仍需显式确认，且不会覆盖既有快照。"
-    : preview.direction === "FUTURE"
-      ? "计划快照只有在显式确认后创建，创建后保持冻结。"
-      : "本月计划快照在生成后保持冻结，不随后续预算规则变化。";
+  const pendingCount = preview.candidate_count + preview.items.filter((item) => item.status === "MISSING_RATE").length;
+  const contextCopy = `有 ${pendingCount} 项预算尚未加入该月，补齐后即可记录实际收支。`;
   return (
     <section className={`month-context context-${preview.direction.toLowerCase()}`}>
       <div><span className="section-label">{contextLabel}</span><strong>{contextCopy}</strong></div>
       <dl>
         <div><dt>已存在</dt><dd>{preview.existing_count}</dd></div>
-        <div><dt>可新增</dt><dd>{preview.candidate_count}</dd></div>
-        <div><dt>本月不计入</dt><dd>{preview.excluded_count}</dd></div>
+        <div><dt>待补齐</dt><dd>{pendingCount}</dd></div>
       </dl>
       {preview.missing_currencies.length > 0 && <p className="warning-text">缺少汇率：{preview.missing_currencies.join("、")}</p>}
       {canInitialize && (
         <button className="button button-primary" type="button" onClick={onInitialize}>
-          {hasItems ? "补齐符合该月的规则" : "初始化该月"}
+          {hasItems ? "补齐该月规则" : "初始化该月"}
         </button>
       )}
     </section>
@@ -424,12 +406,14 @@ function InitializationDialog({
   month,
   preview,
   rates,
+  hasItems,
   onClose,
   onInitialized,
 }: {
   month: string;
   preview: MonthPreview;
   rates: ExchangeRate[];
+  hasItems: boolean;
   onClose: () => void;
   onInitialized: (overrides: RateOverrideInput[]) => Promise<void>;
 }) {
@@ -447,15 +431,16 @@ function InitializationDialog({
   return (
       <Dialog
         className="initialization-dialog"
-        eyebrow={preview.direction === "HISTORICAL" ? "历史补录" : "冻结快照"}
-        title={`初始化 ${month}`}
+        eyebrow={preview.direction === "HISTORICAL" ? "历史补录" : "月度预算"}
+        title={hasItems ? `补齐 ${month} 规则` : `初始化 ${month}`}
         onClose={onClose}
-        footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={!understood || mutation.isPending || preview.missing_currencies.some((currency) => !overrides[currency]?.trim())} type="button" onClick={() => mutation.mutate()}>{mutation.isPending ? "初始化中…" : "确认创建月度快照"}</button></>}
+        footer={<><button className="button button-quiet" type="button" onClick={onClose}>取消</button><button className="button button-primary" disabled={!understood || mutation.isPending || preview.missing_currencies.some((currency) => !overrides[currency]?.trim())} type="button" onClick={() => mutation.mutate()}>{mutation.isPending ? (hasItems ? "补齐中…" : "初始化中…") : (hasItems ? "确认补齐规则" : "确认创建月度快照")}</button></>}
       >
+        <p className="dialog-intro">{hasItems ? "只补充尚未加入该月的预算，已有计划金额和实际记录均会保留。" : "将适用于该月的预算加入月度执行，之后即可记录实际收支。"}</p>
         <div className="notice notice-warning">
           {preview.direction === "HISTORICAL"
             ? "当前汇率不一定代表当时汇率。你可以为本次补录临时覆盖汇率；覆盖值不会保存到汇率设置。"
-            : "初始化后，本月计划金额不会随周期规则或今后汇率变化。已有快照不会被覆盖。"}
+            : "加入该月后，计划金额不再随预算规则或汇率变化。"}
         </div>
         {rates.filter((rate) => !rate.is_base_currency).length > 0 && (
           <details>
@@ -470,9 +455,9 @@ function InitializationDialog({
         {preview.missing_currencies.map((currency) => (
           <label key={currency}>{currency} 临时汇率（必填）<input inputMode="decimal" value={overrides[currency] ?? ""} onChange={(event) => setOverrides((current) => ({ ...current, [currency]: event.target.value }))} /></label>
         ))}
-        <label className="check-row"><input type="checkbox" checked={understood} onChange={(event) => setUnderstood(event.target.checked)} />我理解这会创建不可被未来配置自动改写的月度快照。</label>
+        <label className="check-row"><input type="checkbox" checked={understood} onChange={(event) => setUnderstood(event.target.checked)} /><span>{hasItems ? "确认补充缺少的预算，保留已有计划和实际记录。" : "确认将预算加入该月，加入后计划金额保持不变。"}</span></label>
         {mutation.isError && <div className="inline-error" role="alert">{describeError(mutation.error)}</div>}
-        {mutation.isSuccess && <div className="inline-success" role="status">月份已初始化。</div>}
+        {mutation.isSuccess && <div className="inline-success" role="status">{hasItems ? "规则已补齐。" : "月份已初始化。"}</div>}
       </Dialog>
   );
 }

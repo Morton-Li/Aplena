@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useRef, useState, type FormEvent } from "react";
 import {
-  createLoan, loanFrequencyLabels, loanQueryKeys, previewLoanPayment, previewLoanSchedule, saveLoanAdvance, saveLoanPayment, saveLoanSchedule, updateLoanMetadata,
+  createLoan, loanFrequencyLabels, loanQueryKeys, previewLoanInterest, previewLoanPayment, previewLoanSchedule, saveLoanAdvance, saveLoanPayment, saveLoanSchedule, updateLoanMetadata,
   type Loan, type LoanAdvance, type LoanAllocation, type LoanDetail, type LoanDirection, type LoanFrequency, type LoanInstallment, type LoanPayment,
   type LoanPaymentInput, type LoanScheduleInput, type LoanSchedulePreview, type LoanScheduleRow,
 } from "../../shared/api/loans";
@@ -9,6 +9,8 @@ import { Dialog } from "../../shared/components/Dialog";
 import { Select } from "../../shared/components/Select";
 import { describeError, isAppError } from "../../shared/formatting/errors";
 import { formatMoney } from "../../shared/formatting/finance";
+import { LoanInterestFields } from "./LoanInterestFields";
+import { interestDraft, interestRule } from "./loanInterest";
 
 function localToday() {
   const date = new Date();
@@ -30,20 +32,22 @@ export function LoanEditor({ loan, direction, currency, onClose, onSaved }: {
   const [counterparty, setCounterparty] = useState(loan?.counterparty ?? "");
   const [selectedDirection, setDirection] = useState<LoanDirection>(loan?.direction ?? direction);
   const [principal, setPrincipal] = useState("");
-  const [started, setStarted] = useState(localToday);
+  const [started, setStarted] = useState(loan?.started_on ?? localToday());
   const [openingOnly, setOpeningOnly] = useState(true);
   const [note, setNote] = useState(loan?.note ?? "");
+  const [interest, setInterest] = useState(() => interestDraft(loan?.interest));
   const mutation = useMutation({
     mutationFn: async () => {
-      if (loan) { await updateLoanMetadata({ id: loan.id, name, counterparty, note: note || undefined, archived: loan.archived }); return undefined; }
-      return createLoan({ id, name, counterparty, direction: selectedDirection, principal, startedOn: started, openingOnly, note: note || undefined });
+      const rule = interestRule(interest, started);
+      if (loan) { await updateLoanMetadata({ id: loan.id, name, counterparty, note: note || undefined, archived: loan.archived, interest: { rule } }); return undefined; }
+      return createLoan({ id, name, counterparty, direction: selectedDirection, principal, startedOn: started, openingOnly, note: note || undefined, interest: rule });
     },
     onSuccess: onSaved,
     onSettled: () => { lock.current = false; },
   });
   const close = () => { if (!lock.current) onClose(); };
   const submit = (event: FormEvent) => { event.preventDefault(); if (!lock.current) { lock.current = true; mutation.mutate(); } };
-  return <Dialog title={loan ? "编辑借贷资料" : "新建借贷"} onClose={close} footer={<><button className="button button-quiet" disabled={mutation.isPending} onClick={close} type="button">取消</button><button className="button button-primary" disabled={mutation.isPending} form={form} type="submit">{mutation.isPending ? "保存中…" : "保存"}</button></>}>
+  return <Dialog className="loan-dialog" title={loan ? "编辑借贷资料" : "新建借贷"} onClose={close} footer={<><button className="button button-quiet" disabled={mutation.isPending} onClick={close} type="button">取消</button><button className="button button-primary" disabled={mutation.isPending} form={form} type="submit">{mutation.isPending ? "保存中…" : "保存"}</button></>}>
     <form id={form} className="loan-form" onSubmit={submit}><fieldset disabled={mutation.isPending}>
       {!loan && <label>借贷方向<Select ariaLabel="借贷方向" value={selectedDirection} onChange={(value) => setDirection(value as LoanDirection)} options={[{ value: "BORROWED", label: "我向别人或银行借款" }, { value: "LENT", label: "我借给别人" }]} /></label>}
       <label>名称<input autoFocus data-dialog-initial-focus required maxLength={200} value={name} onChange={(event) => setName(event.target.value)} placeholder="例如住房贷款、借给张三" /></label>
@@ -55,7 +59,7 @@ export function LoanEditor({ loan, direction, currency, onClose, onSaved }: {
         <p className="dialog-intro">{openingOnly ? "只建立期初余额，不计入当月现金流。之后录入的还款从该余额继续计算。" : "借款本金计入发生月的借贷现金流，不计入收入或支出。"}</p>
       </>}
       <label>备注（可选）<textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
-      {loan && <p className="dialog-intro">本金、方向与起始日期保留为建档事实。追加本金、还款和后续分期可在详情中调整。</p>}
+      <LoanInterestFields value={interest} onChange={setInterest} currency={currency} started={started} today={localToday()} />
     </fieldset></form>
     <ErrorMessage error={mutation.error} />
   </Dialog>;
@@ -83,7 +87,7 @@ export function LoanAdvanceEditor({ loan, advance, onClose, onSaved }: {
     mutation.mutate();
   };
   const action = loan.direction === "BORROWED" ? "追加借入" : "追加借出";
-  return <Dialog title={advance ? `编辑${action}` : action} onClose={close} footer={<>
+  return <Dialog className="loan-dialog" title={advance ? `编辑${action}` : action} onClose={close} footer={<>
     <button className="button button-quiet" disabled={mutation.isPending} onClick={close} type="button">取消</button>
     <button className="button button-primary" disabled={mutation.isPending} form={form} type="submit">{mutation.isPending ? "保存中…" : "保存"}</button>
   </>}>
@@ -164,7 +168,7 @@ export function LoanScheduleEditor({ detail, onClose, onSaved }: { detail: LoanD
   const visibleRows = method === "MANUAL" ? rows : preview?.rows ?? [];
   const pages = Math.max(1, Math.ceil(visibleRows.length / 40));
   const currentPage = Math.min(page, pages - 1);
-  return <Dialog title={detail.versions.length ? "调整后续还款计划" : "建立还款计划"} size="wide" className="loan-plan-dialog" onClose={close} footer={<><button className="button button-quiet" disabled={busy} onClick={close} type="button">取消</button><button className="button button-secondary" disabled={busy || correctionStale} form={form} type="submit">{checking.isPending ? "核对中…" : "预览并核对"}</button><button className="button button-primary" disabled={busy || !preview} onClick={save} type="button">{mutation.isPending ? "保存中…" : "保存计划"}</button></>}>
+  return <Dialog title={detail.versions.length ? "调整后续还款计划" : "建立还款计划"} size="wide" className="loan-dialog loan-plan-dialog" onClose={close} footer={<><button className="button button-quiet" disabled={busy} onClick={close} type="button">取消</button><button className="button button-secondary" disabled={busy || correctionStale} form={form} type="submit">{checking.isPending ? "核对中…" : "预览并核对"}</button><button className="button button-primary" disabled={busy || !preview} onClick={save} type="button">{mutation.isPending ? "保存中…" : "保存计划"}</button></>}>
     <p className="dialog-intro">支持日、月、季度、年。短月取月末，后续恢复原始日；不自动顺延节假日。默认保留已过去的期次，未来计划按新版本接续。</p>
     <form id={form} className="loan-form" onSubmit={submit}><fieldset disabled={busy}>
       {correctionAvailable && <label className="loan-checkbox">
@@ -209,13 +213,17 @@ export function LoanPaymentEditor({ detail, payment, onClose, onSaved }: { detai
   const input = (): LoanPaymentInput => ({ id, loanId: detail.loan.id, expectedUpdatedAt: payment?.updated_at, occurredOn: occurred, principal, interest, fees, note: note || undefined, allocations: allocations ?? [] });
   const mutation = useMutation({ mutationFn: () => saveLoanPayment(input()), onSuccess: onSaved, onSettled: () => { lock.current = false; } });
   const preview = useMutation({ mutationFn: () => previewLoanPayment(input()), onSuccess: setAllocations });
-  const busy = mutation.isPending || preview.isPending;
+  const calculatingInterest = useMutation({
+    mutationFn: () => previewLoanInterest({ loanId: detail.loan.id, asOf: occurred, excludePaymentId: payment?.id }),
+    onSuccess: (result) => { setInterest(result.remaining_interest); setAllocations(null); preview.reset(); mutation.reset(); },
+  });
+  const busy = mutation.isPending || preview.isPending || calculatingInterest.isPending;
   const close = () => { if (!busy && !lock.current) onClose(); };
-  const invalidate = () => { setAllocations(null); preview.reset(); mutation.reset(); };
+  const invalidate = () => { setAllocations(null); preview.reset(); mutation.reset(); calculatingInterest.reset(); };
   const save = () => { if (!allocations || lock.current) return; lock.current = true; mutation.mutate(); };
   const changeAllocation = (index: number, field: keyof LoanAllocation, value: string) => setAllocations((current) => current?.map((row, position) => position === index ? { ...row, [field]: field === "installmentId" ? value || null : value } : row) ?? null);
   const eligible = detail.installments.filter((row) => !row.superseded || payment);
-  return <Dialog title={(payment ? "编辑" : "记录") + (detail.loan.direction === "BORROWED" ? "还款" : "回款")} size="wide" onClose={close} footer={<><button className="button button-quiet" disabled={busy} onClick={close} type="button">取消</button><button className="button button-secondary" disabled={busy} form={form} type="submit">{preview.isPending ? "分配中…" : "预览分配"}</button><button className="button button-primary" disabled={busy || !allocations} onClick={save} type="button">{mutation.isPending ? "保存中…" : "保存实际收付"}</button></>}>
+  return <Dialog className="loan-dialog" title={(payment ? "编辑" : "记录") + (detail.loan.direction === "BORROWED" ? "还款" : "回款")} size="wide" onClose={close} footer={<><button className="button button-quiet" disabled={busy} onClick={close} type="button">取消</button><button className="button button-secondary" disabled={busy} form={form} type="submit">{preview.isPending ? "分配中…" : "预览分配"}</button><button className="button button-primary" disabled={busy || !allocations} onClick={save} type="button">{mutation.isPending ? "保存中…" : "保存实际收付"}</button></>}>
     <p className="dialog-intro">按实际金额分别填写本金、利息和费用。预览默认分配到最早期次，也可调整到其他期次；未约定的额外收付单独保留。提前还款后，可调整后续计划。</p>
     <form id={form} className="loan-form" onSubmit={(event) => { event.preventDefault(); if (!busy) preview.mutate(); }}><fieldset disabled={busy}>
       {!payment && <label>按一期待还金额填入（可选）<Select ariaLabel="按一期待还金额填入" value="" onChange={(id) => {
@@ -224,9 +232,14 @@ export function LoanPaymentEditor({ detail, payment, onClose, onSaved }: { detai
       }} options={[{ value: "", label: "选择一期，或直接填写实际金额" }, ...detail.installments.filter((row) => !row.superseded && row.remaining_total !== "0.00").map((row) => ({ value: row.id, label: row.due_on + " · 第" + row.position + "期" }))]} /></label>}
       <label>实际发生日期<input type="date" required min={detail.loan.started_on} max={localToday()} value={occurred} onChange={(event) => { setOccurred(event.target.value); invalidate(); }} /></label>
       <div className="loan-form-grid">{[{ label: "本金", value: principal, set: setPrincipal }, { label: "利息", value: interest, set: setInterest }, { label: "费用", value: fees, set: setFees }].map((field) => <label key={field.label}>{field.label}（{detail.loan.currency}）<input required inputMode="decimal" pattern={amountPattern} value={field.value} onChange={(event) => { field.set(event.target.value); invalidate(); }} /></label>)}</div>
+      {detail.loan.interest && <div className="loan-interest-payment">
+        <button className="button button-secondary" type="button" disabled={busy || !occurred} onClick={() => calculatingInterest.mutate()}>{calculatingInterest.isPending ? "计算中…" : "计算并填入利息"}</button>
+        <p className="chart-note">计算截至所选发生日期前的待{detail.loan.direction === "BORROWED" ? "付" : "收"}利息，扣除其他已{detail.loan.direction === "BORROWED" ? "付" : "收"}利息；填入后可按实际约定调整。</p>
+        {calculatingInterest.data && <p className="chart-note" role="status">应计 {formatMoney(calculatingInterest.data.accrued_interest, detail.loan.currency)}，已{detail.loan.direction === "BORROWED" ? "付" : "收"} {formatMoney(calculatingInterest.data.paid_interest, detail.loan.currency)}，待{detail.loan.direction === "BORROWED" ? "付" : "收"} {formatMoney(calculatingInterest.data.remaining_interest, detail.loan.currency)}。</p>}
+      </div>}
       <label>备注（可选）<textarea rows={2} value={note} onChange={(event) => setNote(event.target.value)} /></label>
     </fieldset></form>
     {allocations && <section className="loan-allocation-preview"><h3>本次还款分配</h3><p className="chart-note">分配的各项合计须分别等于上面的本金、利息和费用。</p><div className="table-scroll"><table className="data-table loan-edit-table"><caption className="sr-only">本次还款分配</caption><thead><tr><th>对应期次</th><th>本金</th><th>利息</th><th>费用</th><th>操作</th></tr></thead><tbody>{allocations.map((allocation, index) => <tr key={index}><td><Select ariaLabel={"第" + (index + 1) + "条分配期次"} disabled={busy} value={allocation.installmentId ?? ""} onChange={(value) => changeAllocation(index, "installmentId", value)} options={[{ value: "", label: "未约定 / 额外收付" }, ...eligible.map((row) => ({ value: row.id, label: row.due_on + " · 第" + row.position + "期" + (row.superseded ? "（旧版）" : "") }))]} /></td>{(["principal", "interest", "fees"] as const).map((field) => <td key={field}><input aria-label={"第" + (index + 1) + "条分配" + ({ principal: "本金", interest: "利息", fees: "费用" })[field]} disabled={busy} inputMode="decimal" value={allocation[field]} onChange={(event) => changeAllocation(index, field, event.target.value)} /></td>)}<td><button className="text-button danger-text" type="button" disabled={busy} onClick={() => setAllocations((current) => current?.filter((_, position) => position !== index) ?? null)}>移除</button></td></tr>)}</tbody></table></div><button className="text-button" type="button" disabled={busy} onClick={() => setAllocations((current) => [...current ?? [], { installmentId: null, principal: "0.00", interest: "0.00", fees: "0.00" }])}>添加分配</button></section>}
-    <ErrorMessage error={preview.error ?? mutation.error} />
+    <ErrorMessage error={calculatingInterest.error ?? preview.error ?? mutation.error} />
   </Dialog>;
 }

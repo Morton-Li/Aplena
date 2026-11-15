@@ -422,13 +422,6 @@ export function listExistingMonths(invokeCommand: Invoke = invoke): Promise<stri
   return invokeCommand<string[]>("list_existing_months");
 }
 
-export function ensureActualOnlyMonthlyItem(
-  input: { planItemId: string; month: string },
-  invokeCommand: Invoke = invoke,
-): Promise<MonthlyItem> {
-  return invokeCommand<MonthlyItem>("ensure_actual_only_monthly_item", { input });
-}
-
 export function createManualMonthlyItem(
   input: { name: string; month: string; category: string; note?: string },
   invokeCommand: Invoke = invoke,
