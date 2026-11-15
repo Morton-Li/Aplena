@@ -6096,13 +6096,7 @@ textarea:focus,
   --accent-hover: #6d28d9;
   --accent-soft: #f3edff;
 }
-.loans-page > .page-header {
-  padding: 20px 22px;
-  background: #f5f1fc;
-  border: 1px solid #e3d8f7;
-  border-radius: var(--radius-card);
-}
-.loans-page .eyebrow, .loans-page .section-label,
+.loans-page .section-label,
 .loans-page .text-button:not(.danger-text), .loan-dialog .text-button:not(.danger-text) { color: var(--accent-hover); }
 .loans-page .loan-month-card { border-color: #e3d8f7; }
 .loan-activity-kind { display: inline-block; padding: 4px 8px; border-radius: 5px; white-space: nowrap; color: #5b21b6; background: #f3edff; font-size: 12px; }
