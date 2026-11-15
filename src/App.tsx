@@ -289,12 +289,13 @@ function AppSidebar({ currentMonth, settings }: { currentMonth?: string; setting
               className={({ isActive }) => (isActive ? "nav-item nav-item-active" : "nav-item")}
               key={item.to}
               to={item.to}
+              data-nav-section={item.icon}
             >
               <NavigationIcon name={item.icon} />
               {item.label}
             </NavLink>
           ) : (
-            <span className="nav-item nav-item-placeholder" key={item.to}>
+            <span className="nav-item nav-item-placeholder" data-nav-section={item.icon} key={item.to}>
               <NavigationIcon name={item.icon} />
               {item.label}
             </span>

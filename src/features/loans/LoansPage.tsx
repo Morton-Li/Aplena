@@ -102,34 +102,14 @@ export function LoansPage() {
             {loanDetail.interest_error && <p className="inline-error" role="alert">{describeError(loanDetail.interest_error)}</p>}
             <p className="chart-note">按实际追加、归还与已收付利息估算。可在记录收付时计算并填入，保存实际收付后计入月度收支；分期约定金额保持独立。</p>
           </section>}
-          {loan.direction === "LENT" && <section className="report-card loan-section">
-            <div className="special-section-heading"><h3>借出与归还</h3><div className="special-actions">
-              <button className="button button-secondary" onClick={() => setEditor({ kind: "advance", loan })} type="button">追加借出</button>
-              <button className="button button-primary" onClick={() => setEditor({ kind: "payment", detail: loanDetail })} type="button">记录回款</button>
-            </div></div>
-            <p className="chart-note">追加借出与归还按日期统一列示。利息和费用在归还时记录，并同步计入月度收支。</p>
-            <LoanActivityTable detail={loanDetail} onEdit={(activity) => setEditor(activity.kind === "advance" ? { kind: "advance", loan, advance: activity.record } : { kind: "payment", detail: loanDetail, payment: activity.record })} onDelete={(activity) => { remove.reset(); setDeletion(activity); }} />
-          </section>}
-          {loan.direction === "BORROWED" && <section className="report-card loan-section">
-            <div className="special-section-heading">
-              <h3>追加本金</h3>
+          <section className="report-card loan-section">
+            <div className="special-section-heading"><h3>{loan.direction === "BORROWED" ? "借入与偿还" : "借出与归还"}</h3><div className="special-actions">
               <button className="button button-secondary" onClick={() => setEditor({ kind: "advance", loan })} type="button">{advanceLabel}</button>
-            </div>
-            {loanDetail.advances.length === 0 ? <p className="special-empty-copy">还没有追加记录。</p> : (
-              <div className="table-scroll loan-table-scroll"><table className="data-table">
-                <caption className="sr-only">追加本金记录</caption>
-                <thead><tr><th>日期 / 备注</th><th>追加本金</th><th>操作</th></tr></thead>
-                <tbody>{loanDetail.advances.map((advance) => <tr key={advance.id}>
-                  <th scope="row">{advance.occurred_on}<small>{advance.note ?? "无备注"}</small></th>
-                  <td>{formatMoney(advance.principal, loan.currency)}</td>
-                  <td><div className="special-actions">
-                    <button className="text-button" onClick={() => setEditor({ kind: "advance", loan, advance })} type="button">编辑</button>
-                    <button className="text-button danger-text" onClick={() => { remove.reset(); setDeletion({ kind: "advance", record: advance }); }} type="button">删除</button>
-                  </div></td>
-                </tr>)}</tbody>
-              </table></div>
-            )}
-          </section>}
+              <button className="button button-primary" onClick={() => setEditor({ kind: "payment", detail: loanDetail })} type="button">{loan.direction === "BORROWED" ? "记录还款" : "记录回款"}</button>
+            </div></div>
+            <p className="chart-note">{loan.direction === "BORROWED" ? "追加借入与实际还款" : "追加借出与归还"}按日期统一列示。利息和费用按实际收付记录，并同步计入月度收支。</p>
+            <LoanActivityTable detail={loanDetail} onEdit={(activity) => setEditor(activity.kind === "advance" ? { kind: "advance", loan, advance: activity.record } : { kind: "payment", detail: loanDetail, payment: activity.record })} onDelete={(activity) => { remove.reset(); setDeletion(activity); }} />
+          </section>
           <section className="report-card loan-section">
             <div className="special-section-heading"><h3>分期还款计划</h3><button className="button button-secondary" disabled={loan.archived} onClick={() => setEditor({ kind: "schedule", detail: loanDetail })} type="button">{loanDetail.versions.length ? "调整后续计划" : "建立还款计划"}</button></div>
             <p className="chart-note">到期不会自动记为已还。调整保留历史期次和全部实际收付，未来期次以新版本接续。未约定日期时不判定逾期。</p>
@@ -139,11 +119,6 @@ export function LoansPage() {
               {schedulePages > 1 && <div className="loan-pagination"><button className="button button-quiet" type="button" disabled={currentSchedulePage === 0} onClick={() => setSchedulePage(currentSchedulePage - 1)}>上一页</button><span>{currentSchedulePage + 1} / {schedulePages}</span><button className="button button-quiet" type="button" disabled={currentSchedulePage === schedulePages - 1} onClick={() => setSchedulePage(currentSchedulePage + 1)}>下一页</button></div>}
             </>}
           </section>
-          {loan.direction === "BORROWED" && <section className="report-card loan-section">
-            <div className="special-section-heading"><h3>实际{loan.direction === "BORROWED" ? "还款" : "回款"}</h3><button className="button button-primary" onClick={() => setEditor({ kind: "payment", detail: loanDetail })} type="button">{loan.direction === "BORROWED" ? "记录还款" : "记录回款"}</button></div>
-            <p className="chart-note">按实际发生日期计入现金流。利息及费用与月度执行共用关联记录；编辑或删除会同步更新。</p>
-            {loanDetail.payments.length === 0 ? <p className="special-empty-copy">还没有实际收付记录。</p> : <div className="table-scroll loan-table-scroll"><table className="data-table"><caption className="sr-only">实际还款及回款记录</caption><thead><tr><th>日期 / 备注</th><th>本金</th><th>利息</th><th>费用</th><th>合计</th><th>操作</th></tr></thead><tbody>{loanDetail.payments.map((payment) => <tr key={payment.id}><th>{payment.occurred_on}<small>{payment.note ?? "无备注"}</small></th><td>{formatMoney(payment.principal, loan.currency)}</td><td>{formatMoney(payment.interest, loan.currency)}</td><td>{formatMoney(payment.fees, loan.currency)}</td><td>{formatMoney(payment.total, loan.currency)}</td><td><div className="special-actions"><button className="text-button" onClick={() => setEditor({ kind: "payment", detail: loanDetail, payment })} type="button">编辑</button><button className="text-button danger-text" onClick={() => { remove.reset(); setDeletion({ kind: "payment", record: payment }); }} type="button">删除</button></div></td></tr>)}</tbody></table></div>}
-          </section>}
           {loanDetail.versions.length > 0 && <details className="report-card loan-section"><summary>计划变更记录（{loanDetail.versions.length}）</summary>{loanDetail.versions.map((version) => <p key={version.id}>{version.created_at.slice(0, 10)} · 每 {version.interval_count} {loanFrequencyLabels[version.frequency]} · {version.method === "MANUAL" ? "手动计划" : version.method === "ANNUITY" ? "等额本息" : "等额本金"} · 每期利率 {version.period_rate_percent}%{version.note ? " · " + version.note : ""}</p>)}</details>}
         </>}
       </div>
