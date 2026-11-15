@@ -1,6 +1,6 @@
 # 数据库与迁移
 
-当前迁移版本为 **schema 9**，以 [`src-tauri/migrations`](../src-tauri/migrations) 的有序 SQL 为准。本文描述最新逻辑结构；产品语义见[产品与使用](product.md)，金额与事务规则见[架构与领域](architecture.md)。
+当前迁移版本为 **schema 10**，以 [`src-tauri/migrations`](../src-tauri/migrations) 的有序 SQL 为准。本文描述最新逻辑结构；产品语义见[产品与使用](product.md)，金额与事务规则见[架构与领域](architecture.md)。
 
 ## 存储协议与表索引
 
@@ -141,6 +141,7 @@ ELSE NULL END AS derived_actual_amount_scaled
 | `loan_monthly_items` | `monthly_item_id` 主键、合同、月份；`UNIQUE(loan_id, month)`，归集利息费用 |
 | `loan_actual_links` | `payment_id` 主键、唯一 `actual_entry_id`，收付与月度实际一对一 |
 | `loan_advances` | 合同、实际日期、正数追加本金、备注与审计时间 |
+| `loan_interest_rules` | 每合同可选一条计息规则：单利/复利/固定额、日/月/季/年、周期利率、固定金额和起息日；不保存派生利息 |
 
 分期/收付/分配的各组成金额非负且至少一项为正。版本/期次/实际关联外键限制删除，应用在事务内维护关联。触发器保护合同归属、本位币锁、受管实际与日终本金余额；分配合计、期次上限及乐观并发由应用校验。
 
@@ -170,8 +171,9 @@ schema 8 的两张视图统一读取本金：
 | [`0007_loans.sql`](../src-tauri/migrations/0007_loans.sql) | 双向借贷七表与保护触发器 |
 | [`0008_loan_advances.sql`](../src-tauri/migrations/0008_loan_advances.sql) | 追加本金、统一本金视图、日终余额保护 |
 | [`0009_exchange_rate_derivations.sql`](../src-tauri/migrations/0009_exchange_rate_derivations.sql) | 汇率与实际快照的折算来源/日期 |
+| [`0010_loan_interest.sql`](../src-tauri/migrations/0010_loan_interest.sql) | 可选借贷计息规则；原合同默认关闭 |
 
-新库顺序运行 1–9；已有正式库顺序追加未运行迁移，SQLx 校验已运行迁移的校验和。已发布 SQL 不可改写，只能追加新迁移。
+新库顺序运行 1–10；已有正式库顺序追加未运行迁移，SQLx 校验已运行迁移的校验和。已发布 SQL 不可改写，只能追加新迁移。
 
 [`database.rs`](../src-tauri/src/infrastructure/database.rs) 在运行迁移前读取成功版本最大值：高于当前支持版本时返回 `FutureSchema`。旧预发布六步链与正式基线不是同一条链，当前不能只凭版本号判定兼容；它会因已有迁移校验和不匹配被拒绝。禁止手改 `_sqlx_migrations` 来绕过检查。
 

@@ -188,6 +188,7 @@ async fn migration_creates_only_strict_core_tables_constraints_and_indexes() {
             (7, "loans".to_owned(), 1),
             (8, "loan advances".to_owned(), 1),
             (9, "exchange rate derivations".to_owned(), 1),
+            (10, "loan interest".to_owned(), 1),
         ]
     );
 
@@ -341,6 +342,11 @@ async fn current_schema_matches_the_frozen_pre_release_schema_after_public_migra
     .execute(&pre_release)
     .await
     .unwrap();
+
+    sqlx::raw_sql(include_str!("../../migrations/0010_loan_interest.sql"))
+        .execute(&pre_release)
+        .await
+        .unwrap();
 
     assert_eq!(
         schema_snapshot(baseline.pool()).await,
@@ -539,6 +545,7 @@ async fn budget_specials_migration_preserves_schema_five_facts_and_defaults_auto
         include_str!("../../migrations/0007_loans.sql"),
         include_str!("../../migrations/0008_loan_advances.sql"),
         include_str!("../../migrations/0009_exchange_rate_derivations.sql"),
+        include_str!("../../migrations/0010_loan_interest.sql"),
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }

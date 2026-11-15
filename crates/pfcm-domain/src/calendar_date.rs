@@ -33,6 +33,20 @@ impl CalendarDate {
         u32::from(self.day)
     }
 
+    pub fn days_until(self, end: Self) -> Result<u32, DomainError> {
+        fn ordinal(date: CalendarDate) -> i32 {
+            let years = date.year - 1;
+            let prior_months: u32 = (1..date.month)
+                .map(|month| u32::from(days_in_month(date.year, month).expect("valid month")))
+                .sum();
+            years * 365 + years / 4 - years / 100
+                + years / 400
+                + prior_months as i32
+                + i32::from(date.day)
+        }
+        u32::try_from(ordinal(end) - ordinal(self)).map_err(|_| DomainError::EndDateBeforeStart)
+    }
+
     pub fn add_days(self, mut days: u32) -> Result<Self, DomainError> {
         let mut month = self.year_month();
         let mut day = self.day();
