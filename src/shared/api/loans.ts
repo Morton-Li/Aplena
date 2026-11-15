@@ -1,19 +1,30 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Invoke } from "./domain";
+import type { AppError, Invoke } from "./domain";
 
 export type LoanDirection = "BORROWED" | "LENT";
 export type LoanFrequency = "DAY" | "MONTH" | "QUARTER" | "YEAR";
 export const loanFrequencyLabels: Record<LoanFrequency, string> = { DAY: "日", MONTH: "月", QUARTER: "季度", YEAR: "年" };
+export type LoanInterestMode = "SIMPLE" | "COMPOUND" | "FIXED";
+export const loanInterestModeLabels: Record<LoanInterestMode, string> = {
+  SIMPLE: "按剩余本金单利", COMPOUND: "按周期复利", FIXED: "每周期固定利息",
+};
+export interface LoanInterestRule {
+  mode: LoanInterestMode; frequency: LoanFrequency; ratePercent: string; fixedAmount: string; startedOn: string;
+}
+export interface LoanInterestPreview {
+  as_of: string; accrued_interest: string; paid_interest: string; remaining_interest: string; overpaid_interest: string;
+}
 export interface Loan {
   id: string; name: string; counterparty: string; direction: LoanDirection; currency: string;
   principal: string; total_principal: string; started_on: string; opening_only: boolean; archived: boolean; note: string | null;
   paid_principal: string; remaining_principal: string; remaining_charges: string;
   scheduled_remaining_principal: string; plan_review_required: boolean;
   overdue_total: string; next_due_on: string | null; status: "ACTIVE" | "SETTLED";
+  interest?: LoanInterestRule | null;
 }
 export interface LoanInput {
   id: string; name: string; counterparty: string; direction: LoanDirection;
-  principal: string; startedOn: string; openingOnly: boolean; note?: string;
+  principal: string; startedOn: string; openingOnly: boolean; note?: string; interest?: LoanInterestRule | null;
 }
 export interface LoanInstallment {
   id: string; version_id: string; position: number; due_on: string;
@@ -49,6 +60,7 @@ export interface LoanSchedulePreview {
 export interface LoanDetail {
   loan: Loan; installments: LoanInstallment[]; payments: LoanPayment[]; advances: LoanAdvance[];
   versions: Array<{ id: string; frequency: LoanFrequency; interval_count: number; method: string; period_rate_percent: string; note: string | null; created_at: string }>;
+  interest_summary?: LoanInterestPreview | null; interest_error?: AppError | null;
 }
 export interface LoanMonthSummary {
   month: string; currency: string; has_loans: boolean; actual_principal_in: string; actual_principal_out: string;
@@ -64,7 +76,8 @@ export const loanQueryKeys = {
 export const listLoans = (call: Invoke = invoke) => call<Loan[]>("list_loans");
 export const getLoan = (id: string, call: Invoke = invoke) => call<LoanDetail>("get_loan", { id });
 export const createLoan = (input: LoanInput, call: Invoke = invoke) => call<Loan>("create_loan", { input });
-export const updateLoanMetadata = (input: { id: string; name: string; counterparty: string; note?: string; archived: boolean }, call: Invoke = invoke) => call<void>("update_loan_metadata", { input });
+export const updateLoanMetadata = (input: { id: string; name: string; counterparty: string; note?: string; archived: boolean; interest?: { rule: LoanInterestRule | null } }, call: Invoke = invoke) => call<void>("update_loan_metadata", { input });
+export const previewLoanInterest = (input: { loanId: string; asOf: string; excludePaymentId?: string }, call: Invoke = invoke) => call<LoanInterestPreview>("preview_loan_interest", { input });
 export const previewLoanSchedule = (input: LoanScheduleInput, call: Invoke = invoke) => call<LoanSchedulePreview>("preview_loan_schedule", { input });
 export const saveLoanSchedule = (input: LoanScheduleInput, call: Invoke = invoke) => call<void>("save_loan_schedule", { input });
 export const previewLoanPayment = (input: LoanPaymentInput, call: Invoke = invoke) => call<LoanAllocation[]>("preview_loan_payment", { input });

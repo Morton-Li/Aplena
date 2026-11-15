@@ -2022,7 +2022,10 @@ textarea {
 
 .entry-money-grid {
   grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
 }
+
+.entry-money-grid > label { align-content: start; }
 
 .entry-rate-snapshot {
   padding: 10px 12px;
@@ -6020,6 +6023,27 @@ textarea:focus,
 :root {
   --loan-border: #e2e8f0;
 }
+.loans-page, .loan-dialog {
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-soft: #f3edff;
+}
+.loans-page > .page-header {
+  padding: 20px 22px;
+  background: #f5f1fc;
+  border: 1px solid #e3d8f7;
+  border-radius: var(--radius-card);
+}
+.loans-page .eyebrow, .loans-page .section-label,
+.loans-page .text-button:not(.danger-text), .loan-dialog .text-button:not(.danger-text) { color: var(--accent-hover); }
+.loans-page .loan-month-card { border-color: #e3d8f7; }
+.nav-item-active[href$="/loans"] { background: #30234c; }
+.nav-item-active[href$="/loans"]::before { background: #b494f4; }
+.loan-activity-kind { display: inline-block; padding: 4px 8px; border-radius: 5px; white-space: nowrap; color: #5b21b6; background: #f3edff; font-size: 12px; }
+.loan-activity-advance { color: #655776; background: #f1eef5; }
+.loan-interest-settings { display: grid; gap: 16px; padding: 16px; border: 1px solid #e3d8f7; border-radius: 8px; background: #faf8ff; }
+.loan-interest-settings .chart-note, .loan-interest-payment .chart-note { margin: 0; }
+.loan-interest-payment { display: grid; justify-items: start; gap: 10px; }
 .loan-toolbar, .loan-direction-tabs, .loan-detail-heading, .loan-pagination {
   display: flex;
   align-items: center;
@@ -6057,6 +6081,8 @@ textarea:focus,
 .loan-edit-table .select-control { min-width: 160px; }
 .loan-checkbox { display: flex; gap: 8px; align-items: center; font-size: 13px; margin-top: 16px; }
 .loan-checkbox input { width: auto; }
+.loan-form label.loan-checkbox { display: flex; align-items: center; margin: 0; }
+.loan-checkbox input[type=checkbox] { min-height: 0; height: 16px; width: 16px; margin: 0; accent-color: var(--accent); }
 .loan-pagination { justify-content: center; margin-top: 12px; }
 .loan-allocation-preview { margin-top: 24px; }
 @media (max-width: 1080px) { .loan-workspace { grid-template-columns: 190px minmax(0, 1fr); gap: 16px; } }

@@ -26,7 +26,7 @@
 |---|---|
 | `01-product-spec.md`、`05-ux-and-user-flows.md` | [产品与使用](product.md)，技术规则归入[架构与领域](architecture.md) |
 | `02-domain-model.md`、`03-architecture.md` | [架构与领域](architecture.md) |
-| `04-database-schema.md` | [数据库与迁移](database.md)，统一到 schema 9 |
+| `04-database-schema.md` | [数据库与迁移](database.md)，统一到 schema 10 |
 | `06-mvp-roadmap.md` | 现行范围归入产品文档，仍适用的设计边界归入决策，旧阶段与候选清单移除 |
 | `07-release-readiness.md` | 常设检查归入开发文档，历史计数与发布断言移除 |
 | `08-pre-release-database-transition.md` | 有效转换约束归入开发文档与数据库文档，不再作为独立操作方案 |

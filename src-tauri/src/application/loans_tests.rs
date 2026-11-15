@@ -26,6 +26,7 @@ fn creation(direction: &str, opening_only: bool) -> LoanInput {
         started_on: "2000-01-01".into(),
         opening_only,
         note: None,
+        interest: None,
     }
 }
 fn schedule(loan: &LoanDto, frequency: LoanFrequency) -> LoanScheduleInput {
@@ -611,6 +612,10 @@ async fn loan_migrations_preserve_existing_financial_rows() {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../../migrations/0010_loan_interest.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let after: Vec<(String, i64, i64, i64, String)> = sqlx::query_as("SELECT id,amount_scaled,source_amount_scaled,exchange_rate_scaled,note FROM actual_entries ORDER BY id").fetch_all(&pool).await.unwrap();
     assert_eq!(before, after);
     assert_eq!(
@@ -625,6 +630,7 @@ async fn loan_migrations_preserve_existing_financial_rows() {
     let service = FinanceService::new(Store::new(pool.clone())).unwrap();
     let detail = service.get_loan(loan_id).await.unwrap();
     assert!(detail.advances.is_empty());
+    assert!(detail.loan.interest.is_none());
     assert_eq!(detail.loan.remaining_principal, "800.00");
     assert_eq!(detail.payments[0].id, payment_id);
     assert!(
@@ -969,6 +975,7 @@ async fn plan_replacement_keeps_history_and_paid_facts_and_can_remove_unearned_f
             counterparty: loan.counterparty.clone(),
             note: None,
             archived: true,
+            interest: None,
         })
         .await
         .unwrap();
@@ -1084,5 +1091,245 @@ async fn manual_plan_checks_principal_sum_and_preserves_past_unpaid_installments
             .unwrap_err()
             .error_code,
         "LOAN_SCHEDULE_PRINCIPAL_MISMATCH"
+    );
+}
+
+fn interest_rule(mode: pfcm_domain::LoanInterestMode) -> pfcm_domain::LoanInterestRule {
+    pfcm_domain::LoanInterestRule {
+        mode,
+        frequency: LoanFrequency::Month,
+        rate_percent: "1".parse().unwrap(),
+        fixed_amount: "10".parse().unwrap(),
+        started_on: "2000-04-01".parse().unwrap(),
+    }
+}
+
+fn metadata(loan: &LoanDto) -> LoanMetadataInput {
+    LoanMetadataInput {
+        id: loan.id.clone(),
+        name: loan.name.clone(),
+        counterparty: loan.counterparty.clone(),
+        note: loan.note.clone(),
+        archived: loan.archived,
+        interest: None,
+    }
+}
+
+#[tokio::test]
+async fn interest_settings_persist_and_previews_use_actual_principal_and_prior_interest_without_posting()
+ {
+    for direction in ["BORROWED", "LENT"] {
+        let service = service().await;
+        let mut input = creation(direction, true);
+        input.started_on = "2000-04-01".into();
+        input.interest = Some(interest_rule(pfcm_domain::LoanInterestMode::Simple));
+        let loan = service.create_loan(input.clone()).await.unwrap();
+        assert_eq!(loan.interest, input.interest);
+        service.create_loan(input.clone()).await.unwrap();
+        input.interest.as_mut().unwrap().rate_percent = "2".parse().unwrap();
+        assert_eq!(
+            service.create_loan(input).await.unwrap_err().error_code,
+            "LOAN_DUPLICATE_REQUEST"
+        );
+        assert!(service.list_existing_months().await.unwrap().is_empty());
+
+        let mut extra = advance(&loan, "1000");
+        extra.occurred_on = "2000-04-16".into();
+        service.save_loan_advance(extra).await.unwrap();
+        let mut actual = payment(&loan, "500", "5", "0");
+        actual.occurred_on = "2000-04-16".into();
+        service.save_loan_payment(actual.clone()).await.unwrap();
+        let preview = service
+            .preview_loan_interest(LoanInterestPreviewInput {
+                loan_id: loan.id.clone(),
+                as_of: "2000-05-01".into(),
+                exclude_payment_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(preview.amounts.accrued_interest.to_string(), "12.50");
+        assert_eq!(preview.amounts.paid_interest.to_string(), "5.00");
+        assert_eq!(preview.amounts.remaining_interest.to_string(), "7.50");
+        let edited = service
+            .preview_loan_interest(LoanInterestPreviewInput {
+                loan_id: loan.id.clone(),
+                as_of: "2000-04-16".into(),
+                exclude_payment_id: Some(actual.id.clone()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(edited.amounts.remaining_interest.to_string(), "5.00");
+        let report = service.month_analytics("2000-04".into()).await.unwrap();
+        let charges = if direction == "BORROWED" {
+            report.expense
+        } else {
+            report.income
+        };
+        assert_eq!(charges.actual_to_date.as_deref(), Some("5.00"));
+
+        let mut unchanged = metadata(&loan);
+        unchanged.name = "更名但保留计息".into();
+        service.update_loan_metadata(unchanged).await.unwrap();
+        assert_eq!(
+            service
+                .get_loan(loan.id.clone())
+                .await
+                .unwrap()
+                .loan
+                .interest,
+            loan.interest
+        );
+        let mut disable = metadata(&loan);
+        disable.interest = Some(LoanInterestUpdate { rule: None });
+        service.update_loan_metadata(disable).await.unwrap();
+        let detail = service.get_loan(loan.id.clone()).await.unwrap();
+        assert!(detail.loan.interest.is_none());
+        assert!(detail.interest_summary.is_none());
+        assert_eq!(detail.payments[0].id, actual.id);
+        assert_eq!(detail.loan.remaining_principal, "1500.00");
+        assert_eq!(
+            service
+                .preview_loan_interest(LoanInterestPreviewInput {
+                    loan_id: loan.id,
+                    as_of: "2000-05-01".into(),
+                    exclude_payment_id: None,
+                })
+                .await
+                .unwrap_err()
+                .error_code,
+            "LOAN_INTEREST_NOT_ENABLED"
+        );
+    }
+}
+
+#[tokio::test]
+async fn enabling_or_changing_interest_validates_and_rolls_back_metadata_together() {
+    let service = service().await;
+    let mut input = creation("LENT", true);
+    input.started_on = "2000-04-01".into();
+    let loan = service.create_loan(input).await.unwrap();
+    for mode in [
+        pfcm_domain::LoanInterestMode::Simple,
+        pfcm_domain::LoanInterestMode::Compound,
+        pfcm_domain::LoanInterestMode::Fixed,
+    ] {
+        let mut update = metadata(&loan);
+        let mut rule = interest_rule(mode);
+        // Keep long historical compound estimates in the supported currency range.
+        rule.rate_percent = "0.01".parse().unwrap();
+        update.interest = Some(LoanInterestUpdate {
+            rule: Some(rule.clone()),
+        });
+        service.update_loan_metadata(update).await.unwrap();
+        assert_eq!(
+            service
+                .get_loan(loan.id.clone())
+                .await
+                .unwrap()
+                .loan
+                .interest,
+            Some(rule)
+        );
+    }
+    let mut invalid = metadata(&loan);
+    invalid.name = "不应保存的名称".into();
+    let mut rule = interest_rule(pfcm_domain::LoanInterestMode::Simple);
+    rule.started_on = "2000-03-31".parse().unwrap();
+    invalid.interest = Some(LoanInterestUpdate { rule: Some(rule) });
+    assert_eq!(
+        service
+            .update_loan_metadata(invalid)
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_INTEREST_DATE_INVALID"
+    );
+    let detail = service.get_loan(loan.id.clone()).await.unwrap();
+    assert_eq!(detail.loan.name, loan.name);
+    assert_eq!(
+        detail.loan.interest.unwrap().mode,
+        pfcm_domain::LoanInterestMode::Fixed
+    );
+    assert_eq!(
+        service
+            .preview_loan_interest(LoanInterestPreviewInput {
+                loan_id: loan.id,
+                as_of: "2000-05-01".into(),
+                exclude_payment_id: Some(Uuid::new_v4().to_string()),
+            })
+            .await
+            .unwrap_err()
+            .error_code,
+        "NOT_FOUND"
+    );
+}
+
+#[tokio::test]
+async fn unpaid_estimated_interest_prevents_settlement_and_archiving_preserves_the_rule() {
+    let service = service().await;
+    let mut input = creation("BORROWED", true);
+    input.started_on = "2000-04-01".into();
+    input.interest = Some(interest_rule(pfcm_domain::LoanInterestMode::Simple));
+    let loan = service.create_loan(input).await.unwrap();
+    let mut actual = payment(&loan, "1000", "0", "0");
+    actual.occurred_on = "2000-05-01".into();
+    service.save_loan_payment(actual).await.unwrap();
+    let detail = service.get_loan(loan.id.clone()).await.unwrap();
+    assert_eq!(detail.loan.remaining_principal, "0.00");
+    assert_eq!(detail.loan.status, "ACTIVE");
+    assert_eq!(
+        detail
+            .interest_summary
+            .unwrap()
+            .amounts
+            .remaining_interest
+            .to_string(),
+        "10.00"
+    );
+    let mut archive = metadata(&loan);
+    archive.archived = true;
+    assert_eq!(
+        service
+            .update_loan_metadata(archive.clone())
+            .await
+            .unwrap_err()
+            .error_code,
+        "LOAN_NOT_SETTLED"
+    );
+    let mut interest = payment(&loan, "0", "10", "0");
+    interest.occurred_on = "2000-05-01".into();
+    service.save_loan_payment(interest).await.unwrap();
+    service.update_loan_metadata(archive).await.unwrap();
+    let detail = service.get_loan(loan.id).await.unwrap();
+    assert!(detail.loan.archived);
+    assert_eq!(detail.loan.status, "SETTLED");
+    assert_eq!(detail.loan.interest, loan.interest);
+}
+
+#[tokio::test]
+async fn interest_overflow_does_not_hide_contracts_or_prevent_disabling_estimation() {
+    let service = service().await;
+    let loan = service.create_loan(creation("LENT", true)).await.unwrap();
+    let store = service.current_store().await;
+    sqlx::query("INSERT INTO loan_interest_rules (loan_id,mode,frequency,rate_percent,fixed_amount_scaled,started_on) VALUES (?,'COMPOUND','DAY','100',0,'2000-01-01')")
+        .bind(&loan.id).execute(store.pool()).await.unwrap();
+    let detail = service.get_loan(loan.id.clone()).await.unwrap();
+    assert!(detail.interest_summary.is_none());
+    assert_eq!(
+        detail.interest_error.unwrap().error_code,
+        "LOAN_INTEREST_CALCULATION_FAILED"
+    );
+    assert_eq!(service.list_loans().await.unwrap().len(), 1);
+    let mut disable = metadata(&loan);
+    disable.interest = Some(LoanInterestUpdate { rule: None });
+    service.update_loan_metadata(disable).await.unwrap();
+    assert!(
+        service
+            .get_loan(loan.id)
+            .await
+            .unwrap()
+            .loan
+            .interest
+            .is_none()
     );
 }

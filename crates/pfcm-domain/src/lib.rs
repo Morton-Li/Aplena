@@ -6,6 +6,7 @@ mod category;
 mod currency;
 mod error;
 mod loan;
+mod loan_interest;
 mod monthly_item;
 mod plan_item;
 mod recognition;
@@ -22,6 +23,10 @@ pub use category::{Category, FlowType, MonthlyItemOrigin, MonthlyItemSource, Rec
 pub use currency::CurrencyCode;
 pub use error::DomainError;
 pub use loan::{LoanFrequency, LoanScheduleMethod, LoanScheduleRow, generate_loan_schedule};
+pub use loan_interest::{
+    LoanInterestAccrual, LoanInterestMode, LoanInterestMovement, LoanInterestRule,
+    accrue_loan_interest,
+};
 pub use monthly_item::MonthlyItem;
 pub use plan_item::PlanItem;
 pub use recognition::{
